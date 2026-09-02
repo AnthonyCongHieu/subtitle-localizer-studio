@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
+import math
 import numpy as np
 
 
@@ -58,7 +59,10 @@ class AdaptiveFrameSampler:
             y1 = max(0, int(height * ry))
             y2 = min(height, int(height * (ry + rh)))
             x1 = max(0, int(width * rx))
-            x2 = min(width, int(width * (rw + rh)))
+            x2 = min(width, int(width * (rx + rw)))
+            if x2 <= x1 or y2 <= y1:
+                cap.release()
+                raise ValueError("ROI must have a positive area inside the video frame")
         else:
             # Mặc định lấy 20% đáy màn hình
             y1 = int(height * 0.75)
@@ -73,7 +77,10 @@ class AdaptiveFrameSampler:
             if not ret or frame is None:
                 break
 
-            pts = round(curr_frame_idx / fps, 3)
+            decoder_pts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if not math.isfinite(decoder_pts) or decoder_pts < 0:
+                decoder_pts = curr_frame_idx / fps
+            pts = round(decoder_pts, 3)
 
             # Crop vùng ROI
             crop = frame[y1:y2, x1:x2]

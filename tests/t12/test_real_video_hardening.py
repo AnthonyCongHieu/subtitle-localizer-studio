@@ -4,11 +4,17 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import cv2
+import numpy as np
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from subtitle_localizer.domain.models import ProjectManifestV1, SubtitleCueV1
+from subtitle_localizer.detector.sampler import AdaptiveFrameSampler
+from subtitle_localizer.ocr.preprocessing import build_ocr_candidates
 from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
 
@@ -163,6 +169,61 @@ class ProjectScopedCuePersistenceTest(unittest.TestCase):
             self.assertEqual(primary_key_columns, ["project_id", "cue_id"])
         finally:
             migrated_db.close()
+
+
+class RealFrameSamplingTest(unittest.TestCase):
+    class _SingleFrameCapture:
+        def __init__(self) -> None:
+            x_gradient = np.arange(100, dtype=np.uint8)[None, :, None]
+            self.frame = np.broadcast_to(x_gradient, (100, 100, 3)).copy()
+
+        def isOpened(self) -> bool:
+            return True
+
+        def get(self, prop: int) -> float:
+            values = {
+                cv2.CAP_PROP_FPS: 1.0,
+                cv2.CAP_PROP_FRAME_COUNT: 1.0,
+                cv2.CAP_PROP_FRAME_WIDTH: 100.0,
+                cv2.CAP_PROP_FRAME_HEIGHT: 100.0,
+                cv2.CAP_PROP_POS_MSEC: 1250.0,
+            }
+            return values.get(prop, 0.0)
+
+        def set(self, prop: int, value: float) -> bool:
+            return True
+
+        def read(self):
+            return True, self.frame.copy()
+
+        def release(self) -> None:
+            return None
+
+    def test_non_square_roi_uses_width_for_x_end_and_decoder_timestamp(self) -> None:
+        sampler = AdaptiveFrameSampler(sample_fps=1.0)
+        fake_capture = self._SingleFrameCapture()
+
+        with patch("cv2.VideoCapture", return_value=fake_capture):
+            crops, timestamps = sampler.sample_video_frames(
+                "C:/input/video.mp4",
+                roi_norm=(0.10, 0.70, 0.50, 0.10),
+            )
+
+        self.assertEqual(crops[0].shape, (10, 50, 3))
+        self.assertEqual(int(crops[0][0, 0, 0]), 10)
+        self.assertEqual(int(crops[0][0, -1, 0]), 59)
+        self.assertEqual(timestamps, [1.25])
+
+    def test_ocr_candidates_keep_original_and_preserve_image_dimensions(self) -> None:
+        crop = np.full((8, 12, 3), 120, dtype=np.uint8)
+
+        candidates = build_ocr_candidates(crop)
+
+        self.assertIs(candidates[0], crop)
+        self.assertEqual(len(candidates), 3)
+        self.assertTrue(all(item.shape[:2] == (8, 12) for item in candidates))
+        self.assertEqual(candidates[1].ndim, 2)
+        self.assertEqual(candidates[2].ndim, 2)
 
 
 if __name__ == "__main__":

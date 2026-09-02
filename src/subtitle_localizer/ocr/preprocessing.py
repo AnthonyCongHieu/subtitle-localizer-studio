@@ -1,5 +1,32 @@
 from __future__ import annotations
 
+from typing import List
+
+import cv2
+import numpy as np
+
+
+def build_ocr_candidates(crop: np.ndarray) -> List[np.ndarray]:
+    """Build deterministic image variants for subtitle OCR selection."""
+    if not isinstance(crop, np.ndarray) or crop.size == 0:
+        raise ValueError("OCR crop must be a non-empty numpy image")
+
+    if crop.ndim == 3:
+        grayscale = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    elif crop.ndim == 2:
+        grayscale = crop.copy()
+    else:
+        raise ValueError("OCR crop must be a grayscale or BGR image")
+
+    contrast = cv2.normalize(grayscale, None, 0, 255, cv2.NORM_MINMAX)
+    _, thresholded = cv2.threshold(
+        contrast,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )
+    return [crop, contrast, thresholded]
+
 
 def enhance_text_contrast(raw_bytes: bytes, width: int, height: int) -> bytes:
     """Tăng độ tương phản của crop ảnh để cải thiện tỷ lệ nhận dạng chữ nét mảnh."""
