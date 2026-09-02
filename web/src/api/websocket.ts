@@ -7,7 +7,7 @@ export class StudioWebSocketClient {
   private isConnecting: boolean = false;
 
   connect() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+    if (this.isConnecting || (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING))) {
       return;
     }
     this.isConnecting = true;
