@@ -1,0 +1,9 @@
+{
+  "schema_version": "golden-manifest-v1",
+  "clips": [
+    {"id": "zh-portrait-vfr", "video_path": "E:/SubtitleLocalizerGolden/zh-portrait-vfr.mp4", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "language": "zh", "orientation": "portrait", "difficulty": "difficult", "ground_truth_path": "E:/SubtitleLocalizerGolden/zh-portrait-vfr.srt", "pts_mode": "vfr"},
+    {"id": "ja-landscape-cfr", "video_path": "E:/SubtitleLocalizerGolden/ja-landscape-cfr.mp4", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "language": "ja", "orientation": "landscape", "difficulty": "clean", "ground_truth_path": "E:/SubtitleLocalizerGolden/ja-landscape-cfr.srt", "pts_mode": "cfr"},
+    {"id": "ko-portrait-cfr", "video_path": "E:/SubtitleLocalizerGolden/ko-portrait-cfr.mp4", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "language": "ko", "orientation": "portrait", "difficulty": "clean", "ground_truth_path": "E:/SubtitleLocalizerGolden/ko-portrait-cfr.srt", "pts_mode": "cfr"},
+    {"id": "en-landscape-vfr", "video_path": "E:/SubtitleLocalizerGolden/en-landscape-vfr.mp4", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "language": "en", "orientation": "landscape", "difficulty": "difficult", "ground_truth_path": "E:/SubtitleLocalizerGolden/en-landscape-vfr.srt", "pts_mode": "vfr"}
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": "runtime-probe-v1",
+  "runtime": {
+    "node": {
+      "available": true,
+      "version": "v20.20.2"
+    },
+    "ffmpeg": {
+      "available": true,
+      "version": "8.0-full_build-www.gyan.dev",
+      "libass_enabled": true,
+      "nvenc_compiled": true,
+      "h264_nvenc_encoder_listed": true,
+      "codec_list_available": true
+    },
+    "python": {
+      "version": "3.11.9",
+      "executable": "C:\\Users\\PC\\AppData\\Local\\Programs\\Python\\Python311\\python.exe"
+    }
+  },
+  "disk": {
+    "path": "D:\\Project\\subtitle-localizer-studio",
+    "total_bytes": 251657187328,
+    "free_bytes": 81894174720
+  },
+  "collected_at_utc": "2026-09-02T04:38:33.423722+00:00",
+  "os": {
+    "system": "Windows",
+    "release": "10",
+    "version": "10.0.26200",
+    "machine": "AMD64"
+  },
+  "cpu": {
+    "logical_cores": 16,
+    "processor": "Intel64 Family 6 Model 191 Stepping 2, GenuineIntel"
+  },
+  "memory": {
+    "total_bytes": 29758447616
+  },
+  "gpu": {
+    "available": true,
+    "query": "name,memory.total,driver_version",
+    "rows": [
+      "NVIDIA GeForce RTX 3050 6GB Laptop GPU, 6144 MiB, 581.86"
+    ]
+  }
+}

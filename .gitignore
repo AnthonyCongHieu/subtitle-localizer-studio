@@ -19,6 +19,7 @@ cache/
 *.db
 benchmarks/golden/clips/
 benchmarks/golden/ground_truth/private/
+benchmarks/results/
 fixtures/synthetic/generated/
 
 # Local evidence workspace and secrets

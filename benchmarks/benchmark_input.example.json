@@ -1,0 +1,10 @@
+{
+  "schema_version": "benchmark-input-v1",
+  "detector": {"candidate": "native-temporal-detector", "version": "not-implemented-in-t00"},
+  "ocr": {"candidate": "PaddleOCR", "model": "pending-golden-benchmark"},
+  "translation": {"candidate": "pending-golden-benchmark", "runtime": "not-run"},
+  "timing": {"metrics": ["median_error_ms", "p95_error_ms"], "pts_required": true},
+  "memory": {"metrics": ["peak_ram_bytes", "peak_vram_bytes"]},
+  "disk": {"metrics": ["cache_bytes", "output_bytes"]},
+  "utf8_gate": {"reject_replacement_character": true, "reject_mojibake": true}
+}

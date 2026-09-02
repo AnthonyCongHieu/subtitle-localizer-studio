@@ -1,0 +1,11 @@
+{
+  "schema_version": "benchmark-input-v1",
+  "required": ["detector", "ocr", "translation", "timing", "memory", "disk", "utf8_gate"],
+  "detector": ["candidate", "version"],
+  "ocr": ["candidate", "model"],
+  "translation": ["candidate", "runtime"],
+  "timing": ["median_error_ms", "p95_error_ms", "pts_required"],
+  "memory": ["peak_ram_bytes", "peak_vram_bytes"],
+  "disk": ["cache_bytes", "output_bytes"],
+  "utf8_gate": ["reject_replacement_character", "reject_mojibake"]
+}
