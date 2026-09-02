@@ -27,8 +27,11 @@ class CueReconstructor:
 
         # 1. Nhóm các observation xảy ra cùng thời điểm PTS (ví dụ multi-line boxes)
         pts_groups: dict[float, List[OcrObservationV1]] = {}
+        disputed_pts = set()
         for obs in observations:
             pts_groups.setdefault(obs.pts, []).append(obs)
+            if obs.preprocessing_metadata.get("candidate_disagreement"):
+                disputed_pts.add(obs.pts)
 
         # Tạo frame items gồm (pts, combined_text, avg_confidence, boxes)
         frame_items: List[tuple[float, str, float]] = []
@@ -83,6 +86,8 @@ class CueReconstructor:
 
             avg_conf = sum(c[2] for c in cluster) / len(cluster)
             flags: List[str] = []
+            if any(item[0] in disputed_pts for item in cluster):
+                flags.append("ocr_candidate_disagreement")
             if avg_conf < 0.70:
                 flags.append("low_confidence")
             if "\n" in final_text:

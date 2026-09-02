@@ -251,7 +251,9 @@ class RealOnlyPipelineTest(unittest.TestCase):
         def __init__(self) -> None:
             self.call_count = 0
 
-        def __call__(self, image):
+        def __call__(self, image, use_det=True, use_cls=True):
+            if not use_det:
+                return None, None
             self.call_count += 1
             scores = [0.55, 0.93, 0.70]
             texts = ["错误", "正确字幕", "候选"]
@@ -288,7 +290,7 @@ class RealOnlyPipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "valid decoded image"):
             provider.recognize([b"not-an-image"], [1.0], "zh")
 
-    def test_rapid_ocr_stops_rescue_after_high_confidence_candidate(self) -> None:
+    def test_rapid_ocr_compares_candidates_even_after_high_confidence(self) -> None:
         provider = RapidOcrProvider()
         engine = self._CandidateScoringEngine()
         provider.is_loaded = True
@@ -300,18 +302,20 @@ class RealOnlyPipelineTest(unittest.TestCase):
             "zh",
         )
 
-        self.assertEqual(engine.call_count, 2)
+        self.assertEqual(engine.call_count, 3)
         self.assertEqual(observations[0].raw_text, "正确字幕")
         self.assertEqual(observations[0].confidence, 0.93)
         self.assertEqual(observations[0].model_metadata["engine"], "rapidocr-onnx")
         self.assertEqual(observations[0].preprocessing_metadata["candidate_index"], 1)
 
-    def test_rapid_ocr_uses_only_original_when_it_is_high_confidence(self) -> None:
+    def test_rapid_ocr_retains_agreeing_high_confidence_text(self) -> None:
         class HighConfidenceEngine:
             def __init__(self) -> None:
                 self.call_count = 0
 
-            def __call__(self, image):
+            def __call__(self, image, use_det=True, use_cls=True):
+                if not use_det:
+                    return None, None
                 self.call_count += 1
                 return [([0, 0, 10, 10], "高质量字幕", 0.97)], 0.01
 
@@ -326,12 +330,14 @@ class RealOnlyPipelineTest(unittest.TestCase):
             "zh",
         )
 
-        self.assertEqual(engine.call_count, 1)
+        self.assertFalse(observations[0].preprocessing_metadata["candidate_disagreement"])
         self.assertEqual(observations[0].raw_text, "高质量字幕")
 
     def test_chinese_ocr_discards_latin_only_lines_but_keeps_chinese_numbers(self) -> None:
         class BilingualEngine:
-            def __call__(self, image):
+            def __call__(self, image, use_det=True, use_cls=True):
+                if not use_det:
+                    return None, None
                 return [
                     ([0, 0, 10, 10], "第6趟车", 0.96),
                     ([0, 10, 10, 20], "The sixth train", 0.99),
