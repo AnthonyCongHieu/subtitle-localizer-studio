@@ -87,6 +87,8 @@ class Database:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        self._all_conns: List[sqlite3.Connection] = []
+        self._lock = threading.Lock()
 
     def get_connection(self) -> sqlite3.Connection:
         if not hasattr(self._local, "connection") or self._local.connection is None:
@@ -94,12 +96,14 @@ class Database:
                 str(self.db_path),
                 timeout=30.0,
                 check_same_thread=False,
-                isolation_level=None,  # Autocommit mode cho phép quản lý transaction tường minh
+                isolation_level=None,  # Autocommit mode
             )
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA foreign_keys=ON;")
             conn.row_factory = sqlite3.Row
             self._local.connection = conn
+            with self._lock:
+                self._all_conns.append(conn)
         return self._local.connection
 
     def migrate(self) -> None:
@@ -117,9 +121,12 @@ class Database:
                     conn.execute("INSERT INTO schema_migrations(version) VALUES (?);", (ver,))
 
     def close(self) -> None:
-        if hasattr(self._local, "connection") and self._local.connection is not None:
-            try:
-                self._local.connection.close()
-            except Exception:
-                pass
+        with self._lock:
+            for conn in self._all_conns:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._all_conns.clear()
+        if hasattr(self._local, "connection"):
             self._local.connection = None
