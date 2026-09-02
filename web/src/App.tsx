@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { apiClient } from './api/client';
 import { wsClient } from './api/websocket';
+import { EditorView } from './components/editor/EditorView';
 import { AppLayout } from './components/layout/AppLayout';
 import { NewProjectModal } from './components/project/NewProjectModal';
 import { ProjectList } from './components/project/ProjectList';
@@ -54,21 +55,10 @@ export const App: React.FC = () => {
           onDeleteProject={handleDeleteProject}
         />
       ) : (
-        <div className="flex-1 flex items-center justify-center text-zinc-400 text-sm">
-          <div className="text-center space-y-3">
-            <h2 className="text-lg font-medium text-zinc-200">Đang mở: {activeProject.title}</h2>
-            <p className="text-xs text-zinc-500 font-mono">ID: {activeProject.project_id}</p>
-            <button
-              onClick={async () => {
-                await apiClient.runPipeline(activeProject.project_id);
-                alert('Đã khởi chạy tiến trình OCR & Dịch thành công!');
-              }}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium"
-            >
-              Chạy OCR Pipeline
-            </button>
-          </div>
-        </div>
+        <EditorView
+          project={activeProject}
+          onBack={() => setActiveProject(null)}
+        />
       )}
 
       <NewProjectModal
