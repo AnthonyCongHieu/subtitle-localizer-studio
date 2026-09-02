@@ -1,63 +1,65 @@
 @echo off
 chcp 65001 > nul
-title Subtitle Localizer Studio Launcher
+title Subtitle Localizer Studio
 
-echo ==============================================================================
-echo                 SUBTITLE LOCALIZER STUDIO - KHỞI ĐỘNG
-echo ==============================================================================
+echo.
+echo  ============================================================
+echo   SUBTITLE LOCALIZER STUDIO
+echo   Backend: http://127.0.0.1:8899
+echo   Web UI:  http://localhost:5199
+echo  ============================================================
 echo.
 
-set "REPO_DIR=%~dp0"
-cd /d "%REPO_DIR%"
+:: Lấy thư mục gốc chứa file .bat này
+set "ROOT=%~dp0"
 
-:: 1. Xác định Python 3.11 executable
-set "PYTHON_EXE=C:\Users\PC\AppData\Local\Programs\Python\Python311\python.exe"
-if not exist "%PYTHON_EXE%" (
-    where python >nul 2>&1
-    if %errorlevel% equ 0 (
-        set "PYTHON_EXE=python"
-    ) else (
-        echo [LỖI] Không tìm thấy Python trên máy tính!
-        echo Vui lòng kiểm tra lại Python 3.11.
+:: Python path
+set "PY=C:\Users\PC\AppData\Local\Programs\Python\Python311\python.exe"
+if not exist "%PY%" (
+    echo [!] Khong tim thay Python 3.11 tai %PY%
+    echo     Thu dung "python" mac dinh...
+    set "PY=python"
+)
+
+:: Cài npm nếu chưa có node_modules
+if not exist "%ROOT%web\node_modules" (
+    echo [1] Dang cai dat npm dependencies lan dau...
+    cd /d "%ROOT%web"
+    call npm install
+    if errorlevel 1 (
+        echo [LOI] npm install that bai!
         pause
         exit /b 1
     )
+    cd /d "%ROOT%"
 )
 
-echo [*] Python executable: %PYTHON_EXE%
+:: Khởi động Backend
+echo [1] Khoi dong Backend Server (port 8899)...
+start "SLS-Backend" /min "%PY%" "%ROOT%scripts\run_server.py"
 
-:: 2. Kiểm tra node_modules ở web/
-if not exist "%REPO_DIR%web\node_modules" (
-    echo [*] Thư mục web\node_modules chưa có. Đang cài đặt thư viện npm...
-    cd /d "%REPO_DIR%web"
-    call npm install
-    cd /d "%REPO_DIR%"
-)
+:: Chờ backend sẵn sàng
+timeout /t 3 /nobreak > nul
 
-:: 3. Khởi động Backend Server (FastAPI trên port 8899)
-echo [*] Đang khởi động Backend Server trên http://127.0.0.1:8899 ...
-start "Subtitle Localizer - Backend Server" "%PYTHON_EXE%" "%REPO_DIR%scripts\run_server.py"
+:: Khởi động Frontend
+echo [2] Khoi dong Web Studio (port 5199)...
+start "SLS-Frontend" /min cmd /c "cd /d %ROOT%web && npm run dev"
 
-:: Chờ 2 giây để backend khởi động
-timeout /t 2 /nobreak > nul
+:: Chờ Vite sẵn sàng
+timeout /t 3 /nobreak > nul
 
-:: 4. Khởi động Web Studio (Vite trên port 5199)
-echo [*] Đang khởi động Web Studio trên http://localhost:5199 ...
-start "Subtitle Localizer - Web Studio" cmd /k "cd /d "%REPO_DIR%web" && npm run dev"
-
-:: Chờ 2 giây
-timeout /t 2 /nobreak > nul
-
-:: 5. Mở trình duyệt web
-echo [*] Đang mở trình duyệt web...
-start http://localhost:5199
+:: Mở trình duyệt
+echo [3] Mo trinh duyet...
+start "" http://localhost:5199
 
 echo.
-echo ==============================================================================
-echo   Subtitle Localizer Studio đã khởi động thành công!
-echo   - Web UI:      http://localhost:5199
-echo   - Backend API: http://127.0.0.1:8899/api/v1/health
-echo ==============================================================================
+echo  ============================================================
+echo   DA KHOI DONG THANH CONG!
 echo.
-echo (Bạn có thể đóng cửa sổ này, 2 cửa sổ Backend và Web UI sẽ tiếp tục chạy.)
-timeout /t 5 > nul
+echo   Web UI:      http://localhost:5199
+echo   Backend API: http://127.0.0.1:8899/api/v1/health
+echo.
+echo   Dong cua so nay khong anh huong den Backend va Web UI.
+echo  ============================================================
+echo.
+timeout /t 10
