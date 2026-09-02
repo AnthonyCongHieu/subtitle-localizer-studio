@@ -63,11 +63,18 @@ export const EditorView: React.FC<EditorViewProps> = ({ project, onBack }) => {
   const handleRunPipeline = async () => {
     try {
       setIsProcessing(true);
-      setStatusMessage('⚡ Đang chạy OCR & Dịch trong background...');
+      setStatusMessage('⚡ Đang quét frame video, nhận diện chữ (RapidOCR) và dịch tiếng Việt...');
       await apiClient.runPipeline(project.project_id);
-      await loadCues();
-      setStatusMessage('✓ Hoàn tất nhận diện và dịch!');
-      setTimeout(() => setStatusMessage(null), 3000);
+      const data = await apiClient.getCues(project.project_id);
+      setCues(data);
+      if (data.length > 0) {
+        setSelectedCueId(data[0].cue_id);
+        setCurrentTime(data[0].start_pts);
+        setStatusMessage(`✓ Hoàn tất! Đã trích xuất ${data.length} câu phụ đề.`);
+      } else {
+        setStatusMessage('✓ Quét hoàn tất nhưng không phát hiện chữ trong vùng ROI đã chọn.');
+      }
+      setTimeout(() => setStatusMessage(null), 5000);
     } catch (err: any) {
       setStatusMessage(`Lỗi: ${err.message}`);
     } finally {

@@ -83,6 +83,20 @@ export class StudioApiClient {
     if (!res.ok) throw new Error('Lỗi khi khởi chạy tiến trình xử lý');
   }
 
+  async uploadVideo(file: File): Promise<{ path: string; filename: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API_BASE}/projects/upload`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+      },
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Không thể tải video lên máy chủ');
+    return res.json();
+  }
+
   async pickVideo(): Promise<{ path: string; filename: string }> {
     const res = await fetch(`${API_BASE}/system/pick-video`, {
       method: 'POST',

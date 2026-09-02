@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -203,6 +203,18 @@ def create_app(
             raise HTTPException(status_code=404, detail="Video file not found on disk")
         from fastapi.responses import FileResponse
         return FileResponse(path=str(video_path), media_type="video/mp4")
+
+    @app.post("/api/v1/projects/upload")
+    async def upload_video_file(file: UploadFile = File(...), authorization: Optional[str] = Header(None)) -> Dict[str, str]:
+        verify_auth(authorization)
+        from pathlib import Path
+        import shutil
+        upload_dir = Path("uploads").resolve()
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        target_path = upload_dir / file.filename
+        with target_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        return {"path": str(target_path).replace("\\", "/"), "filename": file.filename}
 
     @app.post("/api/v1/system/pick-video")
     async def pick_video(authorization: Optional[str] = Header(None)) -> Dict[str, str]:

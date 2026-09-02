@@ -18,34 +18,44 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   const [sourceLang, setSourceLang] = useState('zh');
   const [targetLang, setTargetLang] = useState('vi');
   const [loading, setLoading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Trình duyệt chỉ cho biết tên file, không có full path.
-    // Hiển thị tên file để người dùng biết đã chọn đúng.
-    const fileName = file.name;
-    setVideoPath(fileName);
+    setError(null);
+    setUploadStatus(`⏳ Đang tải video lên server (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
+    setLoading(true);
 
-    // Tự động điền tên dự án nếu đang trống
-    if (!title) {
-      setTitle(fileName.replace(/\.[^/.]+$/, ''));
+    try {
+      const res = await apiClient.uploadVideo(file);
+      setVideoPath(res.path);
+      setUploadStatus(`✓ Đã tải video lên thành công: ${res.filename}`);
+
+      if (!title) {
+        setTitle(file.name.replace(/\.[^/.]+$/, ''));
+      }
+    } catch (err: any) {
+      setError(`Lỗi tải video lên server: ${err.message}. Bạn có thể nhập đường dẫn thủ công bên dưới.`);
+      setVideoPath(file.name);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
-      setError('Vui long nhap ten du an');
+      setError('Vui lòng nhập tên dự án');
       return;
     }
     if (!videoPath.trim()) {
-      setError('Vui long nhap duong dan video hoac chon file');
+      setError('Vui lòng chọn file video hoặc nhập đường dẫn video');
       return;
     }
     setLoading(true);
@@ -61,11 +71,12 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
       // Reset form
       setTitle('');
       setVideoPath('');
+      setUploadStatus(null);
       setSourceLang('zh');
       setTargetLang('vi');
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Loi tao du an');
+      setError(err.message || 'Lỗi tạo dự án');
     } finally {
       setLoading(false);
     }
@@ -75,7 +86,9 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-5">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-          <h2 className="text-lg font-semibold text-zinc-100">Tao du an phu de moi</h2>
+          <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
+            <span>🎬</span> Tạo dự án phụ đề mới
+          </h2>
           <button
             onClick={onClose}
             className="text-zinc-400 hover:text-zinc-200 text-lg leading-none"
@@ -90,43 +103,31 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
           </div>
         )}
 
+        {uploadStatus && !error && (
+          <div className="p-3 bg-indigo-950/60 border border-indigo-800 text-indigo-300 text-xs rounded-lg animate-pulse">
+            {uploadStatus}
+          </div>
+        )}
+
         <form onSubmit={handleCreate} className="space-y-4 text-sm">
-          {/* Ten du an */}
+          {/* Tên dự án */}
           <div>
-            <label className="block text-zinc-400 text-xs font-medium mb-1.5">Ten du an</label>
+            <label className="block text-zinc-400 text-xs font-medium mb-1.5">Tên dự án</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="VD: Phim tai lieu lich su 01"
+              placeholder="VD: Phim tài liệu lịch sử 01"
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-zinc-100 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
 
-          {/* Video nguon */}
+          {/* Video nguồn */}
           <div>
             <label className="block text-zinc-400 text-xs font-medium mb-1.5">
-              Video nguon (Hard Subtitle)
+              Video nguồn (Hard Subtitle)
             </label>
 
-            {/* Cach 1: Nhap duong dan thu cong */}
-            <input
-              type="text"
-              value={videoPath}
-              onChange={(e) => {
-                setVideoPath(e.target.value);
-                // Tu dong dien ten du an tu ten file
-                if (!title && e.target.value) {
-                  const parts = e.target.value.replace(/\\/g, '/').split('/');
-                  const fileName = parts[parts.length - 1];
-                  setTitle(fileName.replace(/\.[^/.]+$/, ''));
-                }
-              }}
-              placeholder="D:/Videos/sample.mp4"
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-zinc-100 focus:outline-none focus:border-indigo-500 font-mono text-xs mb-2"
-            />
-
-            {/* Cach 2: Chon file bang dialog trinh duyet */}
             <input
               ref={fileInputRef}
               type="file"
@@ -137,60 +138,77 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="w-full px-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg font-medium text-xs transition-colors border border-zinc-700 border-dashed flex items-center justify-center gap-2"
+              disabled={loading}
+              className="w-full px-3 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg font-medium text-xs transition-colors border border-zinc-700 border-dashed flex items-center justify-center gap-2 shadow-inner"
             >
-              <span>📁</span> Click de chon video tu may tinh...
+              <span className="text-base">📁</span>
+              <span>{loading ? 'Đang xử lý...' : 'Click để chọn video từ máy tính...'}</span>
             </button>
-            <p className="text-zinc-500 text-[11px] mt-1.5">
-              Ho tro: MP4, MKV, AVI, MOV, WebM, TS, FLV. Ban co the nhap truc tiep duong dan vao o phia tren.
-            </p>
+
+            <div className="mt-2">
+              <span className="text-[11px] text-zinc-500 block mb-1">Hoặc dán đường dẫn file trên máy:</span>
+              <input
+                type="text"
+                value={videoPath}
+                onChange={(e) => {
+                  setVideoPath(e.target.value);
+                  if (!title && e.target.value) {
+                    const parts = e.target.value.replace(/\\/g, '/').split('/');
+                    const fileName = parts[parts.length - 1];
+                    setTitle(fileName.replace(/\.[^/.]+$/, ''));
+                  }
+                }}
+                placeholder="D:/Videos/sample.mp4"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
+              />
+            </div>
           </div>
 
-          {/* Ngon ngu */}
+          {/* Ngôn ngữ */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-zinc-400 text-xs font-medium mb-1.5">Ngon ngu nguon (OCR)</label>
+              <label className="block text-zinc-400 text-xs font-medium mb-1.5">Ngôn ngữ nguồn (OCR)</label>
               <select
                 value={sourceLang}
                 onChange={(e) => setSourceLang(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-zinc-100 focus:outline-none focus:border-indigo-500"
               >
-                <option value="zh">Chinese (Trung)</option>
-                <option value="ja">Japanese (Nhat)</option>
-                <option value="ko">Korean (Han)</option>
-                <option value="en">English (Anh)</option>
+                <option value="zh">Tiếng Trung (Chinese - 中文)</option>
+                <option value="ja">Tiếng Nhật (Japanese - 日本語)</option>
+                <option value="ko">Tiếng Hàn (Korean - 한국어)</option>
+                <option value="en">Tiếng Anh (English)</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-zinc-400 text-xs font-medium mb-1.5">Ngon ngu dich</label>
+              <label className="block text-zinc-400 text-xs font-medium mb-1.5">Ngôn ngữ đích (Dịch)</label>
               <select
                 value={targetLang}
                 onChange={(e) => setTargetLang(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-zinc-100 focus:outline-none focus:border-indigo-500"
               >
-                <option value="vi">Vietnamese (Viet)</option>
-                <option value="en">English (Anh)</option>
-                <option value="none">Khong dich (OCR-only)</option>
+                <option value="vi">Tiếng Việt (Vietnamese)</option>
+                <option value="en">Tiếng Anh (English)</option>
+                <option value="none">Không dịch (OCR-only)</option>
               </select>
             </div>
           </div>
 
-          {/* Buttons */}
+          {/* Nút hành động */}
           <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800">
             <button
               type="button"
               onClick={onClose}
               className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium"
             >
-              Huy
+              Hủy
             </button>
             <button
               type="submit"
               disabled={loading || !title.trim() || !videoPath.trim()}
-              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow-lg shadow-indigo-600/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow-lg shadow-indigo-600/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             >
-              {loading ? 'Dang tao...' : 'Tao Du An'}
+              {loading ? 'Đang xử lý...' : 'Tạo Dự Án'}
             </button>
           </div>
         </form>
