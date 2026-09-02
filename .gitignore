@@ -27,3 +27,6 @@ fixtures/synthetic/generated/
 .env
 .env.*
 !.env.example
+*.db
+*.db-shm
+*.db-wal
