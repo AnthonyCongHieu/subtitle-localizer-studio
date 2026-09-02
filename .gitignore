@@ -21,6 +21,8 @@ benchmarks/golden/clips/
 benchmarks/golden/ground_truth/private/
 benchmarks/results/
 fixtures/synthetic/generated/
+/tests/fixtures/*
+!/tests/fixtures/.gitkeep
 
 # Local evidence workspace and secrets
 .sdd/

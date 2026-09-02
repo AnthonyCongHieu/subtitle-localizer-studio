@@ -21,7 +21,11 @@ class BackgroundWorker:
         self.reconstructor = CueReconstructor(min_cue_duration=0.25)
         self.sampler = AdaptiveFrameSampler(sample_fps=2.0)
 
-    def run_pipeline_synchronous(self, project_id: str) -> bool:
+    def run_pipeline_synchronous(
+        self,
+        project_id: str,
+        max_duration_seconds: float = 600.0,
+    ) -> bool:
         """Thực thi pipeline hoàn chỉnh cho project với OCR và Dịch thực tế."""
         manifest = self.repo.get_project(project_id)
         if not manifest:
@@ -51,7 +55,7 @@ class BackgroundWorker:
             crops, pts_list = self.sampler.sample_video_frames(
                 video_path=video_path,
                 roi_norm=roi_tuple,
-                max_duration_seconds=600.0,
+                max_duration_seconds=max_duration_seconds,
             )
             if not crops or not pts_list:
                 raise RuntimeError(f"No video frames could be decoded: {video_path}")
