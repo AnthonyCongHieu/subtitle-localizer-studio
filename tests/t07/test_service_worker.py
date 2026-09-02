@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
@@ -10,8 +11,10 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 from subtitle_localizer.domain.models import ProjectManifestV1, SubtitleCueV1
 from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
+from subtitle_localizer.ocr.mock import MockOcrProvider
 from subtitle_localizer.service.server import create_app
 from subtitle_localizer.service.worker import BackgroundWorker
+from subtitle_localizer.translation.mock import MockTranslationProvider
 
 
 class ServiceAndWorkerTest(unittest.TestCase):
@@ -73,11 +76,13 @@ class ServiceAndWorkerTest(unittest.TestCase):
         self.assertEqual(len(res.json()), 1)
 
     def test_background_worker_executes_pipeline(self) -> None:
+        video_path = Path(self.temp_dir.name) / "worker-input.mp4"
+        video_path.write_bytes(b"test-only-video-placeholder")
         # Khởi tạo project trong DB
         manifest = ProjectManifestV1(
             project_id="worker-proj-1",
             title="Dự án Worker Test",
-            source_video_path="E:/dummy.mp4",
+            source_video_path=str(video_path),
             video_fingerprint="fp_worker",
             source_language="zh",
             target_language="vi",
@@ -86,7 +91,14 @@ class ServiceAndWorkerTest(unittest.TestCase):
 
         # Chạy pipeline bằng worker
         worker = BackgroundWorker(self.repo)
-        success = worker.run_pipeline_synchronous("worker-proj-1")
+        worker.ocr_registry.register("rapidocr", MockOcrProvider())
+        worker.translation_registry.register("real", MockTranslationProvider())
+        with patch.object(
+            worker.sampler,
+            "sample_video_frames",
+            return_value=([b"crop"] * 3, [0.0, 0.5, 1.0]),
+        ):
+            success = worker.run_pipeline_synchronous("worker-proj-1")
         self.assertTrue(success)
 
         # Kiểm tra cues đã được sinh ra

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from typing import Dict, List
 
 from subtitle_localizer.domain.models import ModelDescriptorV1, SubtitleCueV1
@@ -43,35 +42,29 @@ class RealTranslationProvider(TranslationProvider):
 
         try:
             from deep_translator import GoogleTranslator
-            # Map mã ngôn ngữ nếu cần
-            src = "zh-CN" if source_lang == "zh" else source_lang
-            tgt = "vi" if target_lang == "vi" else target_lang
+        except ImportError as error:
+            raise RuntimeError("deep-translator is not installed") from error
 
-            translator = GoogleTranslator(source=src, target=tgt)
+        src = "zh-CN" if source_lang == "zh" else source_lang
+        tgt = "vi" if target_lang == "vi" else target_lang
+        translator = GoogleTranslator(source=src, target=tgt)
 
-            for cue in cues:
-                text = cue.source_text.strip()
-                if not text:
-                    continue
+        for cue in cues:
+            text = cue.source_text.strip()
+            if not text:
+                continue
 
-                if text in self._cache:
-                    cue.translated_text = self._cache[text]
-                    continue
+            if text in self._cache:
+                cue.translated_text = self._cache[text]
+                continue
 
-                try:
-                    translated = translator.translate(text)
-                    if translated:
-                        self._cache[text] = translated
-                        cue.translated_text = translated
-                    else:
-                        cue.translated_text = text
-                except Exception:
-                    cue.translated_text = text
-
-        except Exception:
-            # Fallback nếu không có internet hoặc thư viện lỗi
-            for cue in cues:
-                if not cue.translated_text:
-                    cue.translated_text = cue.source_text
+            try:
+                translated = translator.translate(text)
+            except Exception as error:
+                raise RuntimeError(f"Translation failed: {error}") from error
+            if not translated or not translated.strip():
+                raise RuntimeError("Translation provider returned empty text")
+            self._cache[text] = translated
+            cue.translated_text = translated
 
         return cues

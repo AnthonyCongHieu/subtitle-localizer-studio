@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
@@ -15,8 +16,12 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 from subtitle_localizer.domain.models import ProjectManifestV1, SubtitleCueV1
 from subtitle_localizer.detector.sampler import AdaptiveFrameSampler
 from subtitle_localizer.ocr.preprocessing import build_ocr_candidates
+from subtitle_localizer.ocr.registry import OcrRegistry
+from subtitle_localizer.ocr.rapid import RapidOcrProvider
 from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
+from subtitle_localizer.service.worker import BackgroundWorker
+from subtitle_localizer.translation.real import RealTranslationProvider
 
 
 class ProjectScopedCuePersistenceTest(unittest.TestCase):
@@ -224,6 +229,151 @@ class RealFrameSamplingTest(unittest.TestCase):
         self.assertTrue(all(item.shape[:2] == (8, 12) for item in candidates))
         self.assertEqual(candidates[1].ndim, 2)
         self.assertEqual(candidates[2].ndim, 2)
+
+
+class RealOnlyPipelineTest(unittest.TestCase):
+    class _FailingOcrProvider:
+        def __init__(self) -> None:
+            self.unloaded = False
+
+        def load(self) -> None:
+            return None
+
+        def recognize(self, crops, pts_list, language="zh"):
+            raise RuntimeError("OCR unavailable")
+
+        def unload(self) -> None:
+            self.unloaded = True
+
+    class _CandidateScoringEngine:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def __call__(self, image):
+            self.call_count += 1
+            scores = [0.55, 0.93, 0.70]
+            texts = ["错误", "正确字幕", "候选"]
+            index = self.call_count - 1
+            return [([0, 0, 10, 10], texts[index], scores[index])], 0.01
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.temp_dir.name) / "worker.db")
+        self.db.migrate()
+        self.repo = ProjectRepository(self.db)
+
+    def tearDown(self) -> None:
+        self.db.close()
+        self.temp_dir.cleanup()
+
+    def _save_video_project(self, video_path: Path, project_id: str = "real-project") -> None:
+        self.repo.save_project(
+            ProjectManifestV1(
+                project_id=project_id,
+                title="Real OCR",
+                source_video_path=str(video_path),
+                video_fingerprint="real-video-fingerprint",
+                source_language="zh",
+                target_language="none",
+            )
+        )
+
+    def test_rapid_ocr_rejects_invalid_encoded_bytes_instead_of_mocking(self) -> None:
+        provider = RapidOcrProvider()
+        provider.is_loaded = True
+        provider.engine = object()
+
+        with self.assertRaisesRegex(RuntimeError, "valid decoded image"):
+            provider.recognize([b"not-an-image"], [1.0], "zh")
+
+    def test_rapid_ocr_selects_highest_confidence_preprocessing_candidate(self) -> None:
+        provider = RapidOcrProvider()
+        engine = self._CandidateScoringEngine()
+        provider.is_loaded = True
+        provider.engine = engine
+
+        observations = provider.recognize(
+            [np.full((16, 32, 3), 128, dtype=np.uint8)],
+            [2.5],
+            "zh",
+        )
+
+        self.assertEqual(engine.call_count, 3)
+        self.assertEqual(observations[0].raw_text, "正确字幕")
+        self.assertEqual(observations[0].confidence, 0.93)
+        self.assertEqual(observations[0].model_metadata["engine"], "rapidocr-onnx")
+        self.assertEqual(observations[0].preprocessing_metadata["candidate_index"], 1)
+
+    def test_production_registry_does_not_fall_back_to_mock_or_paddle(self) -> None:
+        registry = OcrRegistry()
+        registry._providers.pop("rapidocr")
+
+        with self.assertRaisesRegex(RuntimeError, "production OCR provider"):
+            registry.get_provider_for_language("zh")
+
+    def test_translation_failure_does_not_copy_source_as_success(self) -> None:
+        class FailingGoogleTranslator:
+            def __init__(self, source: str, target: str) -> None:
+                return None
+
+            def translate(self, text: str) -> str:
+                raise ConnectionError("translation offline")
+
+        provider = RealTranslationProvider()
+        cue = SubtitleCueV1(
+            cue_id="cue-translation",
+            start_pts=0.0,
+            end_pts=1.0,
+            source_text="真实字幕",
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"deep_translator": SimpleNamespace(GoogleTranslator=FailingGoogleTranslator)},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "translation offline"):
+                provider.translate_cues([cue], source_lang="zh", target_lang="vi")
+
+        self.assertEqual(cue.translated_text, "")
+
+    def test_missing_video_records_failed_stage_without_mock_cues(self) -> None:
+        missing_video = Path(self.temp_dir.name) / "missing.mp4"
+        self._save_video_project(missing_video)
+
+        success = BackgroundWorker(self.repo).run_pipeline_synchronous("real-project")
+
+        self.assertFalse(success)
+        self.assertEqual(self.repo.get_cues("real-project"), [])
+        failed_stage = self.repo.get_stage_runs("real-project")[-1]
+        self.assertEqual(failed_stage.status, "failed")
+        self.assertIn("does not exist", failed_stage.errors[0])
+
+    def test_worker_records_provider_failure_and_always_unloads(self) -> None:
+        video_path = Path(self.temp_dir.name) / "video.mp4"
+        video_path.write_bytes(b"real-file-placeholder")
+        self._save_video_project(video_path)
+        worker = BackgroundWorker(self.repo)
+        failing_provider = self._FailingOcrProvider()
+
+        with (
+            patch.object(
+                worker.sampler,
+                "sample_video_frames",
+                return_value=([np.zeros((10, 10, 3), dtype=np.uint8)], [0.5]),
+            ),
+            patch.object(
+                worker.ocr_registry,
+                "get_provider_for_language",
+                return_value=failing_provider,
+            ),
+        ):
+            success = worker.run_pipeline_synchronous("real-project")
+
+        self.assertFalse(success)
+        self.assertTrue(failing_provider.unloaded)
+        failed_stage = self.repo.get_stage_runs("real-project")[-1]
+        self.assertEqual(failed_stage.status, "failed")
+        self.assertEqual(failed_stage.errors, ["OCR unavailable"])
 
 
 if __name__ == "__main__":

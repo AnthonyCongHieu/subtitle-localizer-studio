@@ -32,9 +32,9 @@ class PaddleOcrAdapter(OcrProvider):
             try:
                 from paddleocr import PaddleOCR
                 self.engine = PaddleOCR(use_angle_cls=True, lang=self.language, show_log=False)
-            except ImportError:
-                # Nếu chưa cài PaddleOCR môi trường dev, giữ engine là None
+            except ImportError as error:
                 self.engine = None
+                raise RuntimeError("PaddleOCR is not installed") from error
 
     def unload(self) -> None:
         self.engine = None
@@ -46,16 +46,7 @@ class PaddleOcrAdapter(OcrProvider):
         language: str = "zh",
     ) -> List[OcrObservationV1]:
         if self.engine is None:
-            # Fallback nếu engine chưa khởi tạo
-            return [
-                OcrObservationV1(
-                    pts=pts,
-                    raw_text=f"Sample text at {pts}s",
-                    normalized_text=f"Sample text at {pts}s",
-                    confidence=0.9,
-                )
-                for pts in pts_list
-            ]
+            raise RuntimeError("PaddleOCR engine is not loaded")
 
         results: List[OcrObservationV1] = []
         for crop, pts in zip(crops, pts_list):

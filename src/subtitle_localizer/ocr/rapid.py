@@ -5,6 +5,7 @@ import numpy as np
 
 from subtitle_localizer.domain.models import ModelDescriptorV1, OcrObservationV1
 from subtitle_localizer.ocr.base import OcrProvider
+from subtitle_localizer.ocr.preprocessing import build_ocr_candidates
 
 
 class RapidOcrProvider(OcrProvider):
@@ -55,57 +56,69 @@ class RapidOcrProvider(OcrProvider):
 
         for crop_img, pts in zip(crops, pts_list):
             if crop_img is None:
-                continue
+                raise RuntimeError("RapidOCR received no decoded image")
 
-            try:
-                # Nếu là numpy array (ảnh frame OpenCV)
-                if isinstance(crop_img, np.ndarray):
-                    img_data = crop_img
-                elif isinstance(crop_img, bytes):
-                    import cv2
-                    nparr = np.frombuffer(crop_img, np.uint8)
-                    img_data = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                else:
+            if isinstance(crop_img, np.ndarray):
+                img_data = crop_img
+            elif isinstance(crop_img, bytes):
+                import cv2
+
+                encoded = np.frombuffer(crop_img, np.uint8)
+                img_data = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+            else:
+                raise RuntimeError(
+                    f"RapidOCR received unsupported image type: {type(crop_img).__name__}"
+                )
+
+            if img_data is None or img_data.size == 0:
+                raise RuntimeError("RapidOCR requires a valid decoded image")
+
+            best_observation: Optional[OcrObservationV1] = None
+            inference_errors: List[str] = []
+            for candidate_index, candidate in enumerate(build_ocr_candidates(img_data)):
+                try:
+                    result, _ = self.engine(candidate)
+                except Exception as error:
+                    inference_errors.append(str(error))
                     continue
-
-                if img_data is None or img_data.size == 0:
-                    # Nếu là dummy bytes trong unit tests
-                    from subtitle_localizer.ocr.mock import MockOcrProvider
-                    return MockOcrProvider().recognize(crops, pts_list, language)
-
-                result, _ = self.engine(img_data)
                 if not result:
                     continue
 
-                # Gom các dòng văn bản tìm thấy trong frame
-                lines = []
-                confidences = []
-                boxes = []
-
+                lines: List[str] = []
+                confidences: List[float] = []
                 for item in result:
-                    # item format: [box_points, text, score]
-                    box_pts, text, score = item[0], item[1], float(item[2])
-                    if score >= 0.4 and text.strip():
-                        lines.append(text.strip())
+                    text = str(item[1]).strip()
+                    score = float(item[2])
+                    if score >= 0.4 and text:
+                        lines.append(text)
                         confidences.append(score)
-                        boxes.append(box_pts)
 
-                if lines:
-                    combined_text = " ".join(lines)
-                    avg_conf = sum(confidences) / len(confidences)
+                if not lines:
+                    continue
 
-                    observations.append(
-                        OcrObservationV1(
-                            pts=pts,
-                            boxes=[[0.0, 0.0, 1.0, 1.0]],
-                            raw_text=combined_text,
-                            normalized_text=combined_text,
-                            confidence=round(avg_conf, 3),
-                            model_metadata={"engine": "rapidocr", "language": language},
-                        )
-                    )
+                combined_text = " ".join(lines)
+                average_confidence = sum(confidences) / len(confidences)
+                candidate_observation = OcrObservationV1(
+                    pts=pts,
+                    boxes=[[0.0, 0.0, 1.0, 1.0]],
+                    raw_text=combined_text,
+                    normalized_text=combined_text,
+                    confidence=round(average_confidence, 3),
+                    preprocessing_metadata={"candidate_index": candidate_index},
+                    model_metadata={"engine": "rapidocr-onnx", "language": language},
+                )
+                if (
+                    best_observation is None
+                    or candidate_observation.confidence > best_observation.confidence
+                ):
+                    best_observation = candidate_observation
 
-            except Exception:
-                continue
+            if best_observation is not None:
+                observations.append(best_observation)
+            elif inference_errors and len(inference_errors) == 3:
+                raise RuntimeError(
+                    "RapidOCR inference failed for every preprocessing candidate: "
+                    + "; ".join(inference_errors)
+                )
 
         return observations

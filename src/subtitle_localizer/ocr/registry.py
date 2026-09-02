@@ -28,14 +28,7 @@ class OcrRegistry:
         return self._providers.get(name)
 
     def get_provider_for_language(self, language: str) -> OcrProvider:
-        # Ưu tiên RapidOCR ONNX runtime thật
-        if "rapidocr" in self._providers:
-            return self._providers["rapidocr"]
-        mapping = {
-            "zh": "paddle-zh",
-            "ja": "paddle-ja",
-            "ko": "paddle-ko",
-            "en": "paddle-en",
-        }
-        provider_name = mapping.get(language, "mock")
-        return self._providers.get(provider_name, self._providers.get("mock", MockOcrProvider()))
+        provider = self._providers.get("rapidocr")
+        if provider is None:
+            raise RuntimeError("No production OCR provider is registered")
+        return provider

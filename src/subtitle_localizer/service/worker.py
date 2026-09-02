@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Optional
-
 from subtitle_localizer.detector.roi import propose_default_roi
 from subtitle_localizer.detector.sampler import AdaptiveFrameSampler
 from subtitle_localizer.domain.models import StageRunV1, SubtitleCueV1
@@ -29,6 +27,8 @@ class BackgroundWorker:
         if not manifest:
             return False
 
+        ocr_provider = None
+        translator = None
         try:
             # Stage 1: Detector & Sampler
             stage1 = StageRunV1(stage_name="detector", status="running", progress=0.1)
@@ -45,21 +45,16 @@ class BackgroundWorker:
 
             # Kiểm tra xem file video có tồn tại trên đĩa không
             video_path = Path(manifest.source_video_path)
-            crops = []
-            pts_list = []
+            if not video_path.exists() or not video_path.is_file():
+                raise FileNotFoundError(f"Video file does not exist: {video_path}")
 
-            if video_path.exists() and video_path.is_file():
-                # TRÍCH XUẤT FRAME THẬT TỪ FILE VIDEO
-                crops, pts_list = self.sampler.sample_video_frames(
-                    video_path=video_path,
-                    roi_norm=roi_tuple,
-                    max_duration_seconds=600.0,
-                )
-
-            # Nếu không tìm thấy file video hoặc chạy trong unit test, sử dụng mốc mẫu
+            crops, pts_list = self.sampler.sample_video_frames(
+                video_path=video_path,
+                roi_norm=roi_tuple,
+                max_duration_seconds=600.0,
+            )
             if not crops or not pts_list:
-                pts_list = [0.5, 0.8, 1.1, 2.0, 2.3, 2.6, 4.0, 4.3, 4.6, 6.0, 6.3, 6.6, 8.0, 8.3, 8.6]
-                crops = [b"crop"] * len(pts_list)
+                raise RuntimeError(f"No video frames could be decoded: {video_path}")
 
             # Stage 2: OCR Inference Stage
             stage2 = StageRunV1(stage_name="ocr_inference", status="running", progress=0.4)
@@ -67,33 +62,21 @@ class BackgroundWorker:
 
             ocr_provider = self.ocr_registry.get_provider_for_language(manifest.source_language)
             ocr_provider.load()
-
-            observations = ocr_provider.recognize(
-                crops=crops,
-                pts_list=pts_list,
-                language=manifest.source_language,
-            )
-            ocr_provider.unload()
+            try:
+                observations = ocr_provider.recognize(
+                    crops=crops,
+                    pts_list=pts_list,
+                    language=manifest.source_language,
+                )
+            finally:
+                ocr_provider.unload()
+                ocr_provider = None
 
             # Stage 3: Cue Reconstruction Stage
             stage3 = StageRunV1(stage_name="cue_reconstruction", status="running", progress=0.7)
             self.repo.save_stage_run(project_id, stage3)
 
             cues = self.reconstructor.build_cues(observations)
-
-            # Nếu không nhận diện được chữ nào từ video, không để danh sách rỗng
-            if not cues and observations:
-                for idx, obs in enumerate(observations):
-                    cues.append(
-                        SubtitleCueV1(
-                            cue_id=f"cue-{idx+1:04d}",
-                            start_pts=obs.pts,
-                            end_pts=round(obs.pts + 1.5, 3),
-                            source_text=obs.raw_text,
-                            translated_text="",
-                            confidence=obs.confidence,
-                        )
-                    )
 
             # Stage 4: Translation Stage (Dịch sang tiếng Việt)
             if manifest.target_language and manifest.target_language != manifest.source_language and manifest.target_language != "none":
@@ -104,10 +87,13 @@ class BackgroundWorker:
                     manifest.source_language, manifest.target_language
                 )
                 translator.load()
-                cues = translator.translate_cues(
-                    cues, source_lang=manifest.source_language, target_lang=manifest.target_language
-                )
-                translator.unload()
+                try:
+                    cues = translator.translate_cues(
+                        cues, source_lang=manifest.source_language, target_lang=manifest.target_language
+                    )
+                finally:
+                    translator.unload()
+                    translator = None
 
             # Stage 5: Lưu cues vào database
             self.repo.save_cues(project_id, cues)
@@ -117,7 +103,17 @@ class BackgroundWorker:
             self.repo.save_stage_run(project_id, stage_done)
             return True
 
-        except Exception as e:
-            stage_err = StageRunV1(stage_name="pipeline", status="failed", progress=0.0, error_message=str(e))
+        except Exception as error:
+            if ocr_provider is not None:
+                ocr_provider.unload()
+            if translator is not None:
+                translator.unload()
+            stage_err = StageRunV1(
+                stage_name="pipeline",
+                status="failed",
+                progress=0.0,
+                errors=[str(error)],
+                end_time=time.time(),
+            )
             self.repo.save_stage_run(project_id, stage_err)
             return False
