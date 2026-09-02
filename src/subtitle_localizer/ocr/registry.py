@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from subtitle_localizer.ocr.base import OcrProvider
 from subtitle_localizer.ocr.mock import MockOcrProvider
 from subtitle_localizer.ocr.paddle import PaddleOcrAdapter
+from subtitle_localizer.ocr.rapid import RapidOcrProvider
 
 
 class OcrRegistry:
@@ -12,8 +13,9 @@ class OcrRegistry:
 
     def __init__(self) -> None:
         self._providers: Dict[str, OcrProvider] = {}
-        # Đăng ký sẵn mock và paddle adapters
+        # Đăng ký sẵn mock, rapidocr và paddle adapters
         self.register("mock", MockOcrProvider())
+        self.register("rapidocr", RapidOcrProvider())
         self.register("paddle-zh", PaddleOcrAdapter(model_version="v6", language="ch"))
         self.register("paddle-ja", PaddleOcrAdapter(model_version="v6", language="japan"))
         self.register("paddle-ko", PaddleOcrAdapter(model_version="v5", language="korean"))
@@ -26,6 +28,9 @@ class OcrRegistry:
         return self._providers.get(name)
 
     def get_provider_for_language(self, language: str) -> OcrProvider:
+        # Ưu tiên RapidOCR ONNX runtime thật
+        if "rapidocr" in self._providers:
+            return self._providers["rapidocr"]
         mapping = {
             "zh": "paddle-zh",
             "ja": "paddle-ja",
