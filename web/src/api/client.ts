@@ -91,6 +91,18 @@ export class StudioApiClient {
     if (!res.ok) throw new Error('Không thể mở hộp thoại chọn video');
     return res.json();
   }
+
+  getExportSrtUrl(projectId: string, useTranslated: boolean = true): string {
+    return `${API_BASE}/projects/${projectId}/export/srt?use_translated=${useTranslated}`;
+  }
+
+  getExportAssUrl(projectId: string, useTranslated: boolean = true): string {
+    return `${API_BASE}/projects/${projectId}/export/ass?use_translated=${useTranslated}`;
+  }
+
+  getVideoStreamUrl(projectId: string): string {
+    return `${API_BASE}/projects/${projectId}/video/stream`;
+  }
 }
 
 export const apiClient = new StudioApiClient();

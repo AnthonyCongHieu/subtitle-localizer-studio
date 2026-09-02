@@ -153,8 +153,56 @@ def create_app(
             success = repository.update_project_revision(manifest, expected_revision=cmd.expected_revision)
             if not success:
                 raise HTTPException(status_code=409, detail="Failed to update revision")
-
         return {"command_id": cmd.command_id or "auto", "new_revision": manifest.active_revision}
+
+    @app.get("/api/v1/projects/{project_id}/export/srt")
+    async def export_srt(project_id: str, use_translated: bool = True, authorization: Optional[str] = Header(None)):
+        verify_auth(authorization)
+        project = repository.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        cues = repository.get_cues(project_id)
+        from subtitle_localizer.render.srt import SrtExporter
+        exporter = SrtExporter()
+        srt_content = exporter.export_srt_text(cues, use_translated=use_translated)
+        from fastapi.responses import Response
+        filename = f"{project.title}.srt"
+        return Response(
+            content=srt_content.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.get("/api/v1/projects/{project_id}/export/ass")
+    async def export_ass(project_id: str, use_translated: bool = True, authorization: Optional[str] = Header(None)):
+        verify_auth(authorization)
+        project = repository.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        cues = repository.get_cues(project_id)
+        from subtitle_localizer.render.ass import AssExporter
+        exporter = AssExporter()
+        ass_content = exporter.export_ass_text(cues, script_title=project.title, use_translated=use_translated)
+        from fastapi.responses import Response
+        filename = f"{project.title}.ass"
+        return Response(
+            content=ass_content.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.get("/api/v1/projects/{project_id}/video/stream")
+    async def stream_project_video(project_id: str):
+        project = repository.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        from pathlib import Path
+        video_path = Path(project.source_video_path)
+        if not video_path.exists():
+            # Trả về 404 nếu video không tồn tại
+            raise HTTPException(status_code=404, detail="Video file not found on disk")
+        from fastapi.responses import FileResponse
+        return FileResponse(path=str(video_path), media_type="video/mp4")
 
     @app.post("/api/v1/system/pick-video")
     async def pick_video(authorization: Optional[str] = Header(None)) -> Dict[str, str]:

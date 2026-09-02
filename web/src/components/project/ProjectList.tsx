@@ -1,4 +1,5 @@
 import React from 'react';
+import { apiClient } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
 
 interface ProjectListProps {
@@ -14,35 +15,49 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   onNewProject,
   onDeleteProject,
 }) => {
+  const getLanguageName = (code: string) => {
+    switch (code) {
+      case 'zh': return 'Tiếng Trung (中文)';
+      case 'ja': return 'Tiếng Nhật (日本語)';
+      case 'ko': return 'Tiếng Hàn (한국어)';
+      case 'en': return 'Tiếng Anh (English)';
+      case 'vi': return 'Tiếng Việt';
+      default: return code;
+    }
+  };
+
   return (
     <div className="max-w-5xl w-full mx-auto p-8 space-y-6">
+      {/* Header Banner */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-100 tracking-tight">Dự Án Phụ Đề</h1>
-          <p className="text-zinc-400 text-sm mt-1">
-            Quản lý và biên tập các dự án OCR nhận dạng & bản địa hóa phụ đề video
+          <h1 className="text-2xl font-bold text-zinc-100 tracking-tight flex items-center gap-2">
+            <span>🎬</span> Dự Án Bản Địa Hóa Phụ Đề
+          </h1>
+          <p className="text-zinc-400 text-xs mt-1">
+            Tự động nhận diện hard subtitle (Trung / Nhật / Hàn / Anh), dựng timing và dịch sang tiếng Việt
           </p>
         </div>
         <button
           onClick={onNewProject}
-          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2"
+          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-600/25 transition-all flex items-center gap-2"
         >
           <span>+</span> Tạo Dự Án Mới
         </button>
       </div>
 
       {projects.length === 0 ? (
-        <div className="border border-dashed border-zinc-800 rounded-2xl p-12 text-center space-y-4">
-          <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto text-zinc-400 text-xl">
+        <div className="border border-dashed border-zinc-800 bg-zinc-900/30 rounded-2xl p-14 text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto text-zinc-400 text-2xl shadow-inner">
             🎬
           </div>
-          <div>
-            <h3 className="text-zinc-200 font-medium">Chưa có dự án nào</h3>
-            <p className="text-zinc-500 text-xs mt-1">Hãy import một video để bắt đầu nhận diện phụ đề</p>
+          <div className="space-y-1">
+            <h3 className="text-zinc-200 font-semibold text-sm">Chưa có dự án nào</h3>
+            <p className="text-zinc-500 text-xs">Import video đầu tiên của bạn để trải nghiệm tính năng OCR & Dịch tự động</p>
           </div>
           <button
             onClick={onNewProject}
-            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-medium border border-zinc-700 transition-colors"
+            className="px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 rounded-lg text-xs font-medium border border-indigo-500/30 transition-colors"
           >
             Import Video Ngay
           </button>
@@ -52,11 +67,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           {projects.map((proj) => (
             <div
               key={proj.project_id}
-              className="bg-zinc-900/60 border border-zinc-800/80 hover:border-zinc-700 rounded-xl p-5 space-y-4 transition-all hover:shadow-xl hover:shadow-black/40 group flex flex-col justify-between"
+              className="bg-zinc-900/80 border border-zinc-800/80 hover:border-zinc-700 rounded-2xl p-5 space-y-4 transition-all hover:shadow-xl hover:shadow-black/40 group flex flex-col justify-between"
             >
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-indigo-950/60 border border-indigo-800 text-indigo-300">
+                  <span className="px-2.5 py-1 rounded-md text-[11px] font-mono uppercase bg-indigo-950/80 border border-indigo-800 text-indigo-300 font-semibold">
                     {proj.source_language} &rarr; {proj.target_language}
                   </span>
                   <button
@@ -72,22 +87,38 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                     🗑️
                   </button>
                 </div>
-                <h3
-                  onClick={() => onSelectProject(proj)}
-                  className="font-semibold text-zinc-100 group-hover:text-indigo-400 transition-colors cursor-pointer truncate"
-                >
-                  {proj.title}
-                </h3>
-                <p className="text-zinc-500 text-xs font-mono truncate" title={proj.source_video_path}>
-                  {proj.source_video_path}
-                </p>
+
+                <div>
+                  <h3
+                    onClick={() => onSelectProject(proj)}
+                    className="font-semibold text-zinc-100 group-hover:text-indigo-400 transition-colors cursor-pointer truncate text-sm"
+                  >
+                    {proj.title}
+                  </h3>
+                  <p className="text-zinc-500 text-[11px] font-mono truncate mt-1" title={proj.source_video_path}>
+                    📁 {proj.source_video_path}
+                  </p>
+                </div>
+
+                <div className="text-[11px] text-zinc-400 space-y-0.5">
+                  <div>Nguồn: <span className="text-zinc-300">{getLanguageName(proj.source_language)}</span></div>
+                  <div>Đích: <span className="text-indigo-400">{getLanguageName(proj.target_language)}</span></div>
+                </div>
               </div>
 
-              <div className="pt-3 border-t border-zinc-800/60 flex items-center justify-between text-xs text-zinc-400">
-                <span>Rev #{proj.active_revision}</span>
+              <div className="pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs">
+                <a
+                  href={apiClient.getExportSrtUrl(proj.project_id, true)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-zinc-400 hover:text-zinc-200 text-[11px] font-medium transition-colors"
+                  title="Tải nhanh file SRT tiếng Việt"
+                >
+                  📥 Tải .SRT
+                </a>
                 <button
                   onClick={() => onSelectProject(proj)}
-                  className="text-indigo-400 hover:text-indigo-300 font-medium"
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow-md shadow-indigo-600/20 transition-all"
                 >
                   Mở Studio &rarr;
                 </button>

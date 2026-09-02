@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { apiClient } from '../../api/client';
-import { ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
+import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../../types/api';
 import { CueTable } from './CueTable';
+import { ExportModal } from './ExportModal';
 import { ProxyPlayer } from './ProxyPlayer';
+import { RoiSelector } from './RoiSelector';
 import { useUndoRedo } from './useUndoRedo';
 import { WaveformTimeline } from './WaveformTimeline';
 
@@ -26,6 +28,10 @@ export const EditorView: React.FC<EditorViewProps> = ({ project, onBack }) => {
   const [selectedCueId, setSelectedCueId] = useState<string | undefined>();
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  const [activeRegion, setActiveRegion] = useState<RegionTrackV1 | undefined>(
+    project.regions && project.regions.length > 0 ? project.regions[0] : undefined,
+  );
 
   const loadCues = async () => {
     try {
@@ -47,7 +53,7 @@ export const EditorView: React.FC<EditorViewProps> = ({ project, onBack }) => {
     try {
       setStatusMessage('Đang lưu phụ đề...');
       await apiClient.saveCues(project.project_id, cues);
-      setStatusMessage('Đã lưu thành công!');
+      setStatusMessage('✓ Đã lưu thay đổi!');
       setTimeout(() => setStatusMessage(null), 3000);
     } catch (err: any) {
       setStatusMessage(`Lỗi lưu: ${err.message}`);
@@ -57,10 +63,10 @@ export const EditorView: React.FC<EditorViewProps> = ({ project, onBack }) => {
   const handleRunPipeline = async () => {
     try {
       setIsProcessing(true);
-      setStatusMessage('Đang chạy OCR & Dịch trong background...');
+      setStatusMessage('⚡ Đang chạy OCR & Dịch trong background...');
       await apiClient.runPipeline(project.project_id);
       await loadCues();
-      setStatusMessage('Hoàn tất nhận diện phụ đề!');
+      setStatusMessage('✓ Hoàn tất nhận diện và dịch!');
       setTimeout(() => setStatusMessage(null), 3000);
     } catch (err: any) {
       setStatusMessage(`Lỗi: ${err.message}`);
@@ -127,78 +133,92 @@ export const EditorView: React.FC<EditorViewProps> = ({ project, onBack }) => {
   };
 
   const duration = cues.length > 0 ? Math.max(...cues.map((c) => c.end_pts)) + 2.0 : 10.0;
+  const activeCue = cues.find((c) => currentTime >= c.start_pts && currentTime <= c.end_pts);
+  const videoUrl = apiClient.getVideoStreamUrl(project.project_id);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-zinc-950">
       {/* Studio Header Toolbar */}
-      <div className="h-12 bg-zinc-900 border-b border-zinc-800 px-6 flex items-center justify-between text-xs">
+      <div className="h-13 bg-zinc-900 border-b border-zinc-800 px-6 flex items-center justify-between text-xs select-none">
         <div className="flex items-center gap-4">
           <button
             onClick={onBack}
-            className="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+            className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium transition-colors"
           >
-            &larr; Dự Án
+            &larr; Quay Lại
           </button>
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-zinc-100">{project.title}</span>
-            <span className="text-zinc-500 font-mono">({project.source_language} &rarr; {project.target_language})</span>
+            <span className="font-semibold text-zinc-100 text-sm">{project.title}</span>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-indigo-950/60 border border-indigo-800 text-indigo-300">
+              {project.source_language} &rarr; {project.target_language}
+            </span>
           </div>
           {statusMessage && (
-            <span className="text-indigo-400 animate-pulse font-medium">{statusMessage}</span>
+            <span className="text-indigo-400 font-medium animate-pulse">{statusMessage}</span>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <button
             onClick={undo}
             disabled={!canUndo}
-            className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-300 rounded font-mono"
-            title="Undo (Ctrl+Z)"
+            className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 text-zinc-300 rounded-lg font-mono text-[11px] transition-colors"
+            title="Hoàn tác (Ctrl+Z)"
           >
-            ↩ Hoàn tác
+            ↩ Undo
           </button>
           <button
             onClick={redo}
             disabled={!canRedo}
-            className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-300 rounded font-mono"
-            title="Redo (Ctrl+Y)"
+            className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 text-zinc-300 rounded-lg font-mono text-[11px] transition-colors"
+            title="Làm lại (Ctrl+Y)"
           >
-            ↪ Làm lại
+            ↪ Redo
           </button>
+
           <div className="h-4 w-px bg-zinc-800 mx-1" />
+
           <button
             onClick={handleRunPipeline}
             disabled={isProcessing}
-            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-medium disabled:opacity-50"
+            className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium shadow-md shadow-indigo-600/30 transition-all disabled:opacity-50"
           >
-            {isProcessing ? 'Đang chạy...' : '⚡ OCR & Dịch Lại'}
+            {isProcessing ? 'Đang Xử Lý...' : '⚡ OCR & Dịch Tự Động'}
           </button>
+
           <button
             onClick={handleSave}
-            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium"
+            className="px-3.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg font-medium transition-colors"
           >
-            💾 Lưu Thay Đổi
+            💾 Lưu Cues
+          </button>
+
+          <button
+            onClick={() => setIsExportOpen(true)}
+            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium shadow-md shadow-emerald-600/30 transition-all flex items-center gap-1.5"
+          >
+            <span>📥</span> Xuất File
           </button>
         </div>
       </div>
 
-      {/* Main Workspace (Split View) */}
+      {/* Main Studio Body: 2 Columns */}
       <div className="flex-1 flex flex-col md:flex-row gap-4 p-4 overflow-hidden">
-        {/* Left Column: Video Proxy Player */}
-        <div className="w-full md:w-5/12 flex flex-col gap-4">
+        {/* Left Column: Player & ROI Settings */}
+        <div className="w-full md:w-5/12 flex flex-col gap-4 overflow-y-auto">
           <ProxyPlayer
+            videoUrl={videoUrl}
             currentTime={currentTime}
             isPlaying={isPlaying}
+            activeCue={activeCue}
             onTimeUpdate={(t) => setCurrentTime(t)}
             onTogglePlay={() => setIsPlaying(!isPlaying)}
           />
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-xs space-y-3">
-            <h4 className="font-semibold text-zinc-300">Vùng phụ đề (ROI Active)</h4>
-            <p className="text-zinc-500 leading-relaxed">
-              Vùng phụ đề được tự động nhận diện dưới đáy video (y &ge; 70%). Bạn có thể tinh chỉnh toạ độ trong tab Settings.
-            </p>
-          </div>
+          <RoiSelector
+            region={activeRegion}
+            onUpdateRegion={(r) => setActiveRegion(r)}
+          />
         </div>
 
         {/* Right Column: Dual Bilingual Cue Table */}
@@ -211,6 +231,7 @@ export const EditorView: React.FC<EditorViewProps> = ({ project, onBack }) => {
               const cue = cues.find((c) => c.cue_id === id);
               if (cue) setCurrentTime(cue.start_pts);
             }}
+            onPlayCue={(pts) => setCurrentTime(pts)}
             onUpdateCue={handleUpdateCue}
             onSplitCue={handleSplitCue}
             onMergeWithNext={handleMergeWithNext}
@@ -235,6 +256,13 @@ export const EditorView: React.FC<EditorViewProps> = ({ project, onBack }) => {
           onSeek={(t) => setCurrentTime(t)}
         />
       </div>
+
+      {/* Export Dialog */}
+      <ExportModal
+        isOpen={isExportOpen}
+        project={project}
+        onClose={() => setIsExportOpen(false)}
+      />
     </div>
   );
 };
