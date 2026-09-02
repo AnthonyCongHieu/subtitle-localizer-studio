@@ -47,7 +47,12 @@ class MockTranslationProvider(TranslationProvider):
         source_lang: str = "zh",
         target_lang: str = "vi",
     ) -> List[SubtitleCueV1]:
+        lang_labels = {"zh": "Trung", "ja": "Nhat", "ko": "Han", "en": "Anh"}
+        lang_label = lang_labels.get(source_lang, source_lang)
         for cue in cues:
-            translated = self._dict.get(cue.source_text.strip(), f"[Dịch VI]: {cue.source_text}")
+            translated = self._dict.get(cue.source_text.strip())
+            if not translated:
+                # Fallback: dich mo phong voi nhan ngon ngu
+                translated = f"[Ban dich {lang_label}->Viet]: {cue.source_text}"
             cue.translated_text = translated
         return cues
