@@ -1,6 +1,6 @@
 import { ProjectManifestV1, SubtitleCueV1 } from '../types/api';
 
-const API_BASE = 'http://127.0.0.1:8000/api/v1';
+const API_BASE = 'http://127.0.0.1:8899/api/v1';
 
 export class StudioApiClient {
   private token: string;

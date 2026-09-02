@@ -11,7 +11,7 @@ export class StudioWebSocketClient {
       return;
     }
     this.isConnecting = true;
-    const url = `ws://127.0.0.1:8000/api/v1/ws?after_sequence=${this.lastSequence}`;
+    const url = `ws://127.0.0.1:8899/api/v1/ws?after_sequence=${this.lastSequence}`;
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {

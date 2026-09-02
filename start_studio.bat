@@ -34,15 +34,15 @@ if not exist "%REPO_DIR%web\node_modules" (
     cd /d "%REPO_DIR%"
 )
 
-:: 3. Khởi động Backend Server (FastAPI trên port 8000)
-echo [*] Đang khởi động Backend Server trên http://127.0.0.1:8000 ...
+:: 3. Khởi động Backend Server (FastAPI trên port 8899)
+echo [*] Đang khởi động Backend Server trên http://127.0.0.1:8899 ...
 start "Subtitle Localizer - Backend Server" "%PYTHON_EXE%" "%REPO_DIR%scripts\run_server.py"
 
 :: Chờ 2 giây để backend khởi động
 timeout /t 2 /nobreak > nul
 
-:: 4. Khởi động Web Studio (Vite trên port 5173)
-echo [*] Đang khởi động Web Studio trên http://localhost:5173 ...
+:: 4. Khởi động Web Studio (Vite trên port 5199)
+echo [*] Đang khởi động Web Studio trên http://localhost:5199 ...
 start "Subtitle Localizer - Web Studio" cmd /k "cd /d "%REPO_DIR%web" && npm run dev"
 
 :: Chờ 2 giây
@@ -50,13 +50,13 @@ timeout /t 2 /nobreak > nul
 
 :: 5. Mở trình duyệt web
 echo [*] Đang mở trình duyệt web...
-start http://localhost:5173
+start http://localhost:5199
 
 echo.
 echo ==============================================================================
 echo   Subtitle Localizer Studio đã khởi động thành công!
-echo   - Web UI:      http://localhost:5173
-echo   - Backend API: http://127.0.0.1:8000/api/v1/health
+echo   - Web UI:      http://localhost:5199
+echo   - Backend API: http://127.0.0.1:8899/api/v1/health
 echo ==============================================================================
 echo.
 echo (Bạn có thể đóng cửa sổ này, 2 cửa sổ Backend và Web UI sẽ tiếp tục chạy.)

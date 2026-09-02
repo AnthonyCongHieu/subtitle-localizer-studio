@@ -47,7 +47,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
         <div className="flex items-center gap-4 text-xs font-mono">
           <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-zinc-800/80 border border-zinc-700/50">
             <span className={`w-2 h-2 rounded-full ${backendOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-            <span className="text-zinc-300">{backendOnline ? 'BACKEND 127.0.0.1:8000' : 'OFFLINE'}</span>
+            <span className="text-zinc-300">{backendOnline ? 'BACKEND 127.0.0.1:8899' : 'OFFLINE'}</span>
           </div>
           <div className="px-2 py-1 rounded bg-zinc-800/50 text-zinc-400 border border-zinc-800">
             v0.1.0
