@@ -1,7 +1,32 @@
 {
   "schema_version": "benchmark-result-v1",
-  "required": ["decision", "reason", "quality_metrics", "measurements"],
-  "decisions": ["not_run", "measured", "failed"],
-  "measurements": ["wall_seconds", "fps", "peak_ram_bytes", "peak_vram_bytes", "disk_bytes"],
-  "quality_metrics": ["cue_recall", "timing_median_ms", "timing_p95_ms", "ocr_cer", "translation_score"]
+  "required": [
+    "decision",
+    "reason",
+    "quality_metrics",
+    "measurements"
+  ],
+  "decisions": [
+    "not_run",
+    "measured",
+    "failed"
+  ],
+  "measurements": {
+    "required": [
+      "wall_seconds",
+      "fps",
+      "peak_ram_bytes",
+      "peak_vram_bytes",
+      "disk_bytes"
+    ]
+  },
+  "quality_metrics": {
+    "required": [
+      "cue_recall",
+      "timing_median_ms",
+      "timing_p95_ms",
+      "ocr_cer",
+      "translation_score"
+    ]
+  }
 }

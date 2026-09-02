@@ -1,0 +1,147 @@
+{
+  "schema_version": "synthetic-fixture-manifest-v1",
+  "fixtures": [
+    {
+      "id": "multilingual-cfr",
+      "path": "multilingual-cfr.mp4",
+      "timing": "cfr",
+      "sha256": "70ea0e87c5381b41814a5589afeb2668b64545e4b31a191b059064d0c7f30a29",
+      "languages": [
+        "zh",
+        "ja",
+        "ko",
+        "en",
+        "vi"
+      ],
+      "ffprobe": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "h264",
+            "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+            "profile": "Constrained Baseline",
+            "codec_type": "video",
+            "codec_tag_string": "avc1",
+            "codec_tag": "0x31637661",
+            "width": 320,
+            "height": 180,
+            "coded_width": 320,
+            "coded_height": 180,
+            "has_b_frames": 0,
+            "sample_aspect_ratio": "1:1",
+            "display_aspect_ratio": "16:9",
+            "pix_fmt": "yuv420p",
+            "level": 11,
+            "chroma_location": "left",
+            "field_order": "progressive",
+            "refs": 1,
+            "is_avc": "true",
+            "nal_length_size": "4",
+            "id": "0x1",
+            "r_frame_rate": "10/1",
+            "avg_frame_rate": "10/1",
+            "time_base": "1/10240",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 51200,
+            "duration": "5.000000",
+            "bit_rate": "9260",
+            "bits_per_raw_sample": "8",
+            "nb_frames": "50",
+            "tags": {
+              "language": "und",
+              "handler_name": "VideoHandler",
+              "vendor_id": "[0][0][0][0]",
+              "encoder": "Lavc libx264"
+            }
+          }
+        ],
+        "format": {
+          "filename": "multilingual-cfr.mp4",
+          "nb_streams": 1,
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "format_long_name": "QuickTime / MOV",
+          "start_time": "0.000000",
+          "duration": "5.000000",
+          "size": "6802",
+          "bit_rate": "10883"
+        }
+      }
+    },
+    {
+      "id": "multilingual-vfr",
+      "path": "multilingual-vfr.mp4",
+      "timing": "vfr",
+      "sha256": "dac31533b41a20fe4ef091df199dd2be6e06055805a26751c53c03889230bafd",
+      "languages": [
+        "zh",
+        "ja",
+        "ko",
+        "en",
+        "vi"
+      ],
+      "ffprobe": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "h264",
+            "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+            "profile": "Constrained Baseline",
+            "codec_type": "video",
+            "codec_tag_string": "avc1",
+            "codec_tag": "0x31637661",
+            "width": 320,
+            "height": 180,
+            "coded_width": 320,
+            "coded_height": 180,
+            "has_b_frames": 0,
+            "sample_aspect_ratio": "1:1",
+            "display_aspect_ratio": "16:9",
+            "pix_fmt": "yuv420p",
+            "level": 11,
+            "chroma_location": "left",
+            "field_order": "progressive",
+            "refs": 1,
+            "is_avc": "true",
+            "nal_length_size": "4",
+            "id": "0x1",
+            "r_frame_rate": "10/1",
+            "avg_frame_rate": "6/5",
+            "time_base": "1/10240",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 51200,
+            "duration": "5.000000",
+            "bit_rate": "7828",
+            "bits_per_raw_sample": "8",
+            "nb_frames": "6",
+            "tags": {
+              "language": "und",
+              "handler_name": "VideoHandler",
+              "vendor_id": "[0][0][0][0]",
+              "encoder": "Lavc libx264"
+            }
+          }
+        ],
+        "format": {
+          "filename": "multilingual-vfr.mp4",
+          "nb_streams": 1,
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "format_long_name": "QuickTime / MOV",
+          "start_time": "0.000000",
+          "duration": "5.000000",
+          "size": "5771",
+          "bit_rate": "9233"
+        },
+        "frame_pts_seconds": [
+          0.0,
+          0.7,
+          1.8,
+          2.4,
+          3.7,
+          4.9
+        ]
+      }
+    }
+  ]
+}

@@ -14,11 +14,14 @@ from subtitle_localizer_t00.fixtures import validate_fixture_manifest
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated T00 CFR/VFR fixture bytes and ffprobe metadata.")
-    parser.add_argument("manifest", type=Path, nargs="?", default=REPOSITORY_ROOT / "fixtures" / "synthetic" / "generated" / "manifest.json")
+    parser.add_argument("manifest", type=Path, nargs="?", default=REPOSITORY_ROOT / "fixtures" / "synthetic" / "fixture_manifest.json")
     parser.add_argument("--verify-files", action="store_true")
     arguments = parser.parse_args()
-    manifest = json.loads(arguments.manifest.read_text(encoding="utf-8"))
-    errors = validate_fixture_manifest(manifest, arguments.manifest.parent, arguments.verify_files)
+    manifest_path = arguments.manifest
+    if not manifest_path.exists() and (REPOSITORY_ROOT / "fixtures" / "synthetic" / "generated" / "manifest.json").exists():
+        manifest_path = REPOSITORY_ROOT / "fixtures" / "synthetic" / "generated" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    errors = validate_fixture_manifest(manifest, manifest_path.parent, arguments.verify_files)
     print(json.dumps({"valid": not errors, "errors": errors}, ensure_ascii=False, indent=2))
     return 0 if not errors else 1
 

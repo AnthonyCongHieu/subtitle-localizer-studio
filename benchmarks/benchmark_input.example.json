@@ -1,10 +1,32 @@
 {
   "schema_version": "benchmark-input-v1",
-  "detector": {"candidate": "native-temporal-detector", "version": "not-implemented-in-t00"},
-  "ocr": {"candidate": "PaddleOCR", "model": "pending-golden-benchmark"},
-  "translation": {"candidate": "pending-golden-benchmark", "runtime": "not-run"},
-  "timing": {"metrics": ["median_error_ms", "p95_error_ms"], "pts_required": true},
-  "memory": {"metrics": ["peak_ram_bytes", "peak_vram_bytes"]},
-  "disk": {"metrics": ["cache_bytes", "output_bytes"]},
-  "utf8_gate": {"reject_replacement_character": true, "reject_mojibake": true}
+  "detector": {
+    "candidate": "native-temporal-detector",
+    "version": "not-implemented-in-t00"
+  },
+  "ocr": {
+    "candidate": "PaddleOCR",
+    "model": "pending-golden-benchmark"
+  },
+  "translation": {
+    "candidate": "pending-golden-benchmark",
+    "runtime": "not-run"
+  },
+  "timing": {
+    "pts_required": true,
+    "median_error_ms": 150.0,
+    "p95_error_ms": 300.0
+  },
+  "memory": {
+    "peak_ram_bytes": 16000000000,
+    "peak_vram_bytes": 6000000000
+  },
+  "disk": {
+    "cache_bytes": 10000000000,
+    "output_bytes": 10000000000
+  },
+  "utf8_gate": {
+    "reject_replacement_character": true,
+    "reject_mojibake": true
+  }
 }

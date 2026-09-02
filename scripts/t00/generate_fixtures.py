@@ -78,6 +78,10 @@ def main() -> int:
     _encode_vfr(vfr, subtitle)
     cfr_probe = _probe(cfr)
     vfr_probe = _probe(vfr)
+    if "format" in cfr_probe and isinstance(cfr_probe["format"], dict):
+        cfr_probe["format"]["filename"] = cfr.name
+    if "format" in vfr_probe and isinstance(vfr_probe["format"], dict):
+        vfr_probe["format"]["filename"] = vfr.name
     vfr_timestamps = _frame_timestamps(vfr)
     if not has_variable_frame_intervals(vfr_timestamps):
         raise RuntimeError("FFmpeg output did not retain variable frame timestamps")

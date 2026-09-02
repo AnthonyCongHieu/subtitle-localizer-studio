@@ -4,11 +4,11 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-
 REQUIRED_CLIP_FIELDS = {"id", "video_path", "sha256", "language", "orientation", "difficulty", "ground_truth_path", "pts_mode"}
 VALID_LANGUAGES = {"zh", "ja", "ko", "en"}
 VALID_ORIENTATIONS = {"portrait", "landscape"}
 VALID_PTS_MODES = {"cfr", "vfr"}
+VALID_DIFFICULTIES = {"clean", "difficult"}
 
 
 def _sha256(path: Path) -> str:
@@ -27,6 +27,10 @@ def _is_inside(path: Path, repository_root: Path) -> bool:
     return True
 
 
+def _is_hex_sha256(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value.lower())
+
+
 def validate_golden_manifest(manifest: dict[str, Any], repository_root: Path, verify_files: bool) -> list[str]:
     errors: list[str] = []
     if manifest.get("schema_version") != "golden-manifest-v1":
@@ -35,7 +39,12 @@ def validate_golden_manifest(manifest: dict[str, Any], repository_root: Path, ve
     if not isinstance(clips, list) or not 4 <= len(clips) <= 8:
         errors.append("clips must contain 4 to 8 entries")
         return errors
+
     seen_ids: set[str] = set()
+    found_languages: set[str] = set()
+    found_orientations: set[str] = set()
+    found_pts_modes: set[str] = set()
+
     for index, clip in enumerate(clips):
         label = f"clips[{index}]"
         if not isinstance(clip, dict):
@@ -49,22 +58,61 @@ def validate_golden_manifest(manifest: dict[str, Any], repository_root: Path, ve
         if clip_id in seen_ids:
             errors.append(f"duplicate clip id: {clip_id}")
         seen_ids.add(clip_id)
-        video_path = Path(str(clip["video_path"]))
+
+        raw_video_path = str(clip["video_path"])
+        video_path = Path(raw_video_path)
         if not video_path.is_absolute() or _is_inside(video_path, repository_root):
             errors.append(f"{clip_id}: video_path must resolve outside the repository")
-        if len(str(clip["sha256"])) != 64 or any(character not in "0123456789abcdef" for character in str(clip["sha256"]).lower()):
-            errors.append(f"{clip_id}: sha256 must be a lowercase hexadecimal digest")
-        if clip["language"] not in VALID_LANGUAGES:
-            errors.append(f"{clip_id}: unsupported language")
-        if clip["orientation"] not in VALID_ORIENTATIONS:
+
+        raw_gt_path = str(clip["ground_truth_path"])
+        gt_path = Path(raw_gt_path)
+        if not gt_path.is_absolute() or _is_inside(gt_path, repository_root):
+            errors.append(f"{clip_id}: ground_truth_path must resolve outside the repository")
+
+        sha = str(clip["sha256"])
+        if not _is_hex_sha256(sha):
+            errors.append(f"{clip_id}: sha256 must be a 64-character lowercase hex digest")
+
+        lang = clip.get("language")
+        if lang not in VALID_LANGUAGES:
+            errors.append(f"{clip_id}: unsupported language: {lang}")
+        else:
+            found_languages.add(lang)
+
+        orientation = clip.get("orientation")
+        if orientation not in VALID_ORIENTATIONS:
             errors.append(f"{clip_id}: orientation must be portrait or landscape")
-        if clip["pts_mode"] not in VALID_PTS_MODES:
+        else:
+            found_orientations.add(orientation)
+
+        pts_mode = clip.get("pts_mode")
+        if pts_mode not in VALID_PTS_MODES:
             errors.append(f"{clip_id}: pts_mode must be cfr or vfr")
-        if verify_files and video_path.exists() and _sha256(video_path) != clip["sha256"]:
-            errors.append(f"{clip_id}: sha256 mismatch")
-        if verify_files and not video_path.exists():
-            errors.append(f"{clip_id}: video_path does not exist")
-        ground_truth_path = Path(str(clip["ground_truth_path"]))
-        if verify_files and not ground_truth_path.exists():
-            errors.append(f"{clip_id}: ground_truth_path does not exist")
+        else:
+            found_pts_modes.add(pts_mode)
+
+        difficulty = clip.get("difficulty")
+        if difficulty not in VALID_DIFFICULTIES:
+            errors.append(f"{clip_id}: difficulty must be clean or difficult")
+
+        if verify_files:
+            if not video_path.exists():
+                errors.append(f"{clip_id}: video_path does not exist")
+            elif _sha256(video_path) != sha:
+                errors.append(f"{clip_id}: sha256 mismatch")
+            if not gt_path.exists():
+                errors.append(f"{clip_id}: ground_truth_path does not exist")
+
+    missing_langs = VALID_LANGUAGES - found_languages
+    if missing_langs:
+        errors.append(f"manifest missing required language coverage (must cover zh, ja, ko, en): {sorted(missing_langs)}")
+
+    missing_orientations = VALID_ORIENTATIONS - found_orientations
+    if missing_orientations:
+        errors.append(f"manifest missing required orientation coverage (must cover both portrait and landscape): {sorted(missing_orientations)}")
+
+    missing_pts = VALID_PTS_MODES - found_pts_modes
+    if missing_pts:
+        errors.append(f"manifest missing required pts_mode coverage (must cover both cfr and vfr): {sorted(missing_pts)}")
+
     return errors

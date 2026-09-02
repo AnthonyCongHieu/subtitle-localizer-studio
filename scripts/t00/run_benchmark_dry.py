@@ -9,7 +9,11 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-from subtitle_localizer_t00.benchmarks import make_not_run_result, validate_benchmark_input
+from subtitle_localizer_t00.benchmarks import (
+    make_not_run_result,
+    validate_benchmark_input,
+    validate_benchmark_result,
+)
 from subtitle_localizer_t00.golden import validate_golden_manifest
 
 
@@ -29,6 +33,8 @@ def main() -> int:
     result = make_not_run_result(reason)
     result["input_validation_errors"] = errors
     result["missing_golden_clips"] = missing_inputs
+    result_errors = validate_benchmark_result(result)
+    errors.extend(result_errors)
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
