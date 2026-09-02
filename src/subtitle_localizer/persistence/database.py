@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 MIGRATIONS = {
     1: """
@@ -76,7 +76,42 @@ MIGRATIONS = {
     );
 
     CREATE INDEX IF NOT EXISTS idx_bridge_events_seq ON bridge_events(sequence);
-    """
+    """,
+    2: """
+    BEGIN IMMEDIATE;
+
+    CREATE TABLE cues_v2 (
+        project_id TEXT NOT NULL,
+        cue_id TEXT NOT NULL,
+        start_pts REAL NOT NULL,
+        end_pts REAL NOT NULL,
+        source_text TEXT NOT NULL,
+        translated_text TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'auto',
+        confidence REAL NOT NULL DEFAULT 1.0,
+        revision INTEGER NOT NULL DEFAULT 1,
+        cue_json TEXT NOT NULL,
+        PRIMARY KEY(project_id, cue_id),
+        FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+    );
+
+    INSERT INTO cues_v2 (
+        project_id, cue_id, start_pts, end_pts,
+        source_text, translated_text, status,
+        confidence, revision, cue_json
+    )
+    SELECT
+        project_id, cue_id, start_pts, end_pts,
+        source_text, translated_text, status,
+        confidence, revision, cue_json
+    FROM cues;
+
+    DROP TABLE cues;
+    ALTER TABLE cues_v2 RENAME TO cues;
+    CREATE INDEX idx_cues_project_pts ON cues(project_id, start_pts);
+
+    COMMIT;
+    """,
 }
 
 

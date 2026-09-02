@@ -124,7 +124,8 @@ class ProjectRepository:
     def save_cues(self, project_id: str, cues: List[SubtitleCueV1]) -> None:
         """Lưu danh sách cues cho một project trong một transaction duy nhất."""
         conn = self.db.get_connection()
-        with conn:
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
             # Xóa các cues cũ của project để ghi đè danh sách mới
             conn.execute("DELETE FROM cues WHERE project_id = ?;", (project_id,))
             for cue in cues:
@@ -150,6 +151,10 @@ class ProjectRepository:
                         cue_json,
                     ),
                 )
+            conn.execute("COMMIT;")
+        except Exception:
+            conn.execute("ROLLBACK;")
+            raise
 
     def get_cues(self, project_id: str) -> List[SubtitleCueV1]:
         """Lấy toàn bộ cues của project được sắp xếp theo start_pts tăng dần."""
