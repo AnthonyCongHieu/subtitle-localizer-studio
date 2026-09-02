@@ -25,7 +25,11 @@ def build_ocr_candidates(crop: np.ndarray) -> List[np.ndarray]:
         255,
         cv2.THRESH_BINARY + cv2.THRESH_OTSU,
     )
-    return [crop, contrast, thresholded]
+    # White subtitle glyphs with a dark outline are common in hard-subbed video.
+    # A fixed high-luminance mask removes bright scene signage that survives
+    # global contrast normalization while retaining the subtitle cores.
+    bright_subtitle = np.where(grayscale >= 200, 255, 0).astype(np.uint8)
+    return [crop, contrast, thresholded, bright_subtitle]
 
 
 def enhance_text_contrast(raw_bytes: bytes, width: int, height: int) -> bytes:

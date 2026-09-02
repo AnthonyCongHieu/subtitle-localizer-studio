@@ -17,7 +17,8 @@ class DetectorAndRoiTest(unittest.TestCase):
         # Video ngang 1920x1080
         roi_land = propose_default_roi(1920, 1080, is_portrait=False)
         self.assertTrue(roi_land.is_valid())
-        self.assertGreaterEqual(roi_land.y, 0.70)
+        self.assertEqual(roi_land.y, 0.78)
+        self.assertEqual(roi_land.y + roi_land.height, 0.96)
         self.assertEqual(roi_land.width, 0.84)
 
         # Video dọc 1080x1920 (TikTok/Reels/Shorts)

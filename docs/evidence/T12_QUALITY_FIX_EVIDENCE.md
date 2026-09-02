@@ -69,6 +69,35 @@ subtitles. Video 5 has real outlined Chinese subtitles but recognition is poor o
 several moving frames. Therefore no CER or quality percentage is claimed, and a
 full-duration five-video run would not yet be an appropriate release gate.
 
+## Bright-subtitle and ROI quality pass
+
+The difficult white-on-outline samples from video 05 exposed two independent
+issues: scene text survived the general preprocessing candidates, and the
+landscape ROI ended at 94% of frame height, clipping lower glyph strokes.
+Adding a luminance >= 200 candidate and moving the landscape ROI from 76--94%
+to 78--96% produced 70/71 correct ground-truth characters (98.6%) across seven
+manually checked lines. Six lines were exact; the remaining long line had one
+similar-Han-character error.
+
+Exact end-to-end runs used the same `run_project_ocr` entry point as the batch
+runner with `max_duration_seconds=60` and CUDA RapidOCR:
+
+- Video 05: 16 cues in 113.128 seconds. All seven audited subtitle lines were
+  recovered; the only audited recognition error was `蜿` -> `豌`.
+- Video 02: false detections fell from seven cues to one low-confidence mixed
+  token (`开A`, 0.675) before the final confidence gate was added.
+
+Chinese quality mode now also rejects isolated numeric scene tokens and OCR
+lines below 0.75 confidence. Arithmetic subtitles such as `6x6=36` remain
+explicitly supported.
+
+Post-change regression verification:
+
+- `python -m pytest -q`: exit 0, 133 passed.
+- `python -m compileall -q src scripts tests`: exit 0.
+- `python scripts/t00/utf8_scan.py .`: exit 0.
+- `npm run build` in `web`: exit 0, 43 modules transformed.
+
 ## Remaining quality work
 
 Measure missed cues and false positives against transcribed evidence, add

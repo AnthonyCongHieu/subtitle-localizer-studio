@@ -227,10 +227,21 @@ class RealFrameSamplingTest(unittest.TestCase):
         candidates = build_ocr_candidates(crop)
 
         self.assertIs(candidates[0], crop)
-        self.assertEqual(len(candidates), 3)
+        self.assertEqual(len(candidates), 4)
         self.assertTrue(all(item.shape[:2] == (8, 12) for item in candidates))
         self.assertEqual(candidates[1].ndim, 2)
         self.assertEqual(candidates[2].ndim, 2)
+        self.assertEqual(candidates[3].ndim, 2)
+
+    def test_preprocessing_isolates_bright_subtitle_pixels(self) -> None:
+        crop = np.array(
+            [[[199, 199, 199], [200, 200, 200], [255, 255, 255]]],
+            dtype=np.uint8,
+        )
+
+        candidates = build_ocr_candidates(crop)
+
+        np.testing.assert_array_equal(candidates[3], [[0, 255, 255]])
 
 
 class RealOnlyPipelineTest(unittest.TestCase):
@@ -255,8 +266,8 @@ class RealOnlyPipelineTest(unittest.TestCase):
             if not use_det:
                 return None, None
             self.call_count += 1
-            scores = [0.55, 0.93, 0.70]
-            texts = ["错误", "正确字幕", "候选"]
+            scores = [0.55, 0.93, 0.70, 0.80]
+            texts = ["错误", "正确字幕", "候选", "明亮候选"]
             index = self.call_count - 1
             return [([0, 0, 10, 10], texts[index], scores[index])], 0.01
 
@@ -302,7 +313,7 @@ class RealOnlyPipelineTest(unittest.TestCase):
             "zh",
         )
 
-        self.assertEqual(engine.call_count, 3)
+        self.assertEqual(engine.call_count, 4)
         self.assertEqual(observations[0].raw_text, "正确字幕")
         self.assertEqual(observations[0].confidence, 0.93)
         self.assertEqual(observations[0].model_metadata["engine"], "rapidocr-onnx")

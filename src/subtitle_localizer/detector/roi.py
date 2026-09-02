@@ -7,7 +7,7 @@ from subtitle_localizer.domain.models import RegionTrackV1
 def propose_default_roi(width: int, height: int, is_portrait: bool = False) -> RegionTrackV1:
     """
     Đề xuất vùng nhận diện phụ đề (ROI) chuẩn theo hình học video:
-    - Landscape: vùng đáy 18% chiều cao, cách lề 8% mỗi bên.
+    - Landscape: vùng 78% -> 96% chiều cao, cách lề 8% mỗi bên.
     - Portrait (Shorts/TikTok): vùng giữa-dưới (68% -> 88% chiều cao) tránh bị UI app che khuất.
     """
     if is_portrait or (height > width):
@@ -19,7 +19,7 @@ def propose_default_roi(width: int, height: int, is_portrait: bool = False) -> R
     else:
         # Video ngang
         x = 0.08
-        y = 0.76
+        y = 0.78
         w = 0.84
         h = 0.18
 

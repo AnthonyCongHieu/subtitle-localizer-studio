@@ -14,6 +14,8 @@ from subtitle_localizer.ocr.preprocessing import build_ocr_candidates
 
 
 def _is_chinese_or_non_latin(text: str) -> bool:
+    if re.fullmatch(r"\s*\d+[,.，。]*\s*", text):
+        return False
     if not re.search(r"[A-Za-z]", text) or re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", text):
         return True
     # An x between numeric operands is multiplication, not an English subtitle.
@@ -202,7 +204,8 @@ class RapidOcrProvider(OcrProvider):
             best_observation: Optional[OcrObservationV1] = None
             candidate_texts: List[str] = []
             inference_errors: List[str] = []
-            for candidate_index, candidate in enumerate(build_ocr_candidates(img_data)):
+            candidates = build_ocr_candidates(img_data)
+            for candidate_index, candidate in enumerate(candidates):
                 try:
                     result, _ = self.engine(candidate)
                 except Exception as error:
@@ -220,7 +223,7 @@ class RapidOcrProvider(OcrProvider):
                     score = float(item[2])
                     if language == "zh" and not _is_chinese_or_non_latin(text):
                         continue
-                    if score >= 0.4 and text:
+                    if score >= 0.75 and text:
                         box = _rectangle(item[0])
                         text, score, box, line_verified_han_edge = self._reread_line(
                             img_data, box, text, score
@@ -251,9 +254,19 @@ class RapidOcrProvider(OcrProvider):
                         "execution_provider": self.execution_provider,
                     },
                 )
+                preserves_verified_best = (
+                    best_observation is not None
+                    and best_observation.preprocessing_metadata["verified_han_edge"]
+                    and _has_verified_han_edge(
+                        best_observation.raw_text, candidate_observation.raw_text
+                    )
+                )
                 if (
                     best_observation is None
-                    or candidate_observation.confidence > best_observation.confidence
+                    or (
+                        candidate_observation.confidence > best_observation.confidence
+                        and not preserves_verified_best
+                    )
                     or (
                         candidate_observation.preprocessing_metadata["verified_han_edge"]
                         and _has_verified_han_edge(
@@ -267,7 +280,7 @@ class RapidOcrProvider(OcrProvider):
                 best_observation.preprocessing_metadata["candidate_disagreement"] = len(set(candidate_texts)) > 1
                 best_observation.preprocessing_metadata["candidate_texts"] = candidate_texts
                 observations.append(best_observation)
-            elif inference_errors and len(inference_errors) == 3:
+            elif inference_errors and len(inference_errors) == len(candidates):
                 raise RuntimeError(
                     "RapidOCR inference failed for every preprocessing candidate: "
                     + "; ".join(inference_errors)

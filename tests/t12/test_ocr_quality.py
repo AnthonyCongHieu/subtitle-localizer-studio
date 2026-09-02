@@ -19,7 +19,7 @@ class CandidateEngine:
 
     def __init__(self, detections, rereads=None):
         self.detections = iter(detections)
-        self.rereads = iter(rereads or [None, None, None])
+        self.rereads = iter(rereads or [None, None, None, None])
 
     def __call__(self, image, use_det=True, use_cls=True):
         if not use_det:
@@ -37,21 +37,30 @@ def recognize(engine):
 
 @pytest.mark.parametrize("text", ["6x6=36,", "6X7=42,", "6×8=48...", "6*9=54", "第6趟车"])
 def test_chinese_filter_preserves_math_and_chinese(text):
-    result = recognize(CandidateEngine([[[BOX, text, .98]]] * 3))
+    result = recognize(CandidateEngine([[[BOX, text, .98]]] * 4))
     assert result[0].raw_text == text
 
 
 @pytest.mark.parametrize("text", ["Based on a true story", "x train 36", "6x6 trailer", "x"])
 def test_chinese_filter_still_rejects_english(text):
-    assert recognize(CandidateEngine([[[BOX, text, .99]]] * 3)) == []
+    assert recognize(CandidateEngine([[[BOX, text, .99]]] * 4)) == []
+
+
+@pytest.mark.parametrize("text", ["1", "7.", "2026"])
+def test_chinese_filter_rejects_isolated_numeric_scene_noise(text):
+    assert recognize(CandidateEngine([[[BOX, text, .99]]] * 4)) == []
+
+
+def test_quality_mode_rejects_low_confidence_scene_text():
+    assert recognize(CandidateEngine([[[BOX, "开A", .74]]] * 4)) == []
 
 
 def test_reread_preserves_verified_leading_character_despite_high_detector_score():
     result = recognize(CandidateEngine(
         [[[BOX, "般跑六天。", .999457]], [[BOX, "般跑六天。", .998967]],
-         [[BOX, "一般跑六天。", .997702]]],
+         [[BOX, "一般跑六天。", .997702]], [[BOX, "一般跑六天。", .997]]],
         [[["一般跑六天。", .941483]], [["-般跑六天。", .917049]],
-         [["一般跑六天。", .999745]]],
+         [["一般跑六天。", .999745]], [["一般跑六天。", .997]]],
     ))
     assert result[0].raw_text == "一般跑六天。"
     assert result[0].preprocessing_metadata["candidate_disagreement"] is True
@@ -59,8 +68,8 @@ def test_reread_preserves_verified_leading_character_despite_high_detector_score
 
 def test_reread_recovers_one_low_contrast_han_character_on_all_candidates():
     result = recognize(CandidateEngine(
-        [[[BOX, "般跑六天。", .999]]] * 3,
-        [[["一般跑六天。", .948]]] * 3,
+        [[[BOX, "般跑六天。", .999]]] * 4,
+        [[["一般跑六天。", .948]]] * 4,
     ))
     assert result[0].raw_text == "一般跑六天。"
 
@@ -68,8 +77,8 @@ def test_reread_recovers_one_low_contrast_han_character_on_all_candidates():
 def test_verified_han_edge_beats_higher_confidence_truncated_candidate():
     result = recognize(CandidateEngine(
         [[[BOX, "般跑六天。", .999]], [[BOX, "般跑六天。", .999]],
-         [[BOX, "般跑六天。", .998]]],
-        [None, None, [["一般跑六天。", .948]]],
+         [[BOX, "般跑六天。", .998]], [[BOX, "般跑六天。", .997]]],
+        [None, None, [["一般跑六天。", .948]], None],
     ))
     assert result[0].raw_text == "一般跑六天。"
 
@@ -77,15 +86,15 @@ def test_verified_han_edge_beats_higher_confidence_truncated_candidate():
 def test_low_confidence_detector_edge_cannot_override_high_confidence_text():
     result = recognize(CandidateEngine(
         [[[BOX, "般跑六天。", .999]], [[BOX, "般跑六天。", .999]],
-         [[BOX, "一般跑六天。", .40]]],
+         [[BOX, "一般跑六天。", .40]], [[BOX, "般跑六天。", .997]]],
     ))
     assert result[0].raw_text == "般跑六天。"
 
 
 def test_padded_source_reread_recovers_trailing_punctuation():
     result = recognize(CandidateEngine(
-        [[[BOX, "前几天我妹突然跟我说", .997]]] * 3,
-        [[["前几天我妹突然跟我说，", .996]]] * 3,
+        [[[BOX, "前几天我妹突然跟我说", .997]]] * 4,
+        [[["前几天我妹突然跟我说，", .996]]] * 4,
     ))
     assert result[0].raw_text == "前几天我妹突然跟我说，"
     assert result[0].boxes == [[12.0, 8.0, 108.0, 42.0]]
@@ -97,15 +106,24 @@ def test_padded_source_reread_recovers_trailing_punctuation():
 ])
 def test_reread_cannot_replace_interior_delete_text_or_add_untrusted_context(reread, score):
     result = recognize(CandidateEngine(
-        [[[BOX, "前几天我妹突然跟我说", .997]]] * 3,
-        [[[reread, score]]] * 3,
+        [[[BOX, "前几天我妹突然跟我说", .997]]] * 4,
+        [[[reread, score]]] * 4,
     ))
     assert result[0].raw_text == "前几天我妹突然跟我说"
 
 
 def test_observation_preserves_real_detection_box_when_no_reread():
-    result = recognize(CandidateEngine([[[BOX, "字幕", .98]]] * 3))
+    result = recognize(CandidateEngine([[[BOX, "字幕", .98]]] * 4))
     assert result[0].boxes == [[20.0, 10.0, 100.0, 40.0]]
+
+
+def test_all_preprocessing_failures_raise_explicit_engine_error():
+    class FailingEngine:
+        def __call__(self, image, use_det=True, use_cls=True):
+            raise RuntimeError("inference unavailable")
+
+    with pytest.raises(RuntimeError, match="every preprocessing candidate"):
+        recognize(FailingEngine())
 
 
 def test_reconstruction_does_not_merge_different_multiplication_subtitles():
