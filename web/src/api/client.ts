@@ -1,4 +1,4 @@
-import { ProjectManifestV1, SubtitleCueV1 } from '../types/api';
+import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../types/api';
 
 const API_BASE = 'http://127.0.0.1:8899/api/v1';
 
@@ -73,6 +73,16 @@ export class StudioApiClient {
       body: JSON.stringify(cues),
     });
     if (!res.ok) throw new Error('Không thể lưu phụ đề');
+  }
+
+  async saveRegions(projectId: string, regions: RegionTrackV1[]): Promise<RegionTrackV1[]> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/regions`, {
+      method: 'PUT',
+      headers: this.headers(),
+      body: JSON.stringify(regions),
+    });
+    if (!res.ok) throw new Error('Không thể lưu vùng nhận diện phụ đề');
+    return res.json();
   }
 
   async runPipeline(projectId: string): Promise<void> {

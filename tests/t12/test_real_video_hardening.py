@@ -2,6 +2,7 @@ import json
 import sqlite3
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ from subtitle_localizer.ocr.rapid import RapidOcrProvider
 from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
 from subtitle_localizer.service.worker import BackgroundWorker
+from subtitle_localizer.service.server import create_app
 from subtitle_localizer.translation.real import RealTranslationProvider
 
 
@@ -374,6 +376,79 @@ class RealOnlyPipelineTest(unittest.TestCase):
         failed_stage = self.repo.get_stage_runs("real-project")[-1]
         self.assertEqual(failed_stage.status, "failed")
         self.assertEqual(failed_stage.errors, ["OCR unavailable"])
+
+    def test_regions_endpoint_persists_reviewed_roi(self) -> None:
+        from fastapi.testclient import TestClient
+
+        video_path = Path(self.temp_dir.name) / "video.mp4"
+        video_path.write_bytes(b"real-file-placeholder")
+        self._save_video_project(video_path)
+        app = create_app(database=self.db, repo=self.repo, auth_token="test-token")
+        region = {
+            "region_id": "reviewed",
+            "x": 0.1,
+            "y": 0.72,
+            "width": 0.8,
+            "height": 0.2,
+        }
+
+        response = TestClient(app).put(
+            "/api/v1/projects/real-project/regions",
+            json=[region],
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        saved = self.repo.get_project("real-project")
+        self.assertEqual(saved.regions[0].region_id, "reviewed")
+        self.assertEqual(saved.regions[0].x, 0.1)
+        self.assertEqual(saved.regions[0].width, 0.8)
+
+    def test_regions_endpoint_rejects_out_of_bounds_roi(self) -> None:
+        from fastapi.testclient import TestClient
+
+        video_path = Path(self.temp_dir.name) / "video.mp4"
+        video_path.write_bytes(b"real-file-placeholder")
+        self._save_video_project(video_path)
+        app = create_app(database=self.db, repo=self.repo, auth_token="test-token")
+
+        response = TestClient(app).put(
+            "/api/v1/projects/real-project/regions",
+            json=[
+                {
+                    "region_id": "invalid",
+                    "x": 0.8,
+                    "y": 0.8,
+                    "width": 0.5,
+                    "height": 0.5,
+                }
+            ],
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.repo.get_project("real-project").regions, [])
+
+    def test_pyproject_declares_real_runtime_dependencies(self) -> None:
+        project = tomllib.loads(
+            (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )["project"]
+        dependency_names = {
+            dependency.split(">=")[0].split("==")[0]
+            for dependency in project["dependencies"]
+        }
+
+        self.assertTrue(
+            {
+                "fastapi",
+                "uvicorn",
+                "numpy",
+                "opencv-python",
+                "rapidocr-onnxruntime",
+                "deep-translator",
+                "python-multipart",
+            }.issubset(dependency_names)
+        )
 
 
 if __name__ == "__main__":

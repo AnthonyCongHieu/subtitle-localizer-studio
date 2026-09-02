@@ -63,7 +63,12 @@ export const EditorView: React.FC<EditorViewProps> = ({ project, onBack }) => {
   const handleRunPipeline = async () => {
     try {
       setIsProcessing(true);
-      setStatusMessage('⚡ Đang quét frame video, nhận diện chữ (RapidOCR) và dịch tiếng Việt...');
+      setStatusMessage('Đang lưu vùng nhận diện phụ đề...');
+      if (activeRegion) {
+        const savedRegions = await apiClient.saveRegions(project.project_id, [activeRegion]);
+        setActiveRegion(savedRegions[0]);
+      }
+      setStatusMessage('⚡ Đang quét frame video và nhận diện chữ bằng RapidOCR...');
       await apiClient.runPipeline(project.project_id);
       const data = await apiClient.getCues(project.project_id);
       setCues(data);

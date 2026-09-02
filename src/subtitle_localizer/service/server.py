@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from subtitle_localizer.domain.models import (
     CommandEnvelopeV1,
     ProjectManifestV1,
+    RegionTrackV1,
     SubtitleCueV1,
 )
 from subtitle_localizer.persistence.database import Database
@@ -120,6 +121,29 @@ def create_app(
         cues = [SubtitleCueV1.from_dict(c) for c in cues_data]
         repository.save_cues(project_id, cues)
         return {"saved_count": len(cues)}
+
+    @app.put("/api/v1/projects/{project_id}/regions")
+    async def save_regions(
+        project_id: str,
+        regions_data: List[Dict[str, Any]],
+        authorization: Optional[str] = Header(None),
+    ) -> List[Dict[str, Any]]:
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        regions = [RegionTrackV1.from_dict(region) for region in regions_data]
+        invalid_ids = [region.region_id for region in regions if not region.is_valid()]
+        if invalid_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid normalized ROI: {', '.join(invalid_ids)}",
+            )
+
+        manifest.regions = regions
+        repository.save_project(manifest)
+        return [region.to_dict() for region in regions]
 
     @app.post("/api/v1/projects/{project_id}/pipeline/run")
     async def run_pipeline(project_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
