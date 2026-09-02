@@ -220,20 +220,17 @@ def create_app(
     async def pick_video(authorization: Optional[str] = Header(None)) -> Dict[str, str]:
         verify_auth(authorization)
         try:
-            import tkinter as tk
-            from tkinter import filedialog
+            import subprocess
+            import sys
             from pathlib import Path
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            selected = filedialog.askopenfilename(
-                title="Chọn Video Hard Subtitle",
-                filetypes=[
-                    ("Video Files", "*.mp4 *.mkv *.avi *.mov *.webm *.flv *.ts *.m4v"),
-                    ("All Files", "*.*"),
-                ],
+            script_path = Path(__file__).resolve().parents[3] / "scripts" / "pick_file.py"
+            res = subprocess.run(
+                [sys.executable, str(script_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
             )
-            root.destroy()
+            selected = res.stdout.strip()
             if selected:
                 p = Path(selected)
                 return {"path": str(p).replace("\\", "/"), "filename": p.name}

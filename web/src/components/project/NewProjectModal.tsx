@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { apiClient } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
 
@@ -20,11 +20,10 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
-  // 1. Mở Hộp thoại Chọn File Native của Windows qua Backend
+  // Mở Hộp thoại Chọn File Native của Windows Explorer
   const handlePickNativeVideo = async () => {
     setError(null);
     setStatusText('Đang mở hộp thoại chọn file trên máy tính...');
@@ -32,7 +31,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
       const res = await apiClient.pickVideo();
       if (res.path) {
         setVideoPath(res.path);
-        setStatusText(`✓ Đã chọn file: ${res.filename}`);
+        setStatusText(`✓ Đã chọn: ${res.filename}`);
         if (!title) {
           setTitle(res.filename.replace(/\.[^/.]+$/, ''));
         }
@@ -40,32 +39,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
         setStatusText(null);
       }
     } catch (err: any) {
-      setError(`Không thể mở hộp thoại hệ thống: ${err.message}. Bạn có thể chọn file bằng nút bên dưới hoặc dán đường dẫn.`);
+      setError(`Không thể mở hộp thoại: ${err.message}. Bạn có thể dán đường dẫn file vào ô bên dưới.`);
       setStatusText(null);
-    }
-  };
-
-  // 2. Upload file qua trình duyệt (fallback)
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setError(null);
-    setStatusText(`⏳ Đang tải video lên server (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
-    setLoading(true);
-
-    try {
-      const res = await apiClient.uploadVideo(file);
-      setVideoPath(res.path);
-      setStatusText(`✓ Đã tải video lên thành công: ${res.filename}`);
-      if (!title) {
-        setTitle(file.name.replace(/\.[^/.]+$/, ''));
-      }
-    } catch (err: any) {
-      setError(`Lỗi upload: ${err.message}. Bạn có thể nhập trực tiếp đường dẫn ổ đĩa (VD: D:/Videos/...)`);
-      setVideoPath(file.name);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -76,7 +51,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
       return;
     }
     if (!videoPath.trim()) {
-      setError('Vui lòng chọn video hoặc dán đường dẫn file trên máy');
+      setError('Vui lòng bấm nút chọn video hoặc dán đường dẫn file video');
       return;
     }
     setLoading(true);
@@ -149,52 +124,34 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
               Video nguồn (Hard Subtitle)
             </label>
 
-            {/* Nút bấm mở native dialog Windows */}
+            {/* Nút bấm mở native dialog Windows Explorer */}
             <button
               type="button"
               onClick={handlePickNativeVideo}
               disabled={loading}
-              className="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 mb-2"
+              className="w-full px-4 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 mb-2.5 cursor-pointer active:scale-98"
             >
               <span className="text-base">📁</span>
-              <span className="font-semibold">Chọn Video Từ Máy Tính (Windows Explorer)</span>
+              <span className="font-semibold text-sm">Bấm vào đây để chọn Video từ máy tính</span>
             </button>
 
-            {/* Đường dẫn file đã chọn */}
+            {/* Ô dán đường dẫn file */}
             <div className="space-y-1">
               <span className="text-[11px] text-zinc-500 block">Đường dẫn file video trên máy:</span>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={videoPath}
-                  onChange={(e) => {
-                    setVideoPath(e.target.value);
-                    if (!title && e.target.value) {
-                      const parts = e.target.value.replace(/\\/g, '/').split('/');
-                      const fileName = parts[parts.length - 1];
-                      setTitle(fileName.replace(/\.[^/.]+$/, ''));
-                    }
-                  }}
-                  placeholder="D:/Videos/sample.mp4"
-                  className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
-                />
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="video/*,.mp4,.mkv,.avi,.mov,.webm,.ts,.flv"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium border border-zinc-700 shrink-0"
-                  title="Upload qua trình duyệt"
-                >
-                  Duyệt file
-                </button>
-              </div>
+              <input
+                type="text"
+                value={videoPath}
+                onChange={(e) => {
+                  setVideoPath(e.target.value);
+                  if (!title && e.target.value) {
+                    const parts = e.target.value.replace(/\\/g, '/').split('/');
+                    const fileName = parts[parts.length - 1];
+                    setTitle(fileName.replace(/\.[^/.]+$/, ''));
+                  }
+                }}
+                placeholder="D:/Videos/sample.mp4 (Tự động điền khi bạn bấm nút chọn ở trên)"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
+              />
             </div>
           </div>
 
