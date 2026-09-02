@@ -10,11 +10,11 @@ node_modules/
 dist/
 
 # Local media, models, state, and generated artifacts
-media/
-models/
-outputs/
-proxies/
-cache/
+/media/
+/models/
+/outputs/
+/proxies/
+/cache/
 *.sqlite3
 *.db
 benchmarks/golden/clips/
