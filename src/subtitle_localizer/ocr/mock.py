@@ -45,8 +45,10 @@ class MockOcrProvider(OcrProvider):
         samples = self._sample_texts.get(language, self._sample_texts["en"])
         results: List[OcrObservationV1] = []
 
-        for idx, pts in enumerate(pts_list):
-            text = samples[idx % len(samples)]
+        for pts in pts_list:
+            # Chọn câu văn bản ổn định theo khoảng thời gian 2.0s
+            sample_idx = int(pts // 2.0) % len(samples)
+            text = samples[sample_idx]
             results.append(
                 OcrObservationV1(
                     pts=pts,
