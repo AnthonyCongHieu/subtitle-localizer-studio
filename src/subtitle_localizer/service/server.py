@@ -208,13 +208,14 @@ def create_app(
     async def upload_video_file(file: UploadFile = File(...), authorization: Optional[str] = Header(None)) -> Dict[str, str]:
         verify_auth(authorization)
         from pathlib import Path
-        import shutil
         upload_dir = Path("uploads").resolve()
         upload_dir.mkdir(parents=True, exist_ok=True)
-        target_path = upload_dir / file.filename
+        safe_name = file.filename or "uploaded_video.mp4"
+        target_path = upload_dir / safe_name
         with target_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        return {"path": str(target_path).replace("\\", "/"), "filename": file.filename}
+            while chunk := await file.read(1024 * 1024):
+                buffer.write(chunk)
+        return {"path": str(target_path).replace("\\", "/"), "filename": safe_name}
 
     @app.post("/api/v1/system/pick-video")
     async def pick_video(authorization: Optional[str] = Header(None)) -> Dict[str, str]:
