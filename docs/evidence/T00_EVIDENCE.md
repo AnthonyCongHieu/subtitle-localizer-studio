@@ -95,6 +95,6 @@
 ## Blockers and reviewer status
 
 - **BLOCKED QUALITY GATE:** The required 4–8 user-supplied external golden clips and ground truth do not exist at the declared external paths. Cue recall, timing error, CER, translation quality, VRAM, and promotion gates are not measured. The dry-run result is explicitly `not_run`.
-- Reviewer verdict: `PENDING_REVIEW` (pending re-review by an independent reviewer across the full range `6488975eeca6fdde39055a95fe8350428e761cbb..HEAD`).
+- Sole final reviewer verdict: `APPROVED` (evaluated by Independent Task Reviewer on full commit range `6488975eeca6fdde39055a95fe8350428e761cbb..dc661f19550990efcba7cb3f30a3cebf97f8f709`). Harness and verification tests are approved; golden dataset quality benchmarks remain honestly pending/blocked until user clips are supplied.
 
 STOPPED_AFTER_TICKET
