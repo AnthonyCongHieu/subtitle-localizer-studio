@@ -18,30 +18,51 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   const [sourceLang, setSourceLang] = useState('zh');
   const [targetLang, setTargetLang] = useState('vi');
   const [loading, setLoading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
+  // 1. Mở Hộp thoại Chọn File Native của Windows qua Backend
+  const handlePickNativeVideo = async () => {
+    setError(null);
+    setStatusText('Đang mở hộp thoại chọn file trên máy tính...');
+    try {
+      const res = await apiClient.pickVideo();
+      if (res.path) {
+        setVideoPath(res.path);
+        setStatusText(`✓ Đã chọn file: ${res.filename}`);
+        if (!title) {
+          setTitle(res.filename.replace(/\.[^/.]+$/, ''));
+        }
+      } else {
+        setStatusText(null);
+      }
+    } catch (err: any) {
+      setError(`Không thể mở hộp thoại hệ thống: ${err.message}. Bạn có thể chọn file bằng nút bên dưới hoặc dán đường dẫn.`);
+      setStatusText(null);
+    }
+  };
+
+  // 2. Upload file qua trình duyệt (fallback)
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setError(null);
-    setUploadStatus(`⏳ Đang tải video lên server (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
+    setStatusText(`⏳ Đang tải video lên server (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
     setLoading(true);
 
     try {
       const res = await apiClient.uploadVideo(file);
       setVideoPath(res.path);
-      setUploadStatus(`✓ Đã tải video lên thành công: ${res.filename}`);
-
+      setStatusText(`✓ Đã tải video lên thành công: ${res.filename}`);
       if (!title) {
         setTitle(file.name.replace(/\.[^/.]+$/, ''));
       }
     } catch (err: any) {
-      setError(`Lỗi tải video lên server: ${err.message}. Bạn có thể nhập đường dẫn thủ công bên dưới.`);
+      setError(`Lỗi upload: ${err.message}. Bạn có thể nhập trực tiếp đường dẫn ổ đĩa (VD: D:/Videos/...)`);
       setVideoPath(file.name);
     } finally {
       setLoading(false);
@@ -55,7 +76,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
       return;
     }
     if (!videoPath.trim()) {
-      setError('Vui lòng chọn file video hoặc nhập đường dẫn video');
+      setError('Vui lòng chọn video hoặc dán đường dẫn file trên máy');
       return;
     }
     setLoading(true);
@@ -68,10 +89,10 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
         target_language: targetLang,
       });
       onCreated(project);
-      // Reset form
+      // Reset
       setTitle('');
       setVideoPath('');
-      setUploadStatus(null);
+      setStatusText(null);
       setSourceLang('zh');
       setTargetLang('vi');
       onClose();
@@ -84,7 +105,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-5">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in duration-150">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
             <span>🎬</span> Tạo dự án phụ đề mới
@@ -103,9 +124,9 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
           </div>
         )}
 
-        {uploadStatus && !error && (
-          <div className="p-3 bg-indigo-950/60 border border-indigo-800 text-indigo-300 text-xs rounded-lg animate-pulse">
-            {uploadStatus}
+        {statusText && !error && (
+          <div className="p-3 bg-indigo-950/60 border border-indigo-800 text-indigo-300 text-xs rounded-lg">
+            {statusText}
           </div>
         )}
 
@@ -128,39 +149,52 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
               Video nguồn (Hard Subtitle)
             </label>
 
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="video/*,.mp4,.mkv,.avi,.mov,.webm,.ts,.flv"
-              onChange={handleFileChange}
-              className="hidden"
-            />
+            {/* Nút bấm mở native dialog Windows */}
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={handlePickNativeVideo}
               disabled={loading}
-              className="w-full px-3 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg font-medium text-xs transition-colors border border-zinc-700 border-dashed flex items-center justify-center gap-2 shadow-inner"
+              className="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 mb-2"
             >
               <span className="text-base">📁</span>
-              <span>{loading ? 'Đang xử lý...' : 'Click để chọn video từ máy tính...'}</span>
+              <span className="font-semibold">Chọn Video Từ Máy Tính (Windows Explorer)</span>
             </button>
 
-            <div className="mt-2">
-              <span className="text-[11px] text-zinc-500 block mb-1">Hoặc dán đường dẫn file trên máy:</span>
-              <input
-                type="text"
-                value={videoPath}
-                onChange={(e) => {
-                  setVideoPath(e.target.value);
-                  if (!title && e.target.value) {
-                    const parts = e.target.value.replace(/\\/g, '/').split('/');
-                    const fileName = parts[parts.length - 1];
-                    setTitle(fileName.replace(/\.[^/.]+$/, ''));
-                  }
-                }}
-                placeholder="D:/Videos/sample.mp4"
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
-              />
+            {/* Đường dẫn file đã chọn */}
+            <div className="space-y-1">
+              <span className="text-[11px] text-zinc-500 block">Đường dẫn file video trên máy:</span>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={videoPath}
+                  onChange={(e) => {
+                    setVideoPath(e.target.value);
+                    if (!title && e.target.value) {
+                      const parts = e.target.value.replace(/\\/g, '/').split('/');
+                      const fileName = parts[parts.length - 1];
+                      setTitle(fileName.replace(/\.[^/.]+$/, ''));
+                    }
+                  }}
+                  placeholder="D:/Videos/sample.mp4"
+                  className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                />
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="video/*,.mp4,.mkv,.avi,.mov,.webm,.ts,.flv"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium border border-zinc-700 shrink-0"
+                  title="Upload qua trình duyệt"
+                >
+                  Duyệt file
+                </button>
+              </div>
             </div>
           </div>
 
@@ -194,7 +228,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
             </div>
           </div>
 
-          {/* Nút hành động */}
+          {/* Buttons */}
           <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800">
             <button
               type="button"

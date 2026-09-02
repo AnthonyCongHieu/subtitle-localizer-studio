@@ -219,8 +219,27 @@ def create_app(
     @app.post("/api/v1/system/pick-video")
     async def pick_video(authorization: Optional[str] = Header(None)) -> Dict[str, str]:
         verify_auth(authorization)
-        # Giả lập hoặc gọi native dialog
-        return {"path": "E:/videos/sample_video.mp4", "filename": "sample_video.mp4"}
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            from pathlib import Path
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            selected = filedialog.askopenfilename(
+                title="Chọn Video Hard Subtitle",
+                filetypes=[
+                    ("Video Files", "*.mp4 *.mkv *.avi *.mov *.webm *.flv *.ts *.m4v"),
+                    ("All Files", "*.*"),
+                ],
+            )
+            root.destroy()
+            if selected:
+                p = Path(selected)
+                return {"path": str(p).replace("\\", "/"), "filename": p.name}
+            return {"path": "", "filename": ""}
+        except Exception as e:
+            return {"path": "", "filename": "", "error": str(e)}
 
     @app.get("/api/v1/models")
     async def list_models(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
