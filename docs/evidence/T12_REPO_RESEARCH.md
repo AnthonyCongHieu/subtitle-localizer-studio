@@ -233,3 +233,142 @@ probe; it is not a benchmark result or an implemented change.
 
 Only this research document was edited during the additional review. No package,
 model, production source, video or runtime setting was changed.
+
+## Community experience and newer pipeline references (2026-09-03)
+
+This pass focuses on problems reproduced in videos 2 and 5: scene-text false
+positives, outlined Chinese text over motion, and unstable temporal merging.
+Counts below are GitHub interest signals observed on the research date, not
+ratings or accuracy measurements.
+
+### Subtitle Edit Video OCR
+
+Repository: [SubtitleEdit/subtitleedit](https://github.com/SubtitleEdit/subtitleedit),
+14,038 stars, 1,292 forks, MIT reported by GitHub API. Inspected commit:
+`87fa837e9625556127d6292a01b989294a7a5b7f`.
+
+Its current [Video OCR documentation](https://github.com/SubtitleEdit/subtitleedit/blob/87fa837e9625556127d6292a01b989294a7a5b7f/docs/features/video-ocr.md)
+now covers burned-in video frames directly. On Windows/Linux it recommends
+PaddleOCR and also exposes GLM-OCR, DeepSeek-OCR-2, PP-OCRv6 and other local
+vision backends. The most relevant implementation choices are:
+
+- [Frame grouping](https://github.com/SubtitleEdit/subtitleedit/blob/87fa837e9625556127d6292a01b989294a7a5b7f/src/ui/Features/Video/VideoOcr/VideoOcrFrameGrouper.cs)
+  thresholds bright pixels at a working width near 360 pixels, then max-pools
+  the mask to 96 pixels so thin glyph strokes survive. It uses Jaccard overlap
+  of masks rather than ordinary whole-scene SSIM when brightness filtering is
+  active, classifies near-empty masks as blank, and picks the middle group frame
+  to avoid subtitle fade-in/fade-out edges.
+- The same code masks darker pixels before PaddleOCR and dilates the retained
+  bright-pixel mask. Its comments report that this helped Paddle but harmed a
+  vision OCR path, so preprocessing must remain engine-specific.
+- [Observation filtering](https://github.com/SubtitleEdit/subtitleedit/blob/87fa837e9625556127d6292a01b989294a7a5b7f/src/ui/Features/Video/VideoOcr/VideoOcrObservationFilter.cs)
+  requires a minimum bright-pixel fraction inside each returned box. This is
+  directly relevant to our scene-text false positives, but it assumes bright
+  subtitles and must be disabled or adapted for dark/color text.
+- [Line building](https://github.com/SubtitleEdit/subtitleedit/blob/87fa837e9625556127d6292a01b989294a7a5b7f/src/ui/Features/Video/VideoOcr/VideoOcrLineBuilder.cs)
+  weights text variants by on-screen duration and OCR confidence, drops short
+  blips, and can bridge one brief junk observation. This is stronger evidence
+  than choosing a single frame solely by confidence.
+- [Timing refinement](https://github.com/SubtitleEdit/subtitleedit/blob/87fa837e9625556127d6292a01b989294a7a5b7f/src/ui/Features/Video/VideoOcr/VideoOcrTimingRefiner.cs)
+  revisits only coarse start/end windows at source-frame resolution using real
+  ffmpeg timestamps; it does not rerun OCR for that refinement.
+
+These ideas are newly inspected upstream behavior; they have not been ported.
+Do not copy implementation code. Reproduce only the independently tested
+algorithmic behavior suitable for this project's Python contracts.
+
+### PaddleOCR model tiers
+
+Repository: [PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR),
+88,699 stars, 11,284 forks, Apache-2.0 reported by GitHub API. Inspected commit:
+`2661c7c0ef5c613e8f93c6e93b2e052399f0f854`.
+
+The [official model table](https://www.paddleocr.ai/main/en/version3.x/pipeline_usage/OCR.html)
+reports PP-OCRv5 server detection Hmean 83.8 versus 79.0 for mobile, and Chinese
+recognition average 86.38 versus 81.29 for mobile. The server detector and
+recognizer are 84.3 MB and 81 MB respectively. These figures are Paddle's
+general evaluation sets, not subtitle-video measurements. The same page warns
+that v6 and v5 results use different evaluation sets and are not directly
+comparable. Therefore the correct choice is an on-device A/B test, not selecting
+the largest version number.
+
+Community reports show model choice alone is insufficient:
+
+- [RapidOCR discussion 702](https://github.com/RapidAI/RapidOCR/discussions/702)
+  reports missed Chinese characters with both v4-det/v5-rec and v5-det/v5-rec;
+  the maintainer suggests testing v6. No result establishes a universal winner.
+- [PaddleOCR issue 15455](https://github.com/PaddlePaddle/PaddleOCR/issues/15455)
+  reports slow behavior on no-text images and local/demo output differences.
+  This reinforces measuring blank-frame handling and pinning the full runtime
+  configuration, not only model names.
+
+Practical conclusion for the RTX 3050 6 GB machine: benchmark a server detector
+and recognizer one at a time with a single GPU owner. Record model hashes, peak
+VRAM, blank-image latency and the exact resize/unclip/dilation configuration.
+
+### GLM-OCR and VLM fallback
+
+Repository: [zai-org/GLM-OCR](https://github.com/zai-org/GLM-OCR), 7,383 stars,
+667 forks, Apache-2.0 reported by GitHub API. Inspected commit:
+`cef4d0ea120d1741f5cefe8985eee45f6c8eff1d`.
+
+The project describes a 0.9B model and supports local vLLM, SGLang and Ollama.
+Subtitle Edit lists GLM-OCR first among its llama.cpp subtitle models. That is
+maintainer selection evidence, not a benchmark on our videos. Open community
+issues include [repeated output](https://github.com/zai-org/GLM-OCR/issues/225),
+poor results on some cropped regions, and local deployment/version problems.
+VLM output also needs strict cleaning because blank images can trigger prompt
+echoes or invented text; Subtitle Edit documents this explicitly in its line
+builder.
+
+Use GLM-OCR only as an offline second opinion for low-confidence or disagreeing
+representative crops initially. Do not run it on every sampled frame, trust its
+prose output without temporal evidence, or send user frames to a cloud API.
+Its value must be measured by character error reduction versus hallucination
+and runtime on this 6 GB device.
+
+The similarly named [Benson-mk/VideOCR-GLM](https://github.com/Benson-mk/VideOCR-GLM)
+had zero stars and zero forks at inspection time. It is relevant as an emerging
+integration experiment but does not meet the user's request for highly rated
+community evidence and should not drive architecture decisions.
+
+### Direct hardsub user experience
+
+- A [VideOCR community thread](https://www.reddit.com/r/selfhosted/comments/1k9cr55/videocr_extract_hardcoded_subtitles_out_of_videos/)
+  contains positive GPU reports and Chinese-language usage, but also a detailed
+  case where lowering max merge gap corrected one failure while causing duplicate
+  lines; later versions fixed one merge bug and reportedly introduced missed
+  lines for another user. The maintainer asked users to compare the same video
+  and crop. This supports per-video regression clips and warns against a single
+  global similarity threshold.
+- [VSE issue 296](https://github.com/YaoFANGUK/video-subtitle-extractor/issues/296)
+  reports low recall for short, right-aligned subtitles while centered subtitles
+  work well. Detection geometry is therefore an independent quality axis.
+- [VSE discussion 435](https://github.com/YaoFANGUK/video-subtitle-extractor/discussions/435)
+  reports Accurate mode taking roughly ten minutes for one minute of video and
+  long jobs appearing stuck near 94 percent. The report is anecdotal but shows
+  why progress, bounded batches and representative-frame OCR matter.
+- A [video-engineering user workflow](https://www.reddit.com/r/VIDEOENGINEERING/comments/1g20itg)
+  reports EasyOCR less accurate than Google Vision for Chinese and still relies
+  on manual comparison/correction. It is not a controlled benchmark and cloud
+  OCR is outside the local-only recommendation.
+
+### Revised implementation recommendation
+
+1. Implement bright-mask blank detection and mask-overlap grouping as an
+   optional bright-subtitle path. Validate it first on videos 1, 3, 4 and 5;
+   preserve an unmasked path for dark or colored subtitles.
+2. Select the middle/clearest frame from a stable group and vote text variants
+   by observed duration plus confidence. Treat similarity and max gap as a
+   tested profile, not global truth.
+3. Benchmark PP-OCR server/medium detector-recognizer combinations against the
+   current model on transcribed crops from all five videos, including blank
+   frames. This is the best first model upgrade for the existing ONNX pipeline.
+4. Evaluate local GLM-OCR only as a second pass for disputed representative
+   crops. Reject output that lacks temporal or detector support.
+5. Add image-backed review in the web UI after OCR quality is measurable. Human
+   correction remains necessary; no credible community source supports a
+   universal 100-percent hardsub OCR claim.
+
+This section records research only. No model, package, production code or user
+video was changed or uploaded during this pass.
