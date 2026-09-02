@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.py[cod]
+
+# Node
+node_modules/
+dist/
+
+# Local media, models, state, and generated artifacts
+media/
+models/
+outputs/
+proxies/
+cache/
+*.sqlite3
+*.db
+benchmarks/golden/clips/
+benchmarks/golden/ground_truth/private/
+fixtures/synthetic/generated/
+
+# Local evidence workspace and secrets
+.sdd/
+.env
+.env.*
+!.env.example
