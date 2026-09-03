@@ -111,6 +111,9 @@ class RapidOcrProvider(OcrProvider):
             self.engine = RapidOCR(
                 det_use_cuda=use_cuda, cls_use_cuda=use_cuda, rec_use_cuda=use_cuda
             )
+            if hasattr(self.engine, "text_det"):
+                self.engine.text_det.limit_type = "max"
+                self.engine.text_det.limit_side_len = 640
             # RapidOCR can silently fall back even when CUDA is advertised.
             sessions = (
                 self.engine.text_det.infer.session,
@@ -171,18 +174,93 @@ class RapidOcrProvider(OcrProvider):
                 )
         return text, score, box, False
 
+    def _is_duplicate_subtitle(
+        self,
+        prev_observation: Optional[OcrObservationV1],
+        prev_img: np.ndarray,
+        curr_img: np.ndarray,
+        diff_threshold: float,
+    ) -> bool:
+        """Kiểm tra xem phụ đề khung hình hiện tại có trùng khớp với khung hình trước hay không."""
+        if prev_img is None or prev_img.shape != curr_img.shape:
+            return False
+        import cv2
+
+        # 1. So sánh toàn frame cho khung hình tổng hợp / hoàn toàn tĩnh
+        diff = float(np.mean(cv2.absdiff(curr_img, prev_img)))
+        if diff < diff_threshold:
+            return True
+
+        # 2. So sánh ROI chữ cho video thực tế có nền chuyển động
+        if prev_observation is None or not prev_observation.boxes:
+            return False
+
+        h, w = curr_img.shape[:2]
+        matched_boxes = 0
+        valid_boxes = 0
+
+        for box in prev_observation.boxes:
+            x1, y1 = max(0, int(box[0])), max(0, int(box[1]))
+            x2, y2 = min(w, int(np.ceil(box[2]))), min(h, int(np.ceil(box[3])))
+            if (x2 - x1) < 8 or (y2 - y1) < 4:
+                continue
+            valid_boxes += 1
+            p_prev = prev_img[y1:y2, x1:x2]
+            p_curr = curr_img[y1:y2, x1:x2]
+            g_prev = cv2.cvtColor(p_prev, cv2.COLOR_BGR2GRAY) if p_prev.ndim == 3 else p_prev
+            g_curr = cv2.cvtColor(p_curr, cv2.COLOR_BGR2GRAY) if p_curr.ndim == 3 else p_curr
+
+            box_diff = float(np.mean(cv2.absdiff(g_curr, g_prev)))
+            if box_diff < diff_threshold:
+                matched_boxes += 1
+                continue
+
+            # A. Kiểm tra IoU mặt nạ chữ độ sáng cao
+            m_prev = (g_prev >= 195).astype(np.uint8)
+            m_curr = (g_curr >= 195).astype(np.uint8)
+            union = int(np.sum((m_prev == 1) | (m_curr == 1)))
+            if union > 30:
+                iou = float(np.sum((m_prev == 1) & (m_curr == 1))) / union
+                if iou >= 0.60:
+                    matched_boxes += 1
+                    continue
+                if iou < 0.40:
+                    continue
+
+            # B. Đối sánh tương quan chuẩn hóa cho chữ không phải màu trắng
+            if box_diff < 30.0 and float(np.std(g_curr)) > 5.0 and float(np.std(g_prev)) > 5.0:
+                try:
+                    res = float(cv2.matchTemplate(g_curr, g_prev, cv2.TM_CCOEFF_NORMED)[0][0])
+                    if res >= 0.78:
+                        matched_boxes += 1
+                except Exception:
+                    pass
+
+        return valid_boxes > 0 and matched_boxes == valid_boxes
+
     def recognize(
         self,
         crops: List[Any],
         pts_list: List[float],
         language: str = "zh",
+        progress_callback: Optional[Any] = None,
+        diff_threshold: float = 1.5,
     ) -> List[OcrObservationV1]:
         if not self.is_loaded or self.engine is None:
             self.load()
 
         observations: List[OcrObservationV1] = []
+        total_crops = len(crops)
+        prev_img_data: Optional[np.ndarray] = None
+        prev_observation: Optional[OcrObservationV1] = None
 
-        for crop_img, pts in zip(crops, pts_list):
+        for idx, (crop_img, pts) in enumerate(zip(crops, pts_list)):
+            if progress_callback is not None:
+                try:
+                    progress_callback(idx, total_crops)
+                except Exception:
+                    pass
+
             if crop_img is None:
                 raise RuntimeError("RapidOCR received no decoded image")
 
@@ -200,6 +278,24 @@ class RapidOcrProvider(OcrProvider):
 
             if img_data is None or img_data.size == 0:
                 raise RuntimeError("RapidOCR requires a valid decoded image")
+
+            # Fast frame difference & duplicate subtitle check
+            if diff_threshold > 0.0 and prev_img_data is not None:
+                if self._is_duplicate_subtitle(prev_observation, prev_img_data, img_data, diff_threshold):
+                    if prev_observation is not None:
+                        dup = OcrObservationV1(
+                            pts=pts,
+                            boxes=[list(b) for b in prev_observation.boxes],
+                            raw_text=prev_observation.raw_text,
+                            normalized_text=prev_observation.normalized_text,
+                            confidence=prev_observation.confidence,
+                            preprocessing_metadata=dict(prev_observation.preprocessing_metadata),
+                            model_metadata=dict(prev_observation.model_metadata),
+                        )
+                        observations.append(dup)
+                    continue
+
+            prev_img_data = img_data
 
             best_observation: Optional[OcrObservationV1] = None
             candidate_texts: List[str] = []
@@ -280,10 +376,19 @@ class RapidOcrProvider(OcrProvider):
                 best_observation.preprocessing_metadata["candidate_disagreement"] = len(set(candidate_texts)) > 1
                 best_observation.preprocessing_metadata["candidate_texts"] = candidate_texts
                 observations.append(best_observation)
+                prev_observation = best_observation
             elif inference_errors and len(inference_errors) == len(candidates):
                 raise RuntimeError(
                     "RapidOCR inference failed for every preprocessing candidate: "
                     + "; ".join(inference_errors)
                 )
+            else:
+                prev_observation = None
+
+        if progress_callback is not None:
+            try:
+                progress_callback(total_crops, total_crops)
+            except Exception:
+                pass
 
         return observations

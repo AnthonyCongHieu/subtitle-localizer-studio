@@ -35,6 +35,57 @@ class DetectorAndRoiTest(unittest.TestCase):
         self.assertIn(0.0, sampled)
         self.assertIn(0.4, sampled)
 
+    def test_adaptive_sampler_frame_diff_skips_duplicates(self) -> None:
+        from unittest.mock import patch
+        import numpy as np
+
+        class MockCap:
+            def __init__(self):
+                self.idx = 0
+                self.frames = [
+                    np.full((100, 100, 3), 10, dtype=np.uint8),
+                    np.full((100, 100, 3), 10, dtype=np.uint8),
+                    np.full((100, 100, 3), 200, dtype=np.uint8),
+                ]
+
+            def isOpened(self):
+                return True
+
+            def get(self, prop):
+                if prop == 5:
+                    return 1.0
+                if prop == 7:
+                    return 3.0
+                if prop == 3:
+                    return 100.0
+                if prop == 4:
+                    return 100.0
+                if prop == 0:
+                    return self.idx * 1000.0
+                return 0.0
+
+            def set(self, prop, val):
+                return True
+
+            def grab(self):
+                return True
+
+            def read(self):
+                if self.idx < len(self.frames):
+                    f = self.frames[self.idx]
+                    self.idx += 1
+                    return True, f
+                return False, None
+
+            def release(self):
+                pass
+
+        sampler = AdaptiveFrameSampler(sample_fps=1.0, diff_threshold=2.0)
+        with patch("cv2.VideoCapture", return_value=MockCap()):
+            crops, pts = sampler.sample_video_frames("dummy.mp4")
+        self.assertEqual(len(crops), 2)
+        self.assertEqual(pts, [1.0, 3.0])
+
     def test_native_temporal_detector_detects_cues_and_filters_watermark(self) -> None:
         detector = NativeTemporalDetector(min_duration_pts=0.4, max_watermark_ratio=0.85)
 

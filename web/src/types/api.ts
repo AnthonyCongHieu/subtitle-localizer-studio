@@ -38,6 +38,7 @@ export interface ProjectManifestV1 {
   media_metadata?: Record<string, any>;
   model_selections?: Record<string, string>;
   regions?: RegionTrackV1[];
+  cues_count?: number;
   style?: Record<string, any>;
   output_presets?: Record<string, any>;
   created_at: number;

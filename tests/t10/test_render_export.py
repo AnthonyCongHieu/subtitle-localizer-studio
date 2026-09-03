@@ -1,4 +1,7 @@
 import sys
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -61,6 +64,53 @@ class RenderAndExportTest(unittest.TestCase):
         )
         self.assertIn("h264_nvenc", cmd)
         self.assertIn("-c:a", cmd)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for render integration")
+    def test_blur_mask_can_be_composed_with_ass_subtitles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.mp4"
+            subtitle = root / "subtitle.ass"
+            output = root / "output.mp4"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=0.2",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+                ],
+                check=True,
+            )
+            subtitle.write_text(
+                "[Script Info]\nScriptType: v4.00+\nPlayResX: 320\nPlayResY: 240\n"
+                "[V4+ Styles]\n"
+                "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+                "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+                "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+                "MarginL, MarginR, MarginV, Encoding\n"
+                "Style: Default,Arial,24,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+                "0,0,0,0,100,100,0,0,1,2,0,2,10,10,20,1\n"
+                "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, "
+                "MarginV, Effect, Text\n"
+                "Dialogue: 0,0:00:00.00,0:00:00.20,Default,,0,0,0,,Xin chào\n",
+                encoding="utf-8",
+            )
+            mask_filter = SubtitleMasker().get_filter_string(
+                mode="blur",
+                x="iw*0.1",
+                y="ih*0.8",
+                width="iw*0.8",
+                height="ih*0.2",
+            )
+
+            rendered = VideoExporter().render_video(
+                source,
+                output,
+                ass_path=subtitle,
+                mask_filter=mask_filter,
+                use_nvenc=False,
+            )
+
+            self.assertGreater(rendered.stat().st_size, 0)
 
 
 if __name__ == "__main__":

@@ -240,6 +240,12 @@ class ProjectRepository:
         rows = cursor.fetchall()
         return [StageRunV1.from_dict(json.loads(row["stage_json"])) for row in rows]
 
+    def clear_stage_runs(self, project_id: str) -> None:
+        """Xóa lịch sử stage runs cũ khi khởi chạy đợt pipeline mới để tránh xung đột trạng thái."""
+        conn = self.db.get_connection()
+        with conn:
+            conn.execute("DELETE FROM stage_runs WHERE project_id = ?;", (project_id,))
+
     def save_event(self, event: BridgeEventV1) -> None:
         """Lưu event vào chuỗi sự kiện WebSocket ordered sequence."""
         conn = self.db.get_connection()

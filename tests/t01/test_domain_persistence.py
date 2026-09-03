@@ -75,6 +75,20 @@ class DomainModelsTest(unittest.TestCase):
         )
         self.assertFalse(invalid_region.is_valid())
 
+    def test_region_track_from_dict_handles_none_valid_pts(self) -> None:
+        data = {
+            "region_id": "reg-none",
+            "x": 0.08,
+            "y": 0.78,
+            "width": 0.84,
+            "height": 0.18,
+            "valid_start_pts": None,
+            "valid_end_pts": None,
+        }
+        track = RegionTrackV1.from_dict(data)
+        self.assertEqual(track.valid_start_pts, 0.0)
+        self.assertEqual(track.valid_end_pts, float("inf"))
+
 
 class PersistenceAndOptimisticRevisionTest(unittest.TestCase):
     def setUp(self) -> None:

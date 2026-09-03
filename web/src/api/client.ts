@@ -85,12 +85,105 @@ export class StudioApiClient {
     return res.json();
   }
 
-  async runPipeline(projectId: string): Promise<void> {
+  async runPipeline(projectId: string, options?: { max_duration_seconds?: number; sync?: boolean }): Promise<{ status: string; project_id: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/pipeline/run`, {
       method: 'POST',
       headers: this.headers(),
+      body: JSON.stringify(options || {}),
     });
     if (!res.ok) throw new Error('Lỗi khi khởi chạy tiến trình xử lý');
+    return res.json();
+  }
+
+  async getStages(projectId: string): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/stages`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể tải thông tin tiến trình');
+    return res.json();
+  }
+
+  async exportMp4(
+    projectId: string,
+    options: { use_translated: boolean; mask_mode: 'box' | 'blur' | 'none' },
+  ): Promise<{ status: 'completed'; output_path: string }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/export/mp4`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(options),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(payload?.detail || 'Không thể render video MP4');
+    }
+    return res.json();
+  }
+
+  async retranslateCue(projectId: string, cueId: string): Promise<SubtitleCueV1> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/cues/${cueId}/retranslate`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể dịch lại câu phụ đề');
+    return res.json();
+  }
+
+  async autoDetectRoi(
+    projectId: string,
+    pts?: number,
+  ): Promise<{ status: string; region: RegionTrackV1; detected_count: number }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/roi/auto-detect`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ pts }),
+    });
+    if (!res.ok) throw new Error('Không thể tự động phát hiện vùng chữ');
+    return res.json();
+  }
+
+  async getAudioWaveform(projectId: string): Promise<{ duration: number; peaks: number[] }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/audio-waveform`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể tải sóng âm thanh');
+    return res.json();
+  }
+
+  async retranslateProject(projectId: string): Promise<{ status: string; cues_count: number }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/retranslate`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể dịch lại kịch bản');
+    return res.json();
+  }
+
+  async setGeminiKey(apiKey: string): Promise<{ status: string; configured: boolean }> {
+    const res = await fetch(`${API_BASE}/settings/gemini-key`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+    if (!res.ok) throw new Error('Lỗi cấu hình Gemini API Key');
+    return res.json();
+  }
+
+  async getGeminiStatus(): Promise<{ configured: boolean; masked_key?: string }> {
+    const res = await fetch(`${API_BASE}/settings/gemini-key`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) return { configured: false };
+    return res.json();
+  }
+
+  async runBatchPipeline(projectIds: string[], autoExportMp4: boolean = false): Promise<any> {
+    const res = await fetch(`${API_BASE}/batch/run`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ project_ids: projectIds, auto_export_mp4: autoExportMp4 }),
+    });
+    if (!res.ok) throw new Error('Lỗi chạy batch pipeline');
+    return res.json();
   }
 
   async uploadVideo(file: File): Promise<{ path: string; filename: string }> {
@@ -126,6 +219,10 @@ export class StudioApiClient {
 
   getVideoStreamUrl(projectId: string): string {
     return `${API_BASE}/projects/${projectId}/video/stream`;
+  }
+
+  getRenderedVideoUrl(projectId: string, download: boolean = false): string {
+    return `${API_BASE}/projects/${projectId}/video/rendered${download ? '?download=true' : ''}`;
   }
 }
 

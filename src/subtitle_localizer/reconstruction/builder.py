@@ -14,11 +14,15 @@ class CueReconstructor:
         self,
         min_cue_duration: float = 0.25,
         max_merge_gap: float = 1.2,
-        similarity_threshold: float = 0.65,
+        similarity_threshold: float = 0.78,
+        lead_in: float = 0.0,
+        lead_out: float = 0.0,
     ) -> None:
         self.min_cue_duration = min_cue_duration
         self.max_merge_gap = max_merge_gap
         self.similarity_threshold = similarity_threshold
+        self.lead_in = lead_in
+        self.lead_out = lead_out
 
     def build_cues(self, observations: List[OcrObservationV1]) -> List[SubtitleCueV1]:
         """Tái cấu trúc danh sách OcrObservationV1 thành danh sách SubtitleCueV1 ổn định."""
@@ -71,14 +75,33 @@ class CueReconstructor:
         cues: List[SubtitleCueV1] = []
         cue_index = 1
 
-        for cluster in clusters:
+        for i, cluster in enumerate(clusters):
             start_pts = cluster[0][0]
             end_pts = cluster[-1][0]
+
+            # Nếu cluster chỉ có 1 sample frame (thoại ngắn xuất hiện giữa các frame),
+            # mở rộng thời lượng tối thiểu 0.40s để không bị coi là 0s flicker
+            if end_pts <= start_pts:
+                end_pts = start_pts + 0.40
+
             duration = end_pts - start_pts
 
             # Bỏ qua các cue có thời lượng tổng thể nhỏ hơn min_cue_duration (flicker)
             if duration < self.min_cue_duration and self.min_cue_duration > 0.0:
                 continue
+
+            # Áp dụng Lead-In Buffer (xuất hiện sớm một chút tránh chữ hiện trước khung che)
+            if self.lead_in > 0:
+                prev_end = cues[-1].end_pts if cues else 0.0
+                start_pts = max(prev_end, start_pts - self.lead_in)
+
+            # Áp dụng Lead-Out Buffer (giữ khung che đủ thời lượng frame mẫu cuối)
+            if self.lead_out > 0:
+                next_start = clusters[i + 1][0][0] if i + 1 < len(clusters) else None
+                if next_start is not None:
+                    end_pts = min(next_start - 0.05, end_pts + self.lead_out)
+                else:
+                    end_pts = end_pts + self.lead_out
 
             # Majority vote cho từng dòng text
             texts = [c[1] for c in cluster]

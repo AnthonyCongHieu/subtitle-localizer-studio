@@ -1,23 +1,27 @@
 import React, { useState } from 'react';
 import { apiClient } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
+import { Download, CheckCircle2, Play, X } from 'lucide-react';
 
 interface ExportModalProps {
   isOpen: boolean;
   project: ProjectManifestV1;
   onClose: () => void;
+  onViewRendered?: () => void;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
   isOpen,
   project,
   onClose,
+  onViewRendered,
 }) => {
   const [exportType, setExportType] = useState<'srt' | 'ass' | 'mp4'>('srt');
   const [useTranslated, setUseTranslated] = useState(true);
-  const [maskMode, setMaskMode] = useState<'box' | 'blur' | 'none'>('box');
+  const [maskMode, setMaskMode] = useState<'box' | 'blur' | 'none'>('blur');
   const [isExporting, setIsExporting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [renderedSuccess, setRenderedSuccess] = useState(false);
 
   if (!isOpen) return null;
 
@@ -40,23 +44,36 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       onClose();
     } else {
       setIsExporting(true);
-      setMessage('Đang kết nối FFmpeg NVENC render video MP4...');
-      setTimeout(() => {
+      setMessage('Đang render video MP4 bằng FFmpeg (che sub gốc + đè sub tiếng Việt)...');
+      try {
+        await apiClient.exportMp4(project.project_id, {
+          use_translated: useTranslated,
+          mask_mode: maskMode,
+        });
+        setMessage(`✓ Render hoàn tất! File video thành phẩm đã sẵn sàng.`);
+        setRenderedSuccess(true);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'Lỗi render không xác định';
+        setMessage(`Lỗi render MP4: ${detail}`);
+      } finally {
         setIsExporting(false);
-        setMessage('Đã gửi lệnh render video thành công! Video sẽ được lưu tại thư mục outputs/');
-      }, 1500);
+      }
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-5">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <h2 className="text-base font-semibold text-zinc-100 flex items-center gap-2">
-            <span>💾</span> Xuất Phụ Đề & Video
+            <Download className="w-4 h-4 text-indigo-400" />
+            <span>Xuất Phụ Đề & Video Thành Phẩm</span>
           </h2>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-200 text-lg leading-none">
-            &times;
+          <button
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-200 p-1 rounded-lg hover:bg-zinc-800 transition-colors"
+          >
+            <X className="w-4 h-4" />
           </button>
         </div>
 
@@ -156,6 +173,36 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </div>
           )}
         </div>
+
+        {renderedSuccess && (
+          <div className="p-3 bg-emerald-950/50 border border-emerald-800 rounded-xl space-y-2">
+            <div className="text-emerald-300 font-medium text-[11px] flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Video đã render xong với phụ đề tiếng Việt và làm mờ chữ gốc!</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onViewRendered?.();
+                  onClose();
+                }}
+                className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Xem Ngay Trong Studio</span>
+              </button>
+              <a
+                href={apiClient.getRenderedVideoUrl(project.project_id, true)}
+                download={`${project.title}-localized.mp4`}
+                className="py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow-md flex items-center justify-center gap-1.5 text-center transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Tải File MP4 Về Máy</span>
+              </a>
+            </div>
+          </div>
+        )}
 
         <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800">
           <button

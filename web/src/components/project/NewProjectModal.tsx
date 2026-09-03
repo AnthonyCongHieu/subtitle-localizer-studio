@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { apiClient } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
+import { Film, FolderOpen, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
 
 interface NewProjectModalProps {
   isOpen: boolean;
@@ -31,21 +32,20 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
     setError(null);
     const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
-    setStatusText(`⏳ Đang nạp video lên hệ thống (${sizeMb} MB)...`);
+    setStatusText(`Đang nạp video lên hệ thống (${sizeMb} MB)...`);
     setLoading(true);
 
     try {
       const res = await apiClient.uploadVideo(file);
       setVideoPath(res.path);
-      setStatusText(`✓ Đã nạp thành công: ${res.filename} (${sizeMb} MB)`);
+      setStatusText(`Đã nạp thành công: ${res.filename} (${sizeMb} MB)`);
       if (!title) {
         setTitle(file.name.replace(/\.[^/.]+$/, ''));
       }
     } catch (err: any) {
       // Nếu upload thất bại, vẫn dùng tên file để người dùng dán đường dẫn
+      setError(`Không thể tải video qua trình duyệt: ${err.message || err}. Bạn hãy nhập đường dẫn file trực tiếp.`);
       setVideoPath(file.name);
-      setError(`Lưu ý: Không thể lưu file qua upload. Bạn hãy gõ hoặc dán đường dẫn đầy đủ của file vào ô bên dưới.`);
-      setStatusText(null);
     } finally {
       setLoading(false);
     }
@@ -53,30 +53,21 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) {
-      setError('Vui lòng nhập tên dự án');
+    if (!title.trim() || !videoPath.trim()) {
+      setError('Vui lòng nhập tên dự án và chọn file video');
       return;
     }
-    if (!videoPath.trim()) {
-      setError('Vui lòng bấm nút chọn video hoặc dán đường dẫn file video');
-      return;
-    }
+
     setLoading(true);
     setError(null);
     try {
-      const project = await apiClient.createProject({
+      const proj = await apiClient.createProject({
         title: title.trim(),
         source_video_path: videoPath.trim(),
         source_language: sourceLang,
         target_language: targetLang,
       });
-      onCreated(project);
-      // Reset
-      setTitle('');
-      setVideoPath('');
-      setStatusText(null);
-      setSourceLang('zh');
-      setTargetLang('vi');
+      onCreated(proj);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Lỗi tạo dự án');
@@ -86,29 +77,32 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in duration-150">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-          <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
-            <span>🎬</span> Tạo dự án phụ đề mới
+          <h2 className="text-base font-semibold text-zinc-100 flex items-center gap-2.5">
+            <Film className="w-5 h-5 text-indigo-400" />
+            <span>Tạo Dự Án Phụ Đề Mới</span>
           </h2>
           <button
             onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-200 text-lg leading-none"
+            className="text-zinc-400 hover:text-zinc-200 p-1 rounded-lg hover:bg-zinc-800 transition-colors"
           >
-            &times;
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {error && (
-          <div className="p-3 bg-rose-950/50 border border-rose-800 text-rose-300 text-xs rounded-lg leading-relaxed">
-            {error}
+          <div className="p-3 bg-rose-950/50 border border-rose-800 text-rose-300 text-xs rounded-lg leading-relaxed flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{error}</span>
           </div>
         )}
 
         {statusText && !error && (
-          <div className="p-3 bg-indigo-950/60 border border-indigo-800 text-indigo-300 text-xs rounded-lg animate-pulse">
-            {statusText}
+          <div className="p-3 bg-indigo-950/60 border border-indigo-800 text-indigo-300 text-xs rounded-lg flex items-center gap-2 animate-pulse">
+            <CheckCircle2 className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span>{statusText}</span>
           </div>
         )}
 
@@ -147,7 +141,11 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
               disabled={loading}
               className="w-full px-4 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 mb-2.5 cursor-pointer active:scale-98 disabled:opacity-50"
             >
-              <span className="text-base">📁</span>
+              {loading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <FolderOpen className="w-4 h-4" />
+              )}
               <span className="font-semibold text-sm">
                 {loading ? 'Đang tải video...' : 'Bấm vào đây để chọn Video từ máy tính'}
               </span>

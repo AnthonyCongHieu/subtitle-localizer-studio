@@ -24,12 +24,16 @@ class AssExporter:
     def __init__(
         self,
         font_name: str = "Arial",
-        font_size: int = 22,
-        primary_color: str = "&H00FFFFFF",
-        outline_color: str = "&H00000000",
-        outline: int = 2,
+        font_size: int = 36,
+        primary_color: str = "&H0000FFFF",  # Golden yellow default
+        outline_color: str = "&H00000000",  # Black outline
+        outline: int = 3,
         shadow: int = 1,
         alignment: int = 2,  # Bottom Center
+        play_res_x: int = 1920,
+        play_res_y: int = 1080,
+        margin_v: int = 40,
+        bold: int = 1,
     ) -> None:
         self.font_name = font_name
         self.font_size = font_size
@@ -38,6 +42,10 @@ class AssExporter:
         self.outline = outline
         self.shadow = shadow
         self.alignment = alignment
+        self.play_res_x = play_res_x
+        self.play_res_y = play_res_y
+        self.margin_v = margin_v
+        self.bold = bold
 
     def export_ass_text(
         self,
@@ -50,12 +58,12 @@ Title: {script_title}
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes
-PlayResX: 1920
-PlayResY: 1080
+PlayResX: {self.play_res_x}
+PlayResY: {self.play_res_y}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{self.font_name},{self.font_size},{self.primary_color},&H000000FF,{self.outline_color},&H00000000,0,0,0,0,100,100,0,0,1,{self.outline},{self.shadow},{self.alignment},10,10,20,1
+Style: Default,{self.font_name},{self.font_size},{self.primary_color},&H000000FF,{self.outline_color},&H00000000,{self.bold},0,0,0,100,100,0,0,1,{self.outline},{self.shadow},{self.alignment},10,10,{self.margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

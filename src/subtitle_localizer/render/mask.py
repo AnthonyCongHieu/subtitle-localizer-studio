@@ -7,10 +7,10 @@ class SubtitleMasker:
     def get_filter_string(
         self,
         mode: str = "box",
-        x: int = 0,
-        y: int = 0,
-        width: int = 1920,
-        height: int = 200,
+        x: int | str = 0,
+        y: int | str = 0,
+        width: int | str = 1920,
+        height: int | str = 200,
         opacity: float = 0.85,
     ) -> str:
         """Sinh biểu thức FFmpeg video filter tương ứng."""
@@ -19,7 +19,9 @@ class SubtitleMasker:
 
         elif mode == "blur":
             # Áp dụng boxblur lên vùng ROI
-            return f"split[main][sub];[sub]crop={width}:{height}:{x}:{y},boxblur=luma_radius=10:luma_power=3[blurred];[main][blurred]overlay={x}:{y}"
+            overlay_x = str(x).replace("iw", "main_w").replace("ih", "main_h")
+            overlay_y = str(y).replace("iw", "main_w").replace("ih", "main_h")
+            return f"split[main][sub];[sub]crop={width}:{height}:{x}:{y},boxblur=luma_radius=10:luma_power=3[blurred];[main][blurred]overlay={overlay_x}:{overlay_y}"
 
         elif mode == "crop":
             # Cắt bớt phần dưới

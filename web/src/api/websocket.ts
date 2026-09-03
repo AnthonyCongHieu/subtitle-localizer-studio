@@ -10,8 +10,8 @@ export class StudioWebSocketClient {
     if (this.isConnecting || (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING))) {
       return;
     }
-    this.isConnecting = true;
-    const url = `ws://127.0.0.1:8899/api/v1/ws?after_sequence=${this.lastSequence}`;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${protocol}//${window.location.host}/api/v1/ws?after_sequence=${this.lastSequence}`;
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {

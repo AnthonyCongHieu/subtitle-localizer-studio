@@ -9,9 +9,15 @@ import numpy as np
 class AdaptiveFrameSampler:
     """Bộ lấy mẫu frame thích ứng nhằm tối ưu hiệu năng OCR từ file video thật."""
 
-    def __init__(self, sample_fps: float = 2.0, min_interval_pts: float = 0.3) -> None:
+    def __init__(
+        self,
+        sample_fps: float = 2.0,
+        min_interval_pts: float = 0.3,
+        diff_threshold: float = 0.0,
+    ) -> None:
         self.sample_fps = sample_fps
         self.min_interval_pts = min_interval_pts
+        self.diff_threshold = diff_threshold
 
     def filter_timestamps(self, timestamps: List[float]) -> List[float]:
         """Lọc danh sách frame timestamps theo khoảng cách thời gian tối thiểu."""
@@ -31,7 +37,8 @@ class AdaptiveFrameSampler:
         self,
         video_path: str | Path,
         roi_norm: Optional[Tuple[float, float, float, float]] = None,
-        max_duration_seconds: float = 600.0,
+        max_duration_seconds: Optional[float] = None,
+        diff_threshold: Optional[float] = None,
     ) -> Tuple[List[Any], List[float]]:
         """Mở video thực tế và trích xuất danh sách crops cùng mốc thời gian PTS."""
         import cv2
@@ -48,7 +55,10 @@ class AdaptiveFrameSampler:
 
         # Tính bước nhảy frame theo sample_fps
         frame_step = max(1, int(round(fps / self.sample_fps)))
-        max_frame_idx = min(total_frames, int(max_duration_seconds * fps))
+        if max_duration_seconds is not None and max_duration_seconds > 0:
+            max_frame_idx = min(total_frames, int(max_duration_seconds * fps))
+        else:
+            max_frame_idx = total_frames
 
         crops: List[Any] = []
         pts_list: List[float] = []
@@ -71,8 +81,19 @@ class AdaptiveFrameSampler:
             x2 = width
 
         curr_frame_idx = 0
+        use_grab = hasattr(cap, "grab")
+        active_diff_threshold = diff_threshold if diff_threshold is not None else self.diff_threshold
+        prev_crop_gray: Optional[np.ndarray] = None
+
         while curr_frame_idx < max_frame_idx:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, curr_frame_idx)
+            if use_grab and curr_frame_idx > 0:
+                # Fast sequential advance using grab
+                for _ in range(frame_step - 1):
+                    if not cap.grab():
+                        break
+            elif not use_grab:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, curr_frame_idx)
+
             ret, frame = cap.read()
             if not ret or frame is None:
                 break
@@ -84,6 +105,19 @@ class AdaptiveFrameSampler:
 
             # Crop vùng ROI
             crop = frame[y1:y2, x1:x2]
+
+            # Delta/Diff check
+            if active_diff_threshold > 0.0 and prev_crop_gray is not None:
+                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+                if gray.shape == prev_crop_gray.shape:
+                    diff = float(np.mean(cv2.absdiff(gray, prev_crop_gray)))
+                    if diff < active_diff_threshold:
+                        curr_frame_idx += frame_step
+                        continue
+                prev_crop_gray = gray
+            elif active_diff_threshold > 0.0:
+                prev_crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+
             crops.append(crop)
             pts_list.append(pts)
 
