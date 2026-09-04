@@ -1,27 +1,49 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { apiClient } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
-import { Film, FolderOpen, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { PresetProfile, getDefaultPreset } from '../../types/presets';
+import { Film, FolderOpen, Loader2, CheckCircle2, AlertCircle, X, Sliders } from 'lucide-react';
 
 interface NewProjectModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreated: (project: ProjectManifestV1) => void;
+  onCreated: (project: ProjectManifestV1, appliedPreset?: PresetProfile) => void;
+  presets?: PresetProfile[];
 }
 
 export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   isOpen,
   onClose,
   onCreated,
+  presets = [],
 }) => {
   const [title, setTitle] = useState('');
   const [videoPath, setVideoPath] = useState('');
+  const [selectedPresetId, setSelectedPresetId] = useState<string>('');
   const [sourceLang, setSourceLang] = useState('zh');
   const [targetLang, setTargetLang] = useState('vi');
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (presets.length > 0) {
+      const def = getDefaultPreset(presets);
+      setSelectedPresetId(def.id);
+      setSourceLang(def.source_lang);
+      setTargetLang(def.target_lang);
+    }
+  }, [presets, isOpen]);
+
+  const handleSelectPreset = (presetId: string) => {
+    setSelectedPresetId(presetId);
+    const p = presets.find((x) => x.id === presetId);
+    if (p) {
+      setSourceLang(p.source_lang);
+      setTargetLang(p.target_lang);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -43,7 +65,6 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
         setTitle(file.name.replace(/\.[^/.]+$/, ''));
       }
     } catch (err: any) {
-      // Nếu upload thất bại, vẫn dùng tên file để người dùng dán đường dẫn
       setError(`Không thể tải video qua trình duyệt: ${err.message || err}. Bạn hãy nhập đường dẫn file trực tiếp.`);
       setVideoPath(file.name);
     } finally {
@@ -61,13 +82,32 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
     setLoading(true);
     setError(null);
     try {
+      const chosenPreset = presets.find((p) => p.id === selectedPresetId);
       const proj = await apiClient.createProject({
         title: title.trim(),
         source_video_path: videoPath.trim(),
         source_language: sourceLang,
         target_language: targetLang,
       });
-      onCreated(proj);
+
+      // Nếu có cấu hình ROI trong preset, lưu ngay vào project
+      if (chosenPreset?.roi) {
+        try {
+          await apiClient.saveRegions(proj.project_id, [
+            {
+              region_id: 'roi-main',
+              x: chosenPreset.roi.x,
+              y: chosenPreset.roi.y,
+              width: chosenPreset.roi.width,
+              height: chosenPreset.roi.height,
+            },
+          ]);
+        } catch {
+          // Non-blocking
+        }
+      }
+
+      onCreated(proj, chosenPreset);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Lỗi tạo dự án');
@@ -78,15 +118,15 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in duration-150">
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in duration-150 text-slate-100">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <h2 className="text-base font-semibold text-zinc-100 flex items-center gap-2.5">
             <Film className="w-5 h-5 text-indigo-400" />
             <span>Tạo Dự Án Phụ Đề Mới</span>
           </h2>
           <button
             onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-200 p-1 rounded-lg hover:bg-zinc-800 transition-colors"
+            className="text-zinc-400 hover:text-zinc-200 p-1 rounded-lg hover:bg-slate-800 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -109,19 +149,40 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
         <form onSubmit={handleCreate} className="space-y-4 text-sm">
           {/* Tên dự án */}
           <div>
-            <label className="block text-zinc-400 text-xs font-medium mb-1.5">Tên dự án</label>
+            <label className="block text-slate-300 text-xs font-semibold mb-1.5">Tên dự án</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="VD: Phim tài liệu lịch sử 01"
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-zinc-100 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2.5 text-zinc-100 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-xs"
             />
           </div>
 
+          {/* Chọn Chuẩn Áp Dụng (Preset Profile) */}
+          {presets.length > 0 && (
+            <div>
+              <label className="block text-slate-300 text-xs font-semibold mb-1.5 flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Áp dụng Chuẩn Cấu Hình (Preset Profile):</span>
+              </label>
+              <select
+                value={selectedPresetId}
+                onChange={(e) => handleSelectPreset(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2.5 text-slate-200 focus:outline-none focus:border-indigo-500 text-xs font-medium cursor-pointer"
+              >
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} {p.is_default ? '⭐ (Mặc định)' : ''} [{p.aspect_ratio || '16:9'}]
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Video nguồn */}
           <div>
-            <label className="block text-zinc-400 text-xs font-medium mb-1.5">
+            <label className="block text-slate-300 text-xs font-semibold mb-1.5">
               Video nguồn (Hard Subtitle)
             </label>
 
@@ -139,21 +200,21 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={loading}
-              className="w-full px-4 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 mb-2.5 cursor-pointer active:scale-98 disabled:opacity-50"
+              className="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 mb-2 cursor-pointer active:scale-98 disabled:opacity-50"
             >
               {loading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <FolderOpen className="w-4 h-4" />
               )}
-              <span className="font-semibold text-sm">
+              <span className="font-semibold text-xs">
                 {loading ? 'Đang tải video...' : 'Bấm vào đây để chọn Video từ máy tính'}
               </span>
             </button>
 
             {/* Ô dán đường dẫn file */}
             <div className="space-y-1">
-              <span className="text-[11px] text-zinc-500 block">Đường dẫn file video:</span>
+              <span className="text-[10px] text-slate-500 block">Đường dẫn file video:</span>
               <input
                 type="text"
                 value={videoPath}
@@ -166,19 +227,19 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                   }
                 }}
                 placeholder="D:/Videos/sample.mp4 (Tự động điền khi bạn chọn video ở trên)"
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-[11px]"
               />
             </div>
           </div>
 
           {/* Ngôn ngữ */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-zinc-400 text-xs font-medium mb-1.5">Ngôn ngữ nguồn (OCR)</label>
+              <label className="block text-slate-300 text-xs font-semibold mb-1">Ngôn ngữ nguồn (OCR)</label>
               <select
                 value={sourceLang}
                 onChange={(e) => setSourceLang(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-zinc-100 focus:outline-none focus:border-indigo-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 text-xs"
               >
                 <option value="zh">Tiếng Trung (Chinese - 中文)</option>
                 <option value="ja">Tiếng Nhật (Japanese - 日本語)</option>
@@ -188,11 +249,11 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-zinc-400 text-xs font-medium mb-1.5">Ngôn ngữ đích (Dịch)</label>
+              <label className="block text-slate-300 text-xs font-semibold mb-1">Ngôn ngữ đích (Dịch)</label>
               <select
                 value={targetLang}
                 onChange={(e) => setTargetLang(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-zinc-100 focus:outline-none focus:border-indigo-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 text-xs"
               >
                 <option value="vi">Tiếng Việt (Vietnamese)</option>
                 <option value="en">Tiếng Anh (English)</option>
@@ -202,18 +263,18 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
           </div>
 
           {/* Buttons */}
-          <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800">
+          <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium"
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition"
             >
               Hủy
             </button>
             <button
               type="submit"
               disabled={loading || !title.trim() || !videoPath.trim()}
-              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow-lg shadow-indigo-600/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-indigo-600/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             >
               {loading ? 'Đang xử lý...' : 'Tạo Dự Án'}
             </button>

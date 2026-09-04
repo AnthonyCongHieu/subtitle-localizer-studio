@@ -4,6 +4,7 @@ from typing import Any, List, Optional
 import re
 import os
 import sys
+import threading
 from pathlib import Path
 from importlib import metadata
 import numpy as np
@@ -80,10 +81,12 @@ class RapidOcrProvider(OcrProvider):
     """Real OCR Engine sử dụng RapidOCR ONNX Runtime tối ưu cho CPU và GPU."""
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self.engine: Optional[Any] = None
         self.is_loaded = False
         self.execution_provider: Optional[str] = None
         self._dll_handles: List[Any] = []
+        self._active_infer_count: int = 0
 
     def get_descriptor(self) -> ModelDescriptorV1:
         return ModelDescriptorV1(
@@ -97,57 +100,93 @@ class RapidOcrProvider(OcrProvider):
             runtime="onnxruntime",
         )
 
-    def load(self) -> None:
-        if self.is_loaded and self.engine is not None:
-            return
-        try:
-            import onnxruntime as ort
-            from rapidocr_onnxruntime import RapidOCR
+    def _load_cpu(self) -> None:
+        from rapidocr_onnxruntime import RapidOCR
 
-            use_cuda = "CUDAExecutionProvider" in ort.get_available_providers()
-            if use_cuda:
-                self._dll_handles = _prepare_windows_cuda_dlls()
-                ort.preload_dlls(directory="")
-            self.engine = RapidOCR(
-                det_use_cuda=use_cuda, cls_use_cuda=use_cuda, rec_use_cuda=use_cuda
-            )
-            if hasattr(self.engine, "text_det"):
-                self.engine.text_det.limit_type = "max"
-                self.engine.text_det.limit_side_len = 640
-            # RapidOCR can silently fall back even when CUDA is advertised.
-            sessions = (
-                self.engine.text_det.infer.session,
-                self.engine.text_cls.infer.session,
-                self.engine.text_rec.session.session,
-            )
-            expected = "CUDAExecutionProvider" if use_cuda else "CPUExecutionProvider"
-            if any(session.get_providers()[0] != expected for session in sessions):
-                raise RuntimeError(f"OCR sessions did not initialize with {expected}")
-            if use_cuda:
-                for session in sessions:
-                    session.disable_fallback()
-            self.execution_provider = expected
-            self.is_loaded = True
-        except Exception as e:
-            self.unload()
-            raise RuntimeError(f"Không thể khởi tạo RapidOCR: {e}")
-
-    def unload(self) -> None:
-        self.engine = None
-        self.is_loaded = False
-        self.execution_provider = None
         for handle in self._dll_handles:
-            handle.close()
+            try:
+                handle.close()
+            except Exception:
+                pass
         self._dll_handles = []
 
-    def _reread_line(self, image, box, text, score):
+        cpu_engine = RapidOCR(
+            det_use_cuda=False, cls_use_cuda=False, rec_use_cuda=False
+        )
+        if hasattr(cpu_engine, "text_det"):
+            cpu_engine.text_det.limit_type = "max"
+            cpu_engine.text_det.limit_side_len = 640
+        self.engine = cpu_engine
+        self.execution_provider = "CPUExecutionProvider"
+        self.is_loaded = True
+
+    def load(self) -> None:
+        with self._lock:
+            if self.is_loaded and self.engine is not None:
+                return
+            try:
+                import onnxruntime as ort
+                from rapidocr_onnxruntime import RapidOCR
+
+                use_cuda = "CUDAExecutionProvider" in ort.get_available_providers()
+                if use_cuda:
+                    self._dll_handles = _prepare_windows_cuda_dlls()
+                    try:
+                        ort.preload_dlls(directory="")
+                    except Exception:
+                        pass
+                self.engine = RapidOCR(
+                    det_use_cuda=use_cuda, cls_use_cuda=use_cuda, rec_use_cuda=use_cuda
+                )
+                if hasattr(self.engine, "text_det"):
+                    self.engine.text_det.limit_type = "max"
+                    self.engine.text_det.limit_side_len = 640
+                # RapidOCR can silently fall back even when CUDA is advertised.
+                sessions = (
+                    self.engine.text_det.infer.session,
+                    self.engine.text_cls.infer.session,
+                    self.engine.text_rec.session.session,
+                )
+                expected = "CUDAExecutionProvider" if use_cuda else "CPUExecutionProvider"
+                if any(session.get_providers()[0] != expected for session in sessions):
+                    raise RuntimeError(f"OCR sessions did not initialize with {expected}")
+                if use_cuda:
+                    for session in sessions:
+                        session.disable_fallback()
+                self.execution_provider = expected
+                self.is_loaded = True
+            except Exception as e:
+                self.unload()
+                raise RuntimeError(f"Không thể khởi tạo RapidOCR: {e}")
+
+    def unload(self) -> None:
+        with self._lock:
+            if self._active_infer_count > 0:
+                return
+            self.engine = None
+            self.is_loaded = False
+            self.execution_provider = None
+            for handle in self._dll_handles:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+            self._dll_handles = []
+
+    def _reread_line(self, image, box, text, score, engine: Optional[Any] = None):
         """Verify a tight detector crop against padded, unthresholded pixels."""
+        eng = engine or self.engine
+        if eng is None:
+            return text, score, box, False
         height, width = image.shape[:2]
         x1, y1 = max(0, int(box[0]) - 8), max(0, int(box[1]) - 2)
         x2, y2 = min(width, int(np.ceil(box[2])) + 8), min(height, int(np.ceil(box[3])) + 2)
         if x2 <= x1 or y2 <= y1:
-            raise RuntimeError("RapidOCR returned an empty text box")
-        reread, _ = self.engine(image[y1:y2, x1:x2], use_det=False, use_cls=False)
+            return text, score, box, False
+        try:
+            reread, _ = eng(image[y1:y2, x1:x2], use_det=False, use_cls=False)
+        except Exception:
+            return text, score, box, False
         if reread and len(reread) == 1:
             new_text, new_score = str(reread[0][0]).strip(), float(reread[0][1])
             # Do not rewrite interior characters or delete detected text.
@@ -246,150 +285,165 @@ class RapidOcrProvider(OcrProvider):
         progress_callback: Optional[Any] = None,
         diff_threshold: float = 1.5,
     ) -> List[OcrObservationV1]:
-        if not self.is_loaded or self.engine is None:
-            self.load()
+        with self._lock:
+            if not self.is_loaded or self.engine is None:
+                try:
+                    self.load()
+                except Exception:
+                    self._load_cpu()
+            engine = self.engine
+            if engine is None:
+                self._load_cpu()
+                engine = self.engine
+            if engine is None:
+                raise RuntimeError("RapidOCR engine could not be initialized")
+            self._active_infer_count += 1
 
-        observations: List[OcrObservationV1] = []
-        total_crops = len(crops)
-        prev_img_data: Optional[np.ndarray] = None
-        prev_observation: Optional[OcrObservationV1] = None
+        try:
+            observations: List[OcrObservationV1] = []
+            total_crops = len(crops)
+            prev_img_data: Optional[np.ndarray] = None
+            prev_observation: Optional[OcrObservationV1] = None
 
-        for idx, (crop_img, pts) in enumerate(zip(crops, pts_list)):
+            for idx, (crop_img, pts) in enumerate(zip(crops, pts_list)):
+                if progress_callback is not None:
+                    try:
+                        progress_callback(idx, total_crops)
+                    except Exception:
+                        pass
+
+                if crop_img is None:
+                    raise RuntimeError("RapidOCR received no decoded image")
+
+                if isinstance(crop_img, np.ndarray):
+                    img_data = crop_img
+                elif isinstance(crop_img, bytes):
+                    import cv2
+
+                    encoded = np.frombuffer(crop_img, np.uint8)
+                    img_data = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+                else:
+                    raise RuntimeError(
+                        f"RapidOCR received unsupported image type: {type(crop_img).__name__}"
+                    )
+
+                if img_data is None or img_data.size == 0:
+                    raise RuntimeError("RapidOCR requires a valid decoded image")
+
+                # Fast frame difference & duplicate subtitle check
+                if diff_threshold > 0.0 and prev_img_data is not None:
+                    if self._is_duplicate_subtitle(prev_observation, prev_img_data, img_data, diff_threshold):
+                        if prev_observation is not None:
+                            dup = OcrObservationV1(
+                                pts=pts,
+                                boxes=[list(b) for b in prev_observation.boxes],
+                                raw_text=prev_observation.raw_text,
+                                normalized_text=prev_observation.normalized_text,
+                                confidence=prev_observation.confidence,
+                                preprocessing_metadata=dict(prev_observation.preprocessing_metadata),
+                                model_metadata=dict(prev_observation.model_metadata),
+                            )
+                            observations.append(dup)
+                        continue
+
+                prev_img_data = img_data
+
+                best_observation: Optional[OcrObservationV1] = None
+                candidate_texts: List[str] = []
+                inference_errors: List[str] = []
+                candidates = build_ocr_candidates(img_data)
+                for candidate_index, candidate in enumerate(candidates):
+                    try:
+                        result, _ = engine(candidate)
+                    except Exception as error:
+                        inference_errors.append(str(error))
+                        continue
+                    if not result:
+                        continue
+
+                    lines: List[str] = []
+                    confidences: List[float] = []
+                    boxes: List[List[float]] = []
+                    verified_han_edge = False
+                    for item in result:
+                        text = str(item[1]).strip()
+                        score = float(item[2])
+                        if language == "zh" and not _is_chinese_or_non_latin(text):
+                            continue
+                        if score >= 0.75 and text:
+                            box = _rectangle(item[0])
+                            text, score, box, line_verified_han_edge = self._reread_line(
+                                img_data, box, text, score, engine=engine
+                            )
+                            verified_han_edge = verified_han_edge or line_verified_han_edge
+                            lines.append(text)
+                            confidences.append(score)
+                            boxes.append(box)
+
+                    if not lines:
+                        continue
+
+                    combined_text = " ".join(lines)
+                    candidate_texts.append(combined_text)
+                    average_confidence = sum(confidences) / len(confidences)
+                    candidate_observation = OcrObservationV1(
+                        pts=pts,
+                        boxes=boxes,
+                        raw_text=combined_text,
+                        normalized_text=combined_text,
+                        confidence=average_confidence,
+                        preprocessing_metadata={
+                            "candidate_index": candidate_index,
+                            "verified_han_edge": verified_han_edge,
+                        },
+                        model_metadata={
+                            "engine": "rapidocr-onnx", "language": language,
+                            "execution_provider": self.execution_provider,
+                        },
+                    )
+                    preserves_verified_best = (
+                        best_observation is not None
+                        and best_observation.preprocessing_metadata["verified_han_edge"]
+                        and _has_verified_han_edge(
+                            best_observation.raw_text, candidate_observation.raw_text
+                        )
+                    )
+                    if (
+                        best_observation is None
+                        or (
+                            candidate_observation.confidence > best_observation.confidence
+                            and not preserves_verified_best
+                        )
+                        or (
+                            candidate_observation.preprocessing_metadata["verified_han_edge"]
+                            and _has_verified_han_edge(
+                            candidate_observation.raw_text, best_observation.raw_text
+                            )
+                        )
+                    ):
+                        best_observation = candidate_observation
+
+                if best_observation is not None:
+                    best_observation.confidence = round(best_observation.confidence, 3)
+                    best_observation.preprocessing_metadata["candidate_disagreement"] = len(set(candidate_texts)) > 1
+                    best_observation.preprocessing_metadata["candidate_texts"] = candidate_texts
+                    observations.append(best_observation)
+                    prev_observation = best_observation
+                elif inference_errors and len(inference_errors) == len(candidates):
+                    raise RuntimeError(
+                        "RapidOCR inference failed for every preprocessing candidate: "
+                        + "; ".join(inference_errors)
+                    )
+                else:
+                    prev_observation = None
+
             if progress_callback is not None:
                 try:
-                    progress_callback(idx, total_crops)
+                    progress_callback(total_crops, total_crops)
                 except Exception:
                     pass
 
-            if crop_img is None:
-                raise RuntimeError("RapidOCR received no decoded image")
-
-            if isinstance(crop_img, np.ndarray):
-                img_data = crop_img
-            elif isinstance(crop_img, bytes):
-                import cv2
-
-                encoded = np.frombuffer(crop_img, np.uint8)
-                img_data = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-            else:
-                raise RuntimeError(
-                    f"RapidOCR received unsupported image type: {type(crop_img).__name__}"
-                )
-
-            if img_data is None or img_data.size == 0:
-                raise RuntimeError("RapidOCR requires a valid decoded image")
-
-            # Fast frame difference & duplicate subtitle check
-            if diff_threshold > 0.0 and prev_img_data is not None:
-                if self._is_duplicate_subtitle(prev_observation, prev_img_data, img_data, diff_threshold):
-                    if prev_observation is not None:
-                        dup = OcrObservationV1(
-                            pts=pts,
-                            boxes=[list(b) for b in prev_observation.boxes],
-                            raw_text=prev_observation.raw_text,
-                            normalized_text=prev_observation.normalized_text,
-                            confidence=prev_observation.confidence,
-                            preprocessing_metadata=dict(prev_observation.preprocessing_metadata),
-                            model_metadata=dict(prev_observation.model_metadata),
-                        )
-                        observations.append(dup)
-                    continue
-
-            prev_img_data = img_data
-
-            best_observation: Optional[OcrObservationV1] = None
-            candidate_texts: List[str] = []
-            inference_errors: List[str] = []
-            candidates = build_ocr_candidates(img_data)
-            for candidate_index, candidate in enumerate(candidates):
-                try:
-                    result, _ = self.engine(candidate)
-                except Exception as error:
-                    inference_errors.append(str(error))
-                    continue
-                if not result:
-                    continue
-
-                lines: List[str] = []
-                confidences: List[float] = []
-                boxes: List[List[float]] = []
-                verified_han_edge = False
-                for item in result:
-                    text = str(item[1]).strip()
-                    score = float(item[2])
-                    if language == "zh" and not _is_chinese_or_non_latin(text):
-                        continue
-                    if score >= 0.75 and text:
-                        box = _rectangle(item[0])
-                        text, score, box, line_verified_han_edge = self._reread_line(
-                            img_data, box, text, score
-                        )
-                        verified_han_edge = verified_han_edge or line_verified_han_edge
-                        lines.append(text)
-                        confidences.append(score)
-                        boxes.append(box)
-
-                if not lines:
-                    continue
-
-                combined_text = " ".join(lines)
-                candidate_texts.append(combined_text)
-                average_confidence = sum(confidences) / len(confidences)
-                candidate_observation = OcrObservationV1(
-                    pts=pts,
-                    boxes=boxes,
-                    raw_text=combined_text,
-                    normalized_text=combined_text,
-                    confidence=average_confidence,
-                    preprocessing_metadata={
-                        "candidate_index": candidate_index,
-                        "verified_han_edge": verified_han_edge,
-                    },
-                    model_metadata={
-                        "engine": "rapidocr-onnx", "language": language,
-                        "execution_provider": self.execution_provider,
-                    },
-                )
-                preserves_verified_best = (
-                    best_observation is not None
-                    and best_observation.preprocessing_metadata["verified_han_edge"]
-                    and _has_verified_han_edge(
-                        best_observation.raw_text, candidate_observation.raw_text
-                    )
-                )
-                if (
-                    best_observation is None
-                    or (
-                        candidate_observation.confidence > best_observation.confidence
-                        and not preserves_verified_best
-                    )
-                    or (
-                        candidate_observation.preprocessing_metadata["verified_han_edge"]
-                        and _has_verified_han_edge(
-                        candidate_observation.raw_text, best_observation.raw_text
-                        )
-                    )
-                ):
-                    best_observation = candidate_observation
-
-            if best_observation is not None:
-                best_observation.confidence = round(best_observation.confidence, 3)
-                best_observation.preprocessing_metadata["candidate_disagreement"] = len(set(candidate_texts)) > 1
-                best_observation.preprocessing_metadata["candidate_texts"] = candidate_texts
-                observations.append(best_observation)
-                prev_observation = best_observation
-            elif inference_errors and len(inference_errors) == len(candidates):
-                raise RuntimeError(
-                    "RapidOCR inference failed for every preprocessing candidate: "
-                    + "; ".join(inference_errors)
-                )
-            else:
-                prev_observation = None
-
-        if progress_callback is not None:
-            try:
-                progress_callback(total_crops, total_crops)
-            except Exception:
-                pass
-
-        return observations
+            return observations
+        finally:
+            with self._lock:
+                self._active_infer_count = max(0, self._active_infer_count - 1)

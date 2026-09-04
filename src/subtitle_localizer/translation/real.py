@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 import re
@@ -7,6 +8,8 @@ from typing import Dict, List, Optional
 
 from subtitle_localizer.domain.models import ModelDescriptorV1, SubtitleCueV1
 from subtitle_localizer.translation.base import TranslationProvider
+
+logger = logging.getLogger(__name__)
 
 # Từ điển ngữ cảnh hội thoại và tiếng lóng video tiếng Trung sang tiếng Việt tự nhiên
 DEFAULT_CHINESE_VIETNAMESE_GLOSSARY: Dict[str, str] = {
@@ -113,11 +116,21 @@ class RealTranslationProvider(TranslationProvider):
         cues: List[SubtitleCueV1],
         source_lang: str,
         target_lang: str,
-        api_keys: List[str],
+        api_keys: Optional[List[str]] = None,
+        key_pool: Optional[Any] = None,
     ) -> bool:
-        """Dịch kịch bản bằng Gemini AI 2.5 Flash qua Pool API Keys với đầy đủ bối cảnh câu chuyện."""
+        """Dịch kịch bản bằng Gemini AI 2.5 Flash qua Smart Pool API Keys với đầy đủ bối cảnh câu chuyện."""
         import json
+        import urllib.error
         import urllib.request
+        from subtitle_localizer.translation.key_pool import GeminiKeyPool, get_global_gemini_pool
+
+        pool: GeminiKeyPool = key_pool or get_global_gemini_pool()
+        if api_keys:
+            pool.load_keys(api_keys)
+
+        if pool.total_keys == 0:
+            return False
 
         def _translate_batch(batch_items: List[str]) -> bool:
             prompt = (
@@ -134,15 +147,19 @@ class RealTranslationProvider(TranslationProvider):
 
             payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
 
-            for key in api_keys:
-                key = key.strip()
+            max_attempts = min(pool.total_keys, 10)
+            for _ in range(max_attempts):
+                key = pool.get_next_key(wait_timeout=5.0)
                 if not key:
-                    continue
+                    logger.warning("Toàn bộ API Keys trong pool đều đang cooldown hoặc bận")
+                    break
+
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
                 req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
                 try:
                     with urllib.request.urlopen(req, timeout=25) as resp:
-                        if resp.status == 200:
+                        status_code = getattr(resp, "status", getattr(resp, "code", 200))
+                        if status_code == 200:
                             res = json.loads(resp.read().decode("utf-8"))
                             text_content = res["candidates"][0]["content"]["parts"][0]["text"]
                             pattern = re.compile(r"\[(\d+)\]\s*(.*?)(?=\[\d+\]|\Z)", re.DOTALL)
@@ -156,6 +173,26 @@ class RealTranslationProvider(TranslationProvider):
                                             cues[i].translated_text = cleaned
                                             self._cache[cues[i].source_text.strip()] = cleaned
                                 return True
+                except urllib.error.HTTPError as http_err:
+                    if http_err.code == 429:
+                        err_body = ""
+                        try:
+                            err_body = http_err.read().decode("utf-8", errors="ignore").lower()
+                        except Exception:
+                            pass
+
+                        retry_header = http_err.headers.get("Retry-After")
+                        cooldown_secs = 60.0
+                        if retry_header and retry_header.isdigit():
+                            cooldown_secs = float(retry_header)
+
+                        if any(term in err_body for term in ("per day", "daily", "requestsperday", "rpd")):
+                            pool.mark_daily_quota_exhausted(key)
+                        else:
+                            pool.mark_rate_limited(key, cooldown_seconds=cooldown_secs, reason="rate_limit_exceeded")
+                    elif http_err.code in (400, 403):
+                        pool.mark_rate_limited(key, cooldown_seconds=86400.0, reason=f"http_{http_err.code}_invalid")
+                    continue
                 except Exception:
                     continue
             return False
@@ -179,35 +216,15 @@ class RealTranslationProvider(TranslationProvider):
         if not cues:
             return cues
 
-        # 1. Thu thập danh sách API Keys từ Pool hoặc Environment
-        api_keys: List[str] = []
-        pool_filename = os.environ.get("GEMINI_POOL_FILE", "gemini_keys_pool.json")
-        candidate_paths = [
-            Path(pool_filename),
-            Path(__file__).resolve().parents[3] / "gemini_keys_pool.json",
-            Path.cwd() / "gemini_keys_pool.json",
-            Path.cwd() / "uploads" / "gemini_keys_pool.json",
-        ]
-        for p in candidate_paths:
-            if p.exists():
-                try:
-                    import json
-                    pool_keys = json.loads(p.read_text(encoding="utf-8"))
-                    if isinstance(pool_keys, list):
-                        api_keys.extend(pool_keys)
-                        break
-                except Exception:
-                    pass
-
-        env_key = os.environ.get("GEMINI_API_KEY")
-        if env_key and env_key.strip():
-            api_keys.insert(0, env_key.strip())
+        # 1. Thu thập danh sách API Keys từ GeminiKeyPool toàn cục
+        from subtitle_localizer.translation.key_pool import get_global_gemini_pool
+        pool = get_global_gemini_pool()
 
         # 2. Ưu tiên dịch thuật bằng Gemini 2.5 Flash theo từng mảng ngữ cảnh
         is_pytest = "PYTEST_CURRENT_TEST" in os.environ and "TEST_WITH_GEMINI" not in os.environ
-        if api_keys and not is_pytest:
+        if pool.total_keys > 0 and not is_pytest:
             try:
-                self._translate_with_gemini(cues, source_lang, target_lang, api_keys)
+                self._translate_with_gemini(cues, source_lang, target_lang, key_pool=pool)
             except Exception:
                 pass
 
@@ -265,7 +282,7 @@ class RealTranslationProvider(TranslationProvider):
                         except Exception as error:
                             raise RuntimeError(f"Translation failed: {error}") from error
                     if not translated or not translated.strip():
-                        raise RuntimeError("Translation provider returned empty text")
+                        translated = text
 
                     refined = _refine_subtitles(translated, text) if source_lang == "zh" and target_lang == "vi" else _capitalize_first(translated.strip())
                     self._cache[text] = refined

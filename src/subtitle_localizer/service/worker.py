@@ -19,7 +19,7 @@ class BackgroundWorker:
         self.repo = repo
         self.ocr_registry = OcrRegistry()
         self.translation_registry = TranslationRegistry()
-        self.reconstructor = CueReconstructor(min_cue_duration=0.20, lead_in=0.0, lead_out=0.0)
+        self.reconstructor = CueReconstructor(min_cue_duration=0.20, lead_in=0.06, lead_out=0.06)
         self.boundary_refiner = FrameAccurateBoundaryRefiner()
         self.sampler = AdaptiveFrameSampler(sample_fps=2.0, diff_threshold=3.5)
 
@@ -45,16 +45,26 @@ class BackgroundWorker:
             if not video_path.exists() or not video_path.is_file():
                 raise FileNotFoundError(f"Video file does not exist: {video_path}")
 
-            # Đề xuất ROI nếu chưa có
+            # Đề xuất ROI nếu chưa có hoặc cập nhật ROI lỗi thời theo hình học video
+            import cv2
+            cap = cv2.VideoCapture(str(video_path))
+            vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+            vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+            cap.release()
+
+            is_portrait = vh > vw
             if not manifest.regions:
-                import cv2
-                cap = cv2.VideoCapture(str(video_path))
-                vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
-                vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
-                cap.release()
-                default_roi = propose_default_roi(vw, vh)
+                default_roi = propose_default_roi(vw, vh, is_portrait=is_portrait)
                 manifest.regions.append(default_roi)
                 self.repo.save_project(manifest)
+            else:
+                r = manifest.regions[0]
+                if (
+                    (is_portrait and (r.y + r.height <= 0.89 or (r.y == 0.72 and r.height == 0.16) or r.y >= 0.68))
+                    or (not is_portrait and r.y == 0.72 and r.height == 0.16)
+                ):
+                    manifest.regions = [propose_default_roi(vw, vh, is_portrait=is_portrait)]
+                    self.repo.save_project(manifest)
 
             active_roi = manifest.regions[0] if manifest.regions else None
             roi_tuple = (active_roi.x, active_roi.y, active_roi.width, active_roi.height) if active_roi else None
@@ -96,16 +106,25 @@ class BackgroundWorker:
                     self.repo.save_stage_run(project_id, st)
 
             ocr_provider = self.ocr_registry.get_provider_for_language(manifest.source_language)
-            ocr_provider.load()
             try:
-                try:
+                ocr_provider.load()
+            except Exception:
+                if hasattr(ocr_provider, "_load_cpu"):
+                    ocr_provider._load_cpu()
+                else:
+                    raise
+
+            try:
+                import inspect
+                sig = inspect.signature(ocr_provider.recognize)
+                if "progress_callback" in sig.parameters:
                     observations = ocr_provider.recognize(
                         crops=crops,
                         pts_list=pts_list,
                         language=manifest.source_language,
                         progress_callback=_on_ocr_progress,
                     )
-                except TypeError:
+                else:
                     observations = ocr_provider.recognize(
                         crops=crops,
                         pts_list=pts_list,

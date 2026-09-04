@@ -24,7 +24,7 @@ class DetectorAndRoiTest(unittest.TestCase):
         # Video dọc 1080x1920 (TikTok/Reels/Shorts)
         roi_port = propose_default_roi(1080, 1920, is_portrait=True)
         self.assertTrue(roi_port.is_valid())
-        self.assertGreaterEqual(roi_port.y, 0.65)
+        self.assertGreaterEqual(roi_port.y, 0.60)
         self.assertGreaterEqual(roi_port.height, 0.15)
 
     def test_adaptive_sampler_sample_selection(self) -> None:

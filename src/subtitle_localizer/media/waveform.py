@@ -12,34 +12,67 @@ def extract_waveform_peaks(
     sample_rate: int = 10,
 ) -> List[float]:
     """
-    Trích xuất danh sách các điểm biên độ âm thanh (peaks) chuẩn hóa [0.0, 1.0]
-    để vẽ waveform timeline trên React UI.
+    Trích xuất danh sách các điểm biên độ âm thanh (peaks) thật chuẩn hóa [0.0, 1.0]
+    từ video thật qua FFmpeg PCM để vẽ waveform timeline trên React UI.
     """
     total_samples = max(1, int(round(duration * sample_rate)))
     if video_path is None or not Path(video_path).exists():
-        # Fallback tạo mẫu waveform giả lập đều đặn khi audio vắng mặt hoặc trong unit tests
-        return [round(abs(math.sin(i * 0.2)) * 0.7 + 0.1, 3) for i in range(total_samples)]
+        return [0.0] * total_samples
 
     path = Path(video_path).resolve()
-    # Dùng ffmpeg xuất thông tin audio volume nếu cần trích xuất thật
-    peaks: List[float] = []
     try:
+        # Trích xuất dữ liệu âm thanh mono 8-bit không dấu bằng FFmpeg với tốc độ cực nhanh
         cmd = [
             "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-i",
             str(path),
+            "-vn",
             "-ac",
             "1",
-            "-filter:a",
-            f"aresample={sample_rate},asetnsamples=n=1",
+            "-ar",
+            "100",
             "-f",
-            "null",
-            "-",
+            "u8",
+            "pipe:1",
         ]
-        # Nếu audio extraction nhanh thì thực hiện, ngược lại trả về mẫu chuẩn hóa
-        return [round(abs(math.sin(i * 0.2)) * 0.7 + 0.1, 3) for i in range(total_samples)]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        raw_bytes, _ = proc.communicate(timeout=15)
+        if not raw_bytes:
+            return [0.0] * total_samples
+
+        raw_len = len(raw_bytes)
+        bucket_size = max(1, raw_len // total_samples)
+        peaks: List[float] = []
+
+        for i in range(total_samples):
+            start = i * bucket_size
+            end = min(raw_len, start + bucket_size)
+            if start >= raw_len:
+                peaks.append(0.0)
+                continue
+            chunk = raw_bytes[start:end]
+            if not chunk:
+                peaks.append(0.0)
+                continue
+            peak_val = max(abs(b - 128) for b in chunk) / 128.0
+            peaks.append(round(peak_val, 3))
+
+        max_p = max(peaks) if peaks else 0.0
+        if max_p > 0.05:
+            scale = 1.0 / max_p
+            peaks = [round(min(1.0, p * scale), 3) for p in peaks]
+
+        return peaks
     except Exception:
-        return [0.1] * total_samples
+        return [0.0] * total_samples
 
 
 def extract_thumbnails(

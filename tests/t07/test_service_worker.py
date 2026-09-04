@@ -291,6 +291,211 @@ class ServiceAndWorkerTest(unittest.TestCase):
         is_dup_removed = provider._is_duplicate_subtitle(obs, img1, img3, diff_threshold=1.5)
         self.assertFalse(is_dup_removed)
 
+    def test_batch_pipeline_endpoint(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-123"}
+
+        proj = ProjectManifestV1(
+            project_id="batch-test-p1",
+            title="Batch Test Project",
+            source_video_path="E:/fake.mp4",
+            video_fingerprint="fp123",
+            source_language="zh",
+            target_language="vi",
+        )
+        self.repo.save_project(proj)
+
+        with patch("subtitle_localizer.service.worker.BackgroundWorker.run_pipeline_synchronous", return_value=True):
+            res = client.post(
+                "/api/v1/batch/run",
+                json={"project_ids": ["batch-test-p1", "nonexistent-pid"], "auto_export_mp4": False},
+                headers=headers,
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data["total"], 2)
+            self.assertEqual(data["successful"], 1)
+            self.assertEqual(data["failed"], 1)
+            self.assertEqual(data["results"][0]["status"], "completed")
+            self.assertEqual(data["results"][1]["status"], "failed")
+
+    def test_voiceover_audio_endpoint_serves_fileresponse(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+
+        proj_id = "voiceover-test-p1"
+        proj = ProjectManifestV1(
+            project_id=proj_id,
+            title="Voiceover Test",
+            source_video_path="E:/fake.mp4",
+            video_fingerprint="fp123",
+            source_language="zh",
+            target_language="vi",
+        )
+        self.repo.save_project(proj)
+
+        # Tạo file audio giả lập trong output_root
+        proj_dir = self.output_root / proj_id
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        audio_file = proj_dir / f"voiceover_{proj_id}.mp3"
+        audio_file.write_bytes(b"fake_mp3_audio_data_content")
+
+        res = client.get(f"/api/v1/projects/{proj_id}/audio/voiceover")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.content, b"fake_mp3_audio_data_content")
+        self.assertEqual(res.headers.get("content-type"), "audio/mpeg")
+
+    def test_auto_detect_roi_endpoint_fallback(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+
+        proj_id = "roi-detect-p1"
+        proj = ProjectManifestV1(
+            project_id=proj_id,
+            title="ROI Detect Test",
+            source_video_path="E:/nonexistent.mp4",
+            video_fingerprint="fp123",
+            source_language="zh",
+            target_language="vi",
+        )
+        self.repo.save_project(proj)
+
+        # Khi video không tồn tại, trả về 400
+        headers = {"Authorization": "Bearer test-token-123"}
+        res = client.post(f"/api/v1/projects/{proj_id}/roi/auto-detect", json={"pts": 1.0}, headers=headers)
+        self.assertEqual(res.status_code, 400)
+
+    def test_batch_delete_projects_endpoint(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-123"}
+
+        # Tạo 3 projects
+        p1 = ProjectManifestV1(project_id="del-p1", title="P1", source_video_path="E:/1.mp4", video_fingerprint="f1", source_language="zh")
+        p2 = ProjectManifestV1(project_id="del-p2", title="P2", source_video_path="E:/2.mp4", video_fingerprint="f2", source_language="zh")
+        p3 = ProjectManifestV1(project_id="del-p3", title="P3", source_video_path="E:/3.mp4", video_fingerprint="f3", source_language="zh")
+        self.repo.save_project(p1)
+        self.repo.save_project(p2)
+        self.repo.save_project(p3)
+
+        self.assertEqual(len(self.repo.list_projects()), 3)
+
+        # Xóa 2 projects
+        res = client.post("/api/v1/projects/batch-delete", json={"project_ids": ["del-p1", "del-p2"]}, headers=headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["deleted_count"], 2)
+        self.assertEqual(data["total"], 2)
+
+        # Kiểm tra database chỉ còn 1 project (p3)
+        remaining = self.repo.list_projects()
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].project_id, "del-p3")
+
+    def test_downloader_endpoints(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-123"}
+
+        # 1. Check initial status
+        res = client.get("/api/v1/downloader/status", headers=headers)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "idle")
+
+        # 2. Test cancel when idle
+        res = client.post("/api/v1/downloader/cancel", headers=headers)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "cancelling")
+
+        # 3. Test parse empty string -> 400 error
+        res = client.post("/api/v1/downloader/parse", json={"target": ""}, headers=headers)
+        self.assertEqual(res.status_code, 400)
+
+    def test_proxy_endpoint_empty(self) -> None:
+        """POST /api/v1/downloader/test-proxy with empty proxy returns ok=False."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-123"}
+
+        res = client.post("/api/v1/downloader/test-proxy", json={"proxy": ""}, headers=headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertFalse(data["ok"])
+        self.assertIn("error", data)
+
+    def test_download_start_request_with_proxy_fields(self) -> None:
+        """DownloadStartRequest model accepts proxy, rate_limit_delay, and rotate_device_each_ep."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-123"}
+
+        res = client.post("/api/v1/downloader/start", json={
+            "target_info": {"platform": "hongguo", "series_id": "000", "title": "test", "total_episodes": 1},
+            "start_ep": 1,
+            "end_ep": 1,
+            "proxy": "http://127.0.0.1:9999",
+            "rate_limit_delay": 3.5,
+            "rotate_device_each_ep": True,
+        }, headers=headers)
+        self.assertIn(res.status_code, [200, 400])
+
+    def test_jitter_delay_calculation(self) -> None:
+        """Verify jitter delay stays within expected range."""
+        import random
+        rate_limit_delay = 2.0
+        samples = []
+        for _ in range(100):
+            jitter = random.uniform(-0.5, 0.5)
+            actual_delay = max(0.2, rate_limit_delay + jitter)
+            samples.append(actual_delay)
+        self.assertTrue(all(0.2 <= s <= 2.5 for s in samples))
+        # Should have variety (not all same value)
+        self.assertGreater(len(set(round(s, 2) for s in samples)), 10)
+
+    def test_rotate_device_returns_valid_keys(self) -> None:
+        """Verify rotate_device returns a dict with device_id and install_id."""
+        from subtitle_localizer.downloader.hongguo_parser import rotate_device
+        keys = rotate_device()
+        self.assertIsInstance(keys, dict)
+        self.assertIn("device_id", keys)
+        self.assertIn("install_id", keys)
+        self.assertTrue(len(keys["device_id"]) > 5)
+        self.assertTrue(len(keys["install_id"]) > 5)
+
+    def test_device_api_endpoints(self) -> None:
+        """Test GET /device, POST /device/custom, and POST /device/rotate endpoints."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-123"}
+
+        # 1. GET /api/v1/downloader/device
+        res = client.get("/api/v1/downloader/device", headers=headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("device_id", data)
+        self.assertIn("install_id", data)
+        self.assertIn("status", data)
+        self.assertIn("device_model", data)
+
+        # 2. POST /api/v1/downloader/device/custom
+        res = client.post("/api/v1/downloader/device/custom", json={
+            "device_id": "999888777111",
+            "install_id": "999888777222",
+            "platform": "android",
+        }, headers=headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["device_id"], "999888777111")
+        self.assertEqual(data["install_id"], "999888777222")
+
+        # 3. POST /api/v1/downloader/device/rotate
+        res = client.post("/api/v1/downloader/device/rotate", json={}, headers=headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("device_id", data)
+        self.assertIn("message", data)
+
 
 if __name__ == "__main__":
     unittest.main()

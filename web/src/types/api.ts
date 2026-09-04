@@ -39,6 +39,11 @@ export interface ProjectManifestV1 {
   model_selections?: Record<string, string>;
   regions?: RegionTrackV1[];
   cues_count?: number;
+  translated_count?: number;
+  first_cue_text?: string;
+  first_cue_original?: string;
+  has_voiceover?: boolean;
+  has_export?: boolean;
   style?: Record<string, any>;
   output_presets?: Record<string, any>;
   created_at: number;

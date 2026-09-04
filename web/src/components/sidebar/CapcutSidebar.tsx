@@ -16,9 +16,16 @@ import {
   Tv,
   AlignJustify,
   Smartphone,
+  Eye,
+  Layers,
+  Feather,
+  Square,
+  Grid,
 } from 'lucide-react';
 import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../../types/api';
 import { apiClient } from '../../api/client';
+
+import { AspectRatioType } from '../../types/presets';
 
 export type SidebarTab = 'media' | 'roi' | 'subtitles' | 'ai' | 'export';
 export type CueFilterMode = 'all' | 'untranslated' | 'translated';
@@ -40,9 +47,13 @@ interface CapcutSidebarProps {
   onLanguageChange?: (source: string, target: string) => void;
   isFlippedH?: boolean;
   isFlippedV?: boolean;
+  maskStyle?: 'blur' | 'glass' | 'ambient' | 'feather' | 'box' | 'mosaic' | 'gradient';
+  onMaskStyleChange?: (style: 'blur' | 'glass' | 'ambient' | 'feather' | 'box' | 'mosaic' | 'gradient') => void;
+  aspectRatio?: AspectRatioType;
+  onAspectRatioChange?: (ratio: AspectRatioType) => void;
 }
 
-export const CapcutSidebar: React.FC<CapcutSidebarProps> = ({
+const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
   projects,
   activeProject,
   onSelectProject,
@@ -59,6 +70,10 @@ export const CapcutSidebar: React.FC<CapcutSidebarProps> = ({
   onLanguageChange,
   isFlippedH = false,
   isFlippedV = false,
+  maskStyle = 'blur',
+  onMaskStyleChange,
+  aspectRatio = 'original',
+  onAspectRatioChange,
 }) => {
   const [activeTab, setActiveTab] = useState<SidebarTab | null>('subtitles');
   const [cueFilter, setCueFilter] = useState<CueFilterMode>('all');
@@ -565,6 +580,36 @@ export const CapcutSidebar: React.FC<CapcutSidebarProps> = ({
                   </button>
                 )}
 
+                {/* Tỉ Lệ Khung Hình Canvas */}
+                {onAspectRatioChange && (
+                  <div className="space-y-1.5">
+                    <label className="text-slate-400 font-medium block text-[11px]">Tỉ lệ khung hình (Aspect Ratio):</label>
+                    <div className="grid grid-cols-3 gap-1 text-[11px] font-mono">
+                      {[
+                        { id: 'original', label: 'Gốc' },
+                        { id: '16:9', label: '16:9 (Ngang)' },
+                        { id: '9:16', label: '9:16 (Dọc)' },
+                        { id: '1:1', label: '1:1 (Vuông)' },
+                        { id: '4:3', label: '4:3' },
+                        { id: '2.35:1', label: '2.35:1' },
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => onAspectRatioChange(item.id as AspectRatioType)}
+                          className={`p-1.5 rounded-lg border text-center transition ${
+                            aspectRatio === item.id
+                              ? 'bg-indigo-600/30 border-indigo-500 text-white font-bold'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Cụm Preset Mẫu Vùng Quét */}
                 <div className="space-y-1.5">
                   <label className="text-slate-400 font-medium block text-[11px]">Vùng quét mẫu sẵn:</label>
@@ -645,6 +690,60 @@ export const CapcutSidebar: React.FC<CapcutSidebarProps> = ({
                     />
                   </div>
                 </div>
+
+                {/* Nút Căn Giữa Chuẩn Phụ Đề Nhanh */}
+                <button
+                  type="button"
+                  onClick={() => onUpdateRegion({
+                    region_id: 'roi-main',
+                    x: 0.06,
+                    y: 0.81,
+                    width: 0.88,
+                    height: 0.15,
+                  })}
+                  className="w-full py-1.5 px-2 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 rounded-lg text-[11px] font-semibold transition flex items-center justify-center gap-1.5 border border-indigo-500/40 shadow-sm"
+                  title="Căn giữa toàn màn hình chuẩn dòng phụ đề"
+                >
+                  <Crosshair className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Căn giữa chuẩn phụ đề (Khuyến nghị)</span>
+                </button>
+
+                {/* Cài Đặt Kiểu Che Sub Gốc Phổ Biến */}
+                {onMaskStyleChange && (
+                  <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <label className="text-slate-400 font-medium block text-[11px]">Kiểu che phụ đề gốc (Mask Style):</label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        { id: 'blur', name: 'Mờ hòa tan video', desc: 'Màu hòa 100% video, viền tan biến', icon: Sparkles, iconColor: 'text-indigo-400' },
+                        { id: 'glass', name: 'Kính trong suốt', desc: 'Giữ sáng & màu rực rỡ của cảnh', icon: Eye, iconColor: 'text-sky-400' },
+                        { id: 'ambient', name: 'Gradient êm dịu', desc: 'Chuyển sắc mềm, không vệt đen', icon: Layers, iconColor: 'text-cyan-400' },
+                        { id: 'feather', name: 'Viền lông mềm', desc: 'Mờ dạng viên nhung nhẹ', icon: Feather, iconColor: 'text-purple-400' },
+                        { id: 'box', name: 'Hộp đen Cinema', desc: 'Dải đen truyền thống che tuyệt đối', icon: Square, iconColor: 'text-slate-400' },
+                        { id: 'mosaic', name: 'Khảm Mosaic', desc: 'Pixel mờ che phóng sự', icon: Grid, iconColor: 'text-emerald-400' },
+                      ].map((item) => {
+                        const IconComp = item.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => onMaskStyleChange(item.id as any)}
+                            className={`p-2 rounded-lg border text-left transition flex flex-col gap-0.5 ${
+                              maskStyle === item.id || (item.id === 'ambient' && maskStyle === 'gradient')
+                                ? 'bg-indigo-950/70 border-indigo-500 text-white shadow-md ring-1 ring-indigo-500/50'
+                                : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <IconComp className={`w-3.5 h-3.5 ${item.iconColor} shrink-0`} />
+                              <span className="text-[11px] font-semibold">{item.name}</span>
+                            </div>
+                            <span className="text-[9px] text-slate-500">{item.desc}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -761,3 +860,6 @@ export const CapcutSidebar: React.FC<CapcutSidebarProps> = ({
     </div>
   );
 };
+
+export const CapcutSidebar = React.memo(CapcutSidebarComponent);
+

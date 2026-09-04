@@ -40,3 +40,17 @@ gemini_keys_pool.json
 *.db-wal
 /scratch/
 /web/archive/
+.agents/
+
+# Media binaries
+*.mp4
+*.mkv
+*.avi
+*.webm
+*.mp3
+*.wav
+*.aac
+*.flac
+# Unignore TypeScript files
+!web/**/*.ts
+!web/**/*.tsx

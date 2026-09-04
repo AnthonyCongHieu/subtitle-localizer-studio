@@ -9,14 +9,17 @@ def propose_default_roi(width: int, height: int, is_portrait: bool = False) -> R
     """
     Đề xuất vùng nhận diện phụ đề (ROI) chuẩn theo hình học video:
     - Landscape: vùng 78% -> 96% chiều cao, cách lề 8% mỗi bên.
-    - Portrait (Shorts/TikTok): vùng giữa-dưới (68% -> 88% chiều cao) tránh bị UI app che khuất.
+    - Portrait (Shorts/TikTok/Reels): vùng mở rộng 70% -> 96% chiều cao (x=0.05, y=0.70, w=0.90, h=0.26)
+      để bao quát trọn vẹn cả phụ đề trung tâm (0.74-0.80) lẫn phụ đề đặt sát đáy (0.85-0.95).
     """
     if is_portrait or (height > width):
-        # Video dọc
+        # Video dọc (Shorts/TikTok/Reels/Phim ngắn Hồng Quả):
+        # Bao quát từ 62% -> 96% chiều cao màn hình để bắt trọn cả phụ đề thoại (0.65-0.75)
+        # lẫn phụ đề sát đáy (0.85-0.95), sau đó Smart ROI Tightening sẽ tự động co sát viền chữ.
         x = 0.05
-        y = 0.68
+        y = 0.62
         w = 0.90
-        h = 0.20
+        h = 0.34
     else:
         # Video ngang
         x = 0.08
