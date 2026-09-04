@@ -201,8 +201,18 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
     # 2. Nhận diện các nền tảng video khác qua yt-dlp (YouTube, Bilibili, Douyin, etc.)
     if target.startswith("http://") or target.startswith("https://"):
         try:
-            cmd = ["yt-dlp", "--dump-json", "--no-warnings", target]
+            cmd = ["yt-dlp", "--dump-json", "--no-warnings"]
+            if proxy and str(proxy).strip():
+                cmd.extend(["--proxy", proxy.strip()])
+            cmd.append(target)
             proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+            if proc.returncode != 0 and proxy:
+                err_lower = proc.stderr.lower()
+                if "10061" in err_lower or "unable to connect to proxy" in err_lower or "proxyerror" in err_lower or "refused" in err_lower:
+                    print(f"[Downloader] yt-dlp parse proxy {proxy} failed, retrying directly...")
+                    cmd_direct = ["yt-dlp", "--dump-json", "--no-warnings", target]
+                    proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+
             if proc.returncode == 0 and proc.stdout.strip():
                 # Lấy dòng JSON đầu tiên nếu là playlist
                 first_line = proc.stdout.strip().split("\n")[0]
@@ -985,6 +995,19 @@ class DownloadManager:
             cmd.extend(["--proxy", task.proxy])
         cmd.append(url)
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if proc.returncode != 0 and task.proxy:
+            err_lower = proc.stderr.lower()
+            if "10061" in err_lower or "unable to connect to proxy" in err_lower or "proxyerror" in err_lower or "refused" in err_lower:
+                print(f"[Downloader] yt-dlp proxy {task.proxy} failed ({proc.stderr[:100]}), retrying directly without proxy...")
+                cmd_direct = [
+                    "yt-dlp",
+                    "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                    "--merge-output-format", "mp4",
+                    "-o", out_template,
+                    url,
+                ]
+                proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
         if proc.returncode != 0:
             raise RuntimeError(f"yt-dlp tải thất bại: {proc.stderr}")
 

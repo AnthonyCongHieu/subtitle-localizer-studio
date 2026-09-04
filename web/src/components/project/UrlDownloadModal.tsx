@@ -970,6 +970,22 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                           )}
                           <span>Kiểm tra</span>
                         </button>
+
+                        {proxyUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setProxyUrl('');
+                              localStorage.removeItem('sls_proxy_url');
+                              setProxyTestResult(null);
+                            }}
+                            disabled={isRunning}
+                            className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-semibold rounded-lg transition border border-slate-700"
+                            title="Xóa proxy để tải trực tiếp bằng mạng Internet của máy"
+                          >
+                            Xóa
+                          </button>
+                        )}
                       </div>
 
                       {/* Kết quả kiểm tra proxy */}
