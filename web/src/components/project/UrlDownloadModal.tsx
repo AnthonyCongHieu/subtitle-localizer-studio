@@ -368,6 +368,20 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     }
   };
 
+  const handleRetryQueueTask = async (taskId: string, title: string) => {
+    try {
+      const res = await apiClient.retryQueueTask(taskId);
+      if (res.success) {
+        showQueueFeedback(`Đã kích hoạt tải lại "${title}"`);
+        fetchQueueTasks(true);
+      } else {
+        alert(res.message);
+      }
+    } catch (err: any) {
+      alert(`Lỗi thử lại tác vụ: ${err?.message}`);
+    }
+  };
+
   const handleReorderQueue = async (taskId: string, direction: 'up' | 'down') => {
     try {
       await apiClient.reorderQueue(taskId, direction);
@@ -1475,6 +1489,17 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                           >
                             <ArrowDown className="w-3 h-3" />
                           </button>
+
+                          {(item.status === 'failed' || item.status === 'cancelled') && (
+                            <button
+                              type="button"
+                              onClick={() => handleRetryQueueTask(item.task_id, title)}
+                              className="p-1 rounded-md bg-emerald-950/70 hover:bg-emerald-800 border border-emerald-700 text-emerald-300 transition active:scale-95"
+                              title="Tải lại bộ phim này (Retry)"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                            </button>
+                          )}
 
                           <button
                             type="button"

@@ -487,6 +487,15 @@ export class StudioApiClient {
     return res.json();
   }
 
+  async retryQueueTask(taskId: string): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${API_BASE}/downloader/queue/${encodeURIComponent(taskId)}/retry`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể thử lại tác vụ');
+    return res.json();
+  }
+
   async reorderQueue(taskId: string, direction: 'up' | 'down' | 'top' | 'bottom'): Promise<DownloadQueueReorderResponse> {
     const res = await fetch(`${API_BASE}/downloader/queue/reorder`, {
       method: 'POST',

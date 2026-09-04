@@ -96,16 +96,28 @@ def _build_urllib_opener(proxy: Optional[str] = None):
 
 def _open_url_with_fallback(req: urllib.request.Request, proxy: Optional[str] = None, timeout: int = 15):
     """Mở URL an toàn. Nếu proxy bị lỗi hoặc từ chối kết nối (WinError 10061), tự động fallback sang kết nối trực tiếp."""
+    full_url = req.full_url
+    req_headers = dict(req.headers)
+    req_data = req.data
+    origin_req_host = getattr(req, "origin_req_host", None)
+    unverifiable = getattr(req, "unverifiable", False)
+
     if proxy and str(proxy).strip():
         try:
             opener = _build_urllib_opener(proxy.strip())
             return opener.open(req, timeout=timeout)
         except Exception as exc:
             err_str = str(exc).lower()
-            if "10061" in err_str or "refused" in err_str or "proxy" in err_str or "timed out" in err_str:
-                print(f"[Downloader] Proxy {proxy} lỗi ({exc}), tự động fallback sang kết nối trực tiếp...")
-                direct_opener = urllib.request.build_opener()
-                return direct_opener.open(req, timeout=timeout)
+            if "10061" in err_str or "refused" in err_str or "proxy" in err_str or "timed out" in err_str or "unavailable" in err_str:
+                print(f"[Downloader] Proxy {proxy} gap loi ({exc}), tu dong fallback sang ket noi truc tiep...")
+                clean_req = urllib.request.Request(
+                    full_url,
+                    data=req_data,
+                    headers=req_headers,
+                    origin_req_host=origin_req_host,
+                    unverifiable=unverifiable,
+                )
+                return urllib.request.urlopen(clean_req, timeout=timeout)
             raise
     return urllib.request.urlopen(req, timeout=timeout)
 
@@ -183,6 +195,7 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
                     "accessible_count": detail.get("accessible_episode_cnt", 3),
                     "intro": intro,
                     "vid_count": len(vid_list),
+                    "vid_list": vid_list,
                 }
 
     # 2. Nhận diện các nền tảng video khác qua yt-dlp (YouTube, Bilibili, Douyin, etc.)
@@ -482,6 +495,22 @@ class DownloadManager:
     def delete_queue_task(self, task_id: str) -> bool:
         return self.remove_from_queue(task_id)
 
+    def retry_queue_task(self, task_id: str) -> bool:
+        with self._condition:
+            for t in self._tasks:
+                if t.task_id == task_id:
+                    if t.status in ("failed", "cancelled"):
+                        t.status = "pending"
+                        t.error = None
+                        t.progress = 0.0
+                        t.progress_percent = 0.0
+                        t.message = "Đã đưa lại vào hàng đợi để tải lại..."
+                        self._ensure_scheduler_started()
+                        self._condition.notify_all()
+                        return True
+                    return False
+            return False
+
     def reorder_queue(self, task_id: str, direction: str) -> List[str]:
         direction = direction.lower().strip()
         with self._condition:
@@ -680,6 +709,7 @@ class DownloadManager:
         )
 
     def _get_vid_list(self, series_id: str, proxy: Optional[str] = None, total_eps: int = 1) -> List[str]:
+        err_msg = ""
         try:
             detail_url = f"https://hongguoduanju.com/detail?series_id={series_id}"
             req = urllib.request.Request(detail_url, headers={"User-Agent": USER_AGENT})
@@ -692,12 +722,19 @@ class DownloadManager:
                     vid_list = detail.get("vid_list", [])
                     if vid_list:
                         return vid_list
-        except Exception:
-            pass
+        except Exception as exc:
+            err_msg = str(exc)
+            print(f"[Downloader] Error fetching vid_list for series {series_id}: {exc}")
+
         count = max(1, total_eps)
         if "fail" in str(series_id).lower():
             return [f"{series_id}_fail_ep_{i:02d}" for i in range(1, count + 1)]
-        return [f"{series_id}_vid_{i:02d}" for i in range(1, count + 1)]
+        if not str(series_id).isdigit():
+            return [f"{series_id}_vid_{i:02d}" for i in range(1, count + 1)]
+        raise ValueError(
+            f"Không thể lấy danh sách tập phim thực tế từ trang web Hồng Quả (ID: {series_id}). "
+            f"Lỗi: {err_msg or 'Không tìm thấy dữ liệu _ROUTER_DATA'}. Vui lòng kiểm tra lại mạng hoặc proxy."
+        )
 
     def _scheduler_loop(self) -> None:
         while not self._stop_scheduler:
@@ -798,7 +835,7 @@ class DownloadManager:
         clean_title = sanitize_filename(title)
 
         total_needed = task.total_eps or task.total_episodes or 1
-        vid_list = self._get_vid_list(series_id, proxy=task.proxy, total_eps=total_needed)
+        vid_list = task.target_info.get("vid_list") or self._get_vid_list(series_id, proxy=task.proxy, total_eps=total_needed)
         if not vid_list:
             raise ValueError("Không tìm thấy danh sách tập phim Hồng Quả.")
 

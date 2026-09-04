@@ -103,6 +103,20 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
     }
   };
 
+  const handleRetryTask = async (taskId: string, title: string) => {
+    try {
+      const res = await apiClient.retryQueueTask(taskId);
+      if (res.success) {
+        showFeedback(`Đã kích hoạt tải lại "${title}"`);
+        fetchQueue(true);
+      } else {
+        alert(res.message);
+      }
+    } catch (err: any) {
+      alert(`Lỗi thử lại: ${err?.message}`);
+    }
+  };
+
   const handleReorder = async (taskId: string, direction: 'up' | 'down') => {
     try {
       await apiClient.reorderQueue(taskId, direction);
@@ -476,6 +490,16 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
                     >
                       <ArrowDown className="w-3.5 h-3.5" />
                     </button>
+
+                    {(item.status === 'failed' || item.status === 'cancelled') && (
+                      <button
+                        onClick={() => handleRetryTask(item.task_id, title)}
+                        className="p-1.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-800 border border-emerald-700 text-emerald-300 transition active:scale-95"
+                        title="Tải lại bộ phim này (Retry)"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      </button>
+                    )}
 
                     <button
                       onClick={() => handleDeleteTask(item.task_id, title)}

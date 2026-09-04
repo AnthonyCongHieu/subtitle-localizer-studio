@@ -322,15 +322,18 @@ def curl_request(
         resp.raise_for_status()
         return resp.content
     except Exception as exc:
-        err_str = str(exc).lower()
-        if proxies and ("10061" in err_str or "refused" in err_str or "proxy" in err_str):
-            print(f"[hongguo_parser] Proxy {proxy} không kết nối được ({exc}), tự động chuyển sang kết nối trực tiếp...")
-            if post_body is not None:
-                resp = requests.post(url, headers=headers, data=post_body, timeout=timeout)
-            else:
-                resp = requests.get(url, headers=headers, timeout=timeout)
-            resp.raise_for_status()
-            return resp.content
+        if proxies:
+            print(f"[hongguo_parser] Proxy {proxy} gap loi ({exc}), tu dong chuyen sang ket noi truc tiep...")
+            try:
+                if post_body is not None:
+                    resp = requests.post(url, headers=headers, data=post_body, timeout=timeout)
+                else:
+                    resp = requests.get(url, headers=headers, timeout=timeout)
+                resp.raise_for_status()
+                return resp.content
+            except Exception as direct_exc:
+                print(f"[hongguo_parser] Ket noi truc tiep that bai: {direct_exc}")
+                raise
         raise
 
 
@@ -681,7 +684,19 @@ def stream_copy_video_with_ffmpeg(
             stderr=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as exc:
-        raise Exception(f"Failed to stream video with ffmpeg: {exc}")
+        if proxy:
+            direct_cmd = [c for i, c in enumerate(command) if c != "-http_proxy" and (i == 0 or command[i - 1] != "-http_proxy")]
+            try:
+                subprocess.run(
+                    direct_cmd,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except subprocess.CalledProcessError as exc2:
+                raise Exception(f"Failed to stream video with ffmpeg: {exc2}")
+        else:
+            raise Exception(f"Failed to stream video with ffmpeg: {exc}")
 
     stream_seconds = time.perf_counter() - stream_start
     print(f"[timing] stream_copy_seconds={stream_seconds:.3f}")

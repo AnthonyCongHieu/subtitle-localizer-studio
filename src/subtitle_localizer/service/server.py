@@ -518,6 +518,20 @@ def create_app(
             "message": f"Đã xóa tác vụ {task_id} khỏi hàng đợi",
         }
 
+    @app.post("/api/v1/downloader/queue/{task_id}/retry")
+    async def retry_download_queue_task(
+        task_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        retried = download_manager.retry_queue_task(task_id)
+        if not retried:
+            return {"success": False, "message": f"Không thể thử lại tác vụ '{task_id}' (chỉ có thể thử lại khi trạng thái là lỗi hoặc đã dừng)"}
+        return {
+            "success": True,
+            "message": f"Đã đưa tác vụ {task_id} vào hàng đợi để tải lại",
+        }
+
     @app.post("/api/v1/downloader/queue/reorder", response_model=DownloadQueueReorderResponse)
     async def reorder_download_queue(
         req: DownloadQueueReorderRequest,
