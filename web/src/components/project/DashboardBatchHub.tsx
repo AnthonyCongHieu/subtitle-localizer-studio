@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { apiClient, GeminiPoolStatus } from '../../api/client';
-import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../../types/api';
+import { ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
 import { PresetProfile, getDefaultPreset } from '../../types/presets';
 import { UrlDownloadModal } from './UrlDownloadModal';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
@@ -64,7 +64,6 @@ const BatchVideoCard: React.FC<{
   onSelectProject: (proj: ProjectManifestV1) => void;
   onDeleteProject: (id: string) => void;
   onOpenSettings: (proj: ProjectManifestV1) => void;
-  onRegionSaved?: (projectId: string, region: RegionTrackV1) => void;
   layerVisibility: {
     video: boolean;
     watermark: boolean;
@@ -82,7 +81,6 @@ const BatchVideoCard: React.FC<{
   onSelectProject,
   onDeleteProject,
   onOpenSettings,
-  onRegionSaved,
   layerVisibility,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -124,128 +122,7 @@ const BatchVideoCard: React.FC<{
     return cues.find((c) => currentTime >= c.start_pts && currentTime <= c.end_pts) || null;
   }, [cues, currentTime]);
 
-  // 3. Trạng thái vùng chọn quét & che mờ (ROI Bounding Box)
-  const [region, setRegion] = useState<RegionTrackV1>(() => {
-    if (project.regions && project.regions.length > 0) {
-      return { ...project.regions[0] };
-    }
-    return {
-      region_id: 'roi-' + project.project_id.slice(-6),
-      x: 0.15,
-      y: 0.76,
-      width: 0.7,
-      height: 0.14,
-    };
-  });
 
-  useEffect(() => {
-    if (project.regions && project.regions.length > 0) {
-      setRegion({ ...project.regions[0] });
-    }
-  }, [project.regions]);
-
-  type DragAnchor = 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
-  type DragMode = DragAnchor | null;
-  const [dragMode, setDragMode] = useState<DragMode>(null);
-  const [isSavedRecently, setIsSavedRecently] = useState(false);
-  const currentRegionRef = useRef<RegionTrackV1>(region);
-  currentRegionRef.current = region;
-
-  // 4. Xử lý kéo thả di chuyển và co giãn 8 nốt tay cầm (8-Anchor Drag & Resize)
-  const handleMouseDown = useCallback(
-    (mode: DragAnchor, e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      const container = containerRef.current;
-      if (!container) return;
-
-      const rect = container.getBoundingClientRect();
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const orig = { ...currentRegionRef.current };
-      const containerW = rect.width;
-      const containerH = rect.height;
-
-      setDragMode(mode);
-
-      const handleMouseMove = (moveEvent: MouseEvent) => {
-        moveEvent.preventDefault();
-        if (containerW <= 0 || containerH <= 0) return;
-
-        const deltaX = (moveEvent.clientX - startX) / containerW;
-        const deltaY = (moveEvent.clientY - startY) / containerH;
-
-        let newX = orig.x;
-        let newY = orig.y;
-        let newW = orig.width;
-        let newH = orig.height;
-
-        const minW = 0.08;
-        const minH = 0.03;
-
-        if (mode === 'move') {
-          newX = Math.max(0, Math.min(1.0 - orig.width, orig.x + deltaX));
-          newY = Math.max(0, Math.min(1.0 - orig.height, orig.y + deltaY));
-        } else {
-          if (mode.includes('w')) {
-            const maxLeft = orig.x + orig.width - minW;
-            newX = Math.max(0, Math.min(maxLeft, orig.x + deltaX));
-            newW = orig.width + (orig.x - newX);
-          }
-          if (mode.includes('e')) {
-            newW = Math.max(minW, Math.min(1.0 - orig.x, orig.width + deltaX));
-          }
-          if (mode.includes('n')) {
-            const maxTop = orig.y + orig.height - minH;
-            newY = Math.max(0, Math.min(maxTop, orig.y + deltaY));
-            newH = orig.height + (orig.y - newY);
-          }
-          if (mode.includes('s')) {
-            newH = Math.max(minH, Math.min(1.0 - orig.y, orig.height + deltaY));
-          }
-        }
-
-        newX = Math.max(0, Math.min(1.0 - minW, newX));
-        newY = Math.max(0, Math.min(1.0 - minH, newY));
-        newW = Math.max(minW, Math.min(1.0 - newX, newW));
-        newH = Math.max(minH, Math.min(1.0 - newY, newH));
-
-        const updated: RegionTrackV1 = {
-          ...orig,
-          x: parseFloat(newX.toFixed(4)),
-          y: parseFloat(newY.toFixed(4)),
-          width: parseFloat(newW.toFixed(4)),
-          height: parseFloat(newH.toFixed(4)),
-        };
-
-        setRegion(updated);
-        currentRegionRef.current = updated;
-      };
-
-      const handleMouseUp = () => {
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
-        setDragMode(null);
-
-        // Lưu ngay tọa độ mới vào SQLite database qua API
-        const finalRegion = currentRegionRef.current;
-        apiClient
-          .saveRegions(project.project_id, [finalRegion])
-          .then(() => {
-            setIsSavedRecently(true);
-            setTimeout(() => setIsSavedRecently(false), 2000);
-            project.regions = [finalRegion];
-            onRegionSaved?.(project.project_id, finalRegion);
-          })
-          .catch((err) => console.error('Lỗi khi lưu tọa độ ROI:', err));
-      };
-
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    },
-    [project.project_id, onRegionSaved]
-  );
 
   const togglePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -279,38 +156,25 @@ const BatchVideoCard: React.FC<{
 
   // 5. Kết xuất nội dung phụ đề động theo chế độ xem và mốc thời gian phát
   const renderSubtitleText = () => {
+    if (!activeCue) return null;
+
     if (subMode === 'original') {
-      if (activeCue) return activeCue.source_text;
-      if (isPlaying || currentTime > 0.5) return '';
-      return project.first_cue_original || cues[0]?.source_text || (hasCues ? 'Đã trích xuất phụ đề' : 'Chưa quét phụ đề');
+      return activeCue.source_text;
     }
 
     if (subMode === 'both') {
-      if (activeCue) {
-        return (
-          <div className="flex flex-col items-center justify-center text-center leading-tight">
-            <span className="text-white/80 text-[9px] drop-shadow">{activeCue.source_text}</span>
-            <span className="text-amber-300 font-bold text-[11px] sm:text-xs drop-shadow">
-              {activeCue.translated_text || activeCue.source_text}
-            </span>
-          </div>
-        );
-      }
-      if (isPlaying || currentTime > 0.5) return '';
       return (
         <div className="flex flex-col items-center justify-center text-center leading-tight">
-          <span className="text-white/80 text-[9px] drop-shadow">{project.first_cue_original || cues[0]?.source_text || ''}</span>
+          <span className="text-white/80 text-[9px] drop-shadow">{activeCue.source_text}</span>
           <span className="text-amber-300 font-bold text-[11px] sm:text-xs drop-shadow">
-            {project.first_cue_text || cues[0]?.translated_text || (hasCues ? 'Đã trích xuất phụ đề' : 'Chưa quét phụ đề')}
+            {activeCue.translated_text || activeCue.source_text}
           </span>
         </div>
       );
     }
 
     // subMode === 'translated'
-    if (activeCue) return activeCue.translated_text || activeCue.source_text;
-    if (isPlaying || currentTime > 0.5) return '';
-    return project.first_cue_text || cues[0]?.translated_text || cues[0]?.source_text || (hasCues ? 'Đã trích xuất phụ đề' : 'Chưa quét phụ đề');
+    return activeCue.translated_text || activeCue.source_text;
   };
 
   return (
@@ -436,87 +300,14 @@ const BatchVideoCard: React.FC<{
           </span>
         </div>
 
-        {/* Bounding Box ROI Khung Kéo Căn Chỉnh Vùng Quét (8 Nốt Tay Cầm Màu Trắng - Tương Tác Kéo Thả & Co Giãn Thật) */}
-        <div
-          className="absolute border border-white/80 transition-[border-color] flex items-center justify-center shadow-2xl z-20 select-none group/roi"
-          style={{
-            left: `${region.x * 100}%`,
-            top: `${region.y * 100}%`,
-            width: `${region.width * 100}%`,
-            height: `${region.height * 100}%`,
-            cursor: dragMode === 'move' ? 'grabbing' : 'grab',
-          }}
-          onMouseDown={(e) => handleMouseDown('move', e)}
-          title="Kéo thân hộp để di chuyển, kéo 8 nốt trắng để co giãn vùng che & quét sub"
-        >
-          {/* Lớp Mask Che Mờ Sub Gốc (B0) */}
-          {layerVisibility.mask && (
-            <div className="absolute inset-0 backdrop-blur-[14px] bg-black/35 rounded-sm -z-10 shadow-inner pointer-events-none" />
-          )}
-
-          {/* Phụ Đề Dịch Tiếng Việt Thật Từ Cơ Sở Dữ Liệu Đồng Bộ Thời Gian Thực */}
-          {layerVisibility.translatedSub && (
-            <div className="text-amber-300 font-bold text-[11px] sm:text-xs text-center px-2 py-0.5 tracking-wide leading-tight drop-shadow-[0_2px_4px_rgba(0,0,0,1)] [text-shadow:_0_1px_3px_rgba(0,0,0,0.95)] truncate max-w-[96%] pointer-events-none">
+        {/* Phụ đề dịch hiển thị sạch sẽ ở đáy khi đang phát video (Loại bỏ ô kéo và nốt tay cầm theo yêu cầu R4) */}
+        {isPlaying && activeCue && layerVisibility.translatedSub && (
+          <div className="absolute bottom-2 left-2 right-2 text-center pointer-events-none z-20">
+            <span className="inline-block px-2.5 py-1 rounded bg-black/80 text-amber-300 font-bold text-[11px] sm:text-xs leading-tight drop-shadow max-w-[96%] truncate">
               {renderSubtitleText()}
-            </div>
-          )}
-
-          {/* Badge Tag B0 & S1 và Tooltip Tọa độ */}
-          <div className="absolute -bottom-3 left-0 flex items-center gap-1 pointer-events-none">
-            <span className="text-[7px] font-mono bg-indigo-950/90 text-indigo-300 border border-indigo-700 px-1 rounded shadow">
-              S1/B0
             </span>
-            {(dragMode || isSavedRecently) && (
-              <span className="text-[7px] font-mono bg-slate-950/90 text-cyan-300 border border-slate-700 px-1 rounded shadow animate-in fade-in">
-                {isSavedRecently ? 'Đã lưu ROI' : `Y:${Math.round(region.y * 100)}% H:${Math.round(region.height * 100)}%`}
-              </span>
-            )}
           </div>
-
-          {/* 4 Nốt Góc Màu Trắng (Có thể kéo co giãn nw, ne, sw, se) */}
-          <div
-            className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border border-slate-900 rounded-xs shadow cursor-nwse-resize hover:scale-125 transition-transform z-30 pointer-events-auto"
-            onMouseDown={(e) => handleMouseDown('nw', e)}
-            title="Kéo chỉnh góc Trên-Trái"
-          />
-          <div
-            className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border border-slate-900 rounded-xs shadow cursor-nesw-resize hover:scale-125 transition-transform z-30 pointer-events-auto"
-            onMouseDown={(e) => handleMouseDown('ne', e)}
-            title="Kéo chỉnh góc Trên-Phải"
-          />
-          <div
-            className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border border-slate-900 rounded-xs shadow cursor-nesw-resize hover:scale-125 transition-transform z-30 pointer-events-auto"
-            onMouseDown={(e) => handleMouseDown('sw', e)}
-            title="Kéo chỉnh góc Dưới-Trái"
-          />
-          <div
-            className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border border-slate-900 rounded-xs shadow cursor-nwse-resize hover:scale-125 transition-transform z-30 pointer-events-auto"
-            onMouseDown={(e) => handleMouseDown('se', e)}
-            title="Kéo chỉnh góc Dưới-Phải"
-          />
-
-          {/* 4 Nốt Cạnh Màu Trắng (Có thể kéo co giãn n, s, w, e) */}
-          <div
-            className="absolute -top-1 left-1/2 -translate-x-1/2 w-4 h-2 bg-white border border-slate-900 rounded-xs shadow cursor-ns-resize hover:scale-110 transition-transform z-30 pointer-events-auto"
-            onMouseDown={(e) => handleMouseDown('n', e)}
-            title="Kéo chỉnh cạnh Trên"
-          />
-          <div
-            className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-2 bg-white border border-slate-900 rounded-xs shadow cursor-ns-resize hover:scale-110 transition-transform z-30 pointer-events-auto"
-            onMouseDown={(e) => handleMouseDown('s', e)}
-            title="Kéo chỉnh cạnh Dưới"
-          />
-          <div
-            className="absolute top-1/2 -left-1 -translate-y-1/2 h-4 w-2 bg-white border border-slate-900 rounded-xs shadow cursor-ew-resize hover:scale-110 transition-transform z-30 pointer-events-auto"
-            onMouseDown={(e) => handleMouseDown('w', e)}
-            title="Kéo chỉnh cạnh Trái"
-          />
-          <div
-            className="absolute top-1/2 -right-1 -translate-y-1/2 h-4 w-2 bg-white border border-slate-900 rounded-xs shadow cursor-ew-resize hover:scale-110 transition-transform z-30 pointer-events-auto"
-            onMouseDown={(e) => handleMouseDown('e', e)}
-            title="Kéo chỉnh cạnh Phải"
-          />
-        </div>
+        )}
 
         {/* Nút Play Nhanh Giữa Màn Hình Khi Hover */}
         <button
@@ -1104,10 +895,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                   onSelectProject={onSelectProject}
                   onDeleteProject={onDeleteProject}
                   onOpenSettings={onOpenPresetManager}
-                  onRegionSaved={(pId, newRegion) => {
-                    const p = projects.find((x) => x.project_id === pId);
-                    if (p) p.regions = [newRegion];
-                  }}
                   layerVisibility={layerVisibility}
                 />
               ))}

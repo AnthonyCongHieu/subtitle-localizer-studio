@@ -490,6 +490,9 @@ export const PresetManagerModal: React.FC<PresetManagerModalProps> = ({
 
                   <div className="grid grid-cols-3 gap-2">
                     {[
+                      { id: 'feather_tight', name: '✨ Mờ bám chữ', desc: 'Dải hẹp bám sát chữ', icon: Sparkles },
+                      { id: 'optical_blend', name: '💧 Hòa tan quang học', desc: '100% trong suốt không tối', icon: Eye },
+                      { id: 'soft_cinema', name: '🎬 Gradient Cinema', desc: 'Chuyển sắc êm dịu', icon: Layers },
                       { id: 'blur', name: 'Mờ hòa tan', desc: 'Màu hòa 100% video', icon: Sparkles },
                       { id: 'glass', name: 'Kính mờ', desc: 'Giữ sáng bối cảnh', icon: Eye },
                       { id: 'ambient', name: 'Gradient đáy', desc: 'Chuyển sắc êm', icon: Layers },

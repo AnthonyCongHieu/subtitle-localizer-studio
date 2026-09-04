@@ -1,8 +1,20 @@
 export type AspectRatioType = 'original' | '16:9' | '9:16' | '1:1' | '4:3' | '2.35:1';
 
-export type MaskStyleType = 'blur' | 'glass' | 'ambient' | 'feather' | 'box' | 'mosaic' | 'gradient';
+export type MaskStyleType =
+  | 'feather_tight'
+  | 'optical_blend'
+  | 'soft_cinema'
+  | 'blur'
+  | 'glass'
+  | 'ambient'
+  | 'feather'
+  | 'box'
+  | 'mosaic'
+  | 'gradient';
 
-export type ZoomMode = 'fit' | 0.5 | 0.75 | 1.0 | 1.25 | 1.5 | 2.0;
+export type SubtitlePlacementMode = 'roi' | 'bottom';
+
+export type ZoomMode = 'fit' | number;
 
 export interface PresetProfile {
   id: string;
@@ -11,6 +23,8 @@ export interface PresetProfile {
   source_lang: string;
   target_lang: string;
   mask_style: MaskStyleType;
+  subtitle_placement?: SubtitlePlacementMode;
+  blur_strength?: number;
   is_flipped_h: boolean;
   is_flipped_v: boolean;
   show_subtitle_overlay: boolean;
@@ -163,6 +177,8 @@ export function parsePresetsJson(jsonString: string): PresetProfile[] {
     source_lang: item.source_lang || 'zh',
     target_lang: item.target_lang || 'vi',
     mask_style: item.mask_style || 'blur',
+    subtitle_placement: item.subtitle_placement || 'roi',
+    blur_strength: typeof item.blur_strength === 'number' ? item.blur_strength : 20,
     is_flipped_h: Boolean(item.is_flipped_h),
     is_flipped_v: Boolean(item.is_flipped_v),
     show_subtitle_overlay: item.show_subtitle_overlay !== false,

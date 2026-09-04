@@ -17,11 +17,13 @@ class SubtitleMasker:
         if mode == "box":
             return f"drawbox=x={x}:y={y}:w={width}:h={height}:color=black@{opacity}:t=fill"
 
-        elif mode == "blur":
-            # Áp dụng boxblur lên vùng ROI
+        elif mode in ("blur", "feather_tight", "optical_blend", "soft_cinema", "feather", "glass", "ambient", "mosaic", "gradient"):
+            # Áp dụng boxblur lên vùng ROI với thông số tối ưu
             overlay_x = str(x).replace("iw", "main_w").replace("ih", "main_h")
             overlay_y = str(y).replace("iw", "main_w").replace("ih", "main_h")
-            return f"split[main][sub];[sub]crop={width}:{height}:{x}:{y},boxblur=luma_radius=10:luma_power=3[blurred];[main][blurred]overlay={overlay_x}:{overlay_y}"
+            radius = 14 if mode in ("feather_tight", "optical_blend") else 10
+            power = 3
+            return f"split[main][sub];[sub]crop={width}:{height}:{x}:{y},boxblur=luma_radius={radius}:luma_power={power}[blurred];[main][blurred]overlay={overlay_x}:{overlay_y}"
 
         elif mode == "crop":
             # Cắt bớt phần dưới

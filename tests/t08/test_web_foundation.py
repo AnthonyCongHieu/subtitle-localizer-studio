@@ -51,13 +51,10 @@ class WebFoundationTest(unittest.TestCase):
     def test_batch_video_card_interactive_roi_and_realtime_subtitles(self) -> None:
         hub_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "DashboardBatchHub.tsx"
         content = hub_file.read_text(encoding="utf-8")
-        # 1. Bounding box tương tác và 8 handles
-        self.assertIn("handleMouseDown", content)
-        self.assertIn("cursor-nwse-resize", content)
-        self.assertIn("cursor-nesw-resize", content)
-        self.assertIn("cursor-ns-resize", content)
-        self.assertIn("cursor-ew-resize", content)
-        self.assertIn("saveRegions", content)
+        # 1. ROI bounding box removed (R4) — replaced with clean subtitle banner
+        #    Verify old ROI handles are NOT present
+        self.assertNotIn("cursor-nwse-resize", content)
+        self.assertNotIn("cursor-nesw-resize", content)
 
         # 2. Đồng bộ phụ đề thật thời gian thực
         self.assertIn("getCues", content)

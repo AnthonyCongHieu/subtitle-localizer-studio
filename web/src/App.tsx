@@ -6,6 +6,7 @@ import {
   PresetProfile,
   AspectRatioType,
   MaskStyleType,
+  SubtitlePlacementMode,
   ZoomMode,
   getStoredPresets,
   saveStoredPresets,
@@ -18,6 +19,7 @@ import { DashboardBatchHub } from './components/project/DashboardBatchHub';
 import { PresetManagerModal } from './components/project/PresetManagerModal';
 import { NewProjectModal } from './components/project/NewProjectModal';
 import { DownloadQueueHub } from './components/project/DownloadQueueHub';
+import { GlobalActivityLogger, appLogger } from './components/common/GlobalActivityLogger';
 import {
   Layers,
   CheckCircle2,
@@ -72,7 +74,9 @@ export const App: React.FC = () => {
   const [rotation, setRotation] = useState<number>(0);
   const [zoomLevel, setZoomLevel] = useState<ZoomMode>('fit');
   const [previewMask, setPreviewMask] = useState<boolean>(false);
-  const [maskStyle, setMaskStyle] = useState<MaskStyleType>('blur');
+  const [maskStyle, setMaskStyle] = useState<MaskStyleType>('feather_tight');
+  const [blurStrength, setBlurStrength] = useState<number>(20);
+  const [subtitlePlacement, setSubtitlePlacement] = useState<SubtitlePlacementMode>('roi');
   const [showSubtitleOverlay, setShowSubtitleOverlay] = useState<boolean>(true);
 
   // Trạng thái phát video và thanh timeline
@@ -89,10 +93,19 @@ export const App: React.FC = () => {
 
   const localUrlRef = useRef<string | null>(null);
 
+  // Chuẩn hóa góc xoay luôn nằm trong dải [-180, 180] tương thích chính xác với Range Slider
+  const normalizeRotation = (deg: number) => {
+    let normalized = deg % 360;
+    if (normalized > 180) normalized -= 360;
+    if (normalized < -180) normalized += 360;
+    return normalized;
+  };
+
   // Lưu danh sách presets khi thay đổi
   const handleSavePresets = (newPresets: PresetProfile[]) => {
     setPresets(newPresets);
     saveStoredPresets(newPresets);
+    appLogger.success('Đã lưu cấu hình Preset vào bộ nhớ', 'Cấu hình');
   };
 
   // Áp dụng thông số của một Chuẩn (Preset Profile)
@@ -101,6 +114,8 @@ export const App: React.FC = () => {
     setSourceLang(preset.source_lang);
     setTargetLang(preset.target_lang);
     setMaskStyle(preset.mask_style);
+    if (preset.subtitle_placement) setSubtitlePlacement(preset.subtitle_placement);
+    if (typeof preset.blur_strength === 'number') setBlurStrength(preset.blur_strength);
     setIsFlippedH(preset.is_flipped_h);
     setIsFlippedV(preset.is_flipped_v);
     setShowSubtitleOverlay(preset.show_subtitle_overlay);
@@ -117,6 +132,7 @@ export const App: React.FC = () => {
       });
     }
     setStatusMessage(`Đã áp dụng: ${preset.name}`);
+    appLogger.success(`Đã áp dụng chuẩn: ${preset.name}`, 'Preset');
   };
 
   // Kiểm tra sức khỏe Backend
@@ -139,6 +155,9 @@ export const App: React.FC = () => {
     try {
       const list = await apiClient.getCues(id);
       setCues(list || []);
+      if (list && list.length > 0) {
+        appLogger.info(`Đã nạp ${list.length} câu phụ đề vào Timeline`, 'Phụ đề', false);
+      }
     } catch (err) {
       console.warn('Chưa nạp được danh sách phụ đề:', err);
       setCues([]);
@@ -153,8 +172,10 @@ export const App: React.FC = () => {
       try {
         await apiClient.saveCues(activeProject.project_id, nextCues);
         setStatusMessage('Đã lưu câu phụ đề thành công!');
-      } catch (err) {
+        appLogger.success('Đã lưu câu phụ đề thành công!', 'Phụ đề');
+      } catch (err: any) {
         console.error('Không thể lưu phụ đề xuống server:', err);
+        appLogger.error(`Không thể lưu phụ đề: ${err?.message || 'Lỗi kết nối máy chủ'}`, 'Phụ đề');
       }
     }
   };
@@ -197,6 +218,7 @@ export const App: React.FC = () => {
     }
 
     setStatusMessage(`Đã nạp: ${proj.title}`);
+    appLogger.info(`Đã nạp dự án: ${proj.title}`, 'Dự án');
     setViewMode('studio');
   };
 
@@ -212,8 +234,10 @@ export const App: React.FC = () => {
         setViewMode('dashboard');
       }
       setStatusMessage('Đã xóa dự án thành công');
+      appLogger.success('Đã xóa dự án thành công', 'Dự án');
     } catch (err: any) {
       setErrorMessage(err?.message || 'Không thể xóa dự án');
+      appLogger.error(`Không thể xóa dự án: ${err?.message || 'Lỗi hệ thống'}`, 'Dự án');
     }
   };
 
@@ -229,6 +253,7 @@ export const App: React.FC = () => {
     setVideoUrl(objectUrl);
     setCues([]);
     setStatusMessage(`Đã nạp: ${file.name}`);
+    appLogger.success(`Đã nạp video từ máy tính: ${file.name}`, 'Video');
   };
 
   // Khởi tạo và lắng nghe WebSocket
@@ -242,15 +267,19 @@ export const App: React.FC = () => {
     const unsub = wsClient.onEvent((evt: BridgeEventV1) => {
       if (evt.event_type === 'stage_started') {
         setStatusMessage(`Đang chạy: ${evt.payload?.stage_name || 'Tiến trình quét'}`);
+        appLogger.info(`Đang chạy: ${evt.payload?.stage_name || 'Tiến trình quét'}`, 'Quét phụ đề', false);
       } else if (evt.event_type === 'stage_completed') {
         setStatusMessage(`Hoàn thành: ${evt.payload?.stage_name || 'Tiến trình'}`);
+        appLogger.success(`Hoàn thành giai đoạn: ${evt.payload?.stage_name || 'Tiến trình'}`, 'Quét phụ đề');
       } else if (evt.event_type === 'pipeline_completed') {
         setIsScanning(false);
         setStatusMessage('Đã hoàn thành quét phụ đề toàn bộ video!');
+        appLogger.success('Đã hoàn thành quét phụ đề toàn bộ video!', 'Quét phụ đề');
         loadCues();
       } else if (evt.event_type === 'pipeline_failed') {
         setIsScanning(false);
         setErrorMessage(`Lỗi quét: ${evt.payload?.error || 'Không xác định'}`);
+        appLogger.error(`Lỗi quét: ${evt.payload?.error || 'Không xác định'}`, 'Quét phụ đề');
       }
     });
 
@@ -295,17 +324,23 @@ export const App: React.FC = () => {
   const handleAutoDetectRoi = async () => {
     if (!activeProject) {
       setStatusMessage('Cần nạp một dự án backend để tự bắt dính ROI');
+      appLogger.warn('Cần nạp một dự án backend để tự bắt dính ROI', 'ROI');
       return;
     }
     try {
       setStatusMessage('Đang phân tích khung hình để bắt dính vị trí chữ...');
+      appLogger.info('Đang phân tích khung hình để bắt dính vị trí chữ...', 'ROI');
       const res = await apiClient.autoDetectRoi(activeProject.project_id, currentTime);
       if (res.region) {
         setRoiRegion(res.region);
         setStatusMessage(`Đã bắt dính vùng chữ thành công! (${res.detected_count} vùng)`);
+        appLogger.success(`Đã bắt dính vùng chữ thành công! (${res.detected_count} vùng)`, 'ROI');
+      } else {
+        appLogger.warn('Không phát hiện vùng chữ rõ ràng trên khung hình', 'ROI');
       }
     } catch (err: any) {
       setErrorMessage(err?.message || 'Không thể tự động phát hiện vùng chữ');
+      appLogger.error(err?.message || 'Không thể tự động phát hiện vùng chữ', 'ROI');
     }
   };
 
@@ -313,6 +348,7 @@ export const App: React.FC = () => {
   const handleStartScan = async () => {
     if (!activeProject && !localVideoFile) {
       setErrorMessage('Vui lòng chọn hoặc nạp một video trước khi chạy');
+      appLogger.warn('Vui lòng chọn hoặc nạp một video trước khi chạy', 'Quét');
       return;
     }
 
@@ -325,11 +361,13 @@ export const App: React.FC = () => {
         await apiClient.saveRegions(activeProject.project_id, [roiRegion]);
 
         setStatusMessage('Đang khởi chạy tiến trình quét phụ đề trên máy chủ...');
+        appLogger.info('Đang khởi chạy tiến trình quét phụ đề trên máy chủ...', 'Quét');
         await apiClient.runPipeline(activeProject.project_id);
 
         setStatusMessage('Tiến trình quét phụ đề đang thực thi...');
       } else if (localVideoFile) {
         setStatusMessage('Đang tải video lên máy chủ và khởi tạo dự án...');
+        appLogger.info('Đang tải video lên máy chủ và khởi tạo dự án...', 'Quét');
         const uploadRes = await apiClient.uploadVideo(localVideoFile);
         const newProj = await apiClient.createProject({
           title: localVideoFile.name.replace(/\.[^/.]+$/, ''),
@@ -345,10 +383,12 @@ export const App: React.FC = () => {
         setVideoUrl(apiClient.getVideoStreamUrl(newProj.project_id));
         loadProjects();
         setStatusMessage('Đã tạo dự án và bắt đầu quét phụ đề!');
+        appLogger.success('Đã tạo dự án và bắt đầu quét phụ đề!', 'Quét');
       }
     } catch (err: any) {
       setIsScanning(false);
       setErrorMessage(err?.message || 'Có lỗi xảy ra khi bắt đầu quét phụ đề');
+      appLogger.error(err?.message || 'Có lỗi xảy ra khi bắt đầu quét phụ đề', 'Quét');
     }
   };
 
@@ -358,6 +398,7 @@ export const App: React.FC = () => {
     setRotation(0);
     setZoomLevel('fit');
     setAspectRatio('original');
+    appLogger.info('Đã khôi phục khung nhìn về mặc định (Fit, 0°, Không lật)', 'Hiển thị');
   };
 
   return (
@@ -558,8 +599,7 @@ export const App: React.FC = () => {
               }}
               isFlippedH={isFlippedH}
               isFlippedV={isFlippedV}
-              maskStyle={maskStyle}
-              onMaskStyleChange={setMaskStyle}
+
               aspectRatio={aspectRatio}
               onAspectRatioChange={setAspectRatio}
             />
@@ -577,24 +617,78 @@ export const App: React.FC = () => {
               onPickLocalVideo={handlePickLocalVideo}
               cues={cues}
               aspectRatio={aspectRatio}
-              onAspectRatioChange={setAspectRatio}
+              onAspectRatioChange={(r) => {
+                setAspectRatio(r);
+                appLogger.info(`Đổi tỉ lệ khung hình: ${r}`, 'Canvas');
+              }}
               fitMode={fitMode}
-              onToggleFitMode={() => setFitMode((m) => (m === 'contain' ? 'cover' : 'contain'))}
+              onToggleFitMode={() => {
+                setFitMode((m) => {
+                  const next = m === 'contain' ? 'cover' : 'contain';
+                  appLogger.info(`Chế độ khung hình: ${next === 'cover' ? 'Fill (Tràn viền)' : 'Fit (Đệm chuẩn)'}`, 'Canvas');
+                  return next;
+                });
+              }}
               isFlippedH={isFlippedH}
-              onToggleFlipH={() => setIsFlippedH((prev) => !prev)}
+              onToggleFlipH={() => {
+                setIsFlippedH((prev) => {
+                  const next = !prev;
+                  appLogger.info(next ? 'Lật ngang video: BẬT' : 'Lật ngang video: TẮT', 'Hiển thị');
+                  return next;
+                });
+              }}
               isFlippedV={isFlippedV}
-              onToggleFlipV={() => setIsFlippedV((prev) => !prev)}
+              onToggleFlipV={() => {
+                setIsFlippedV((prev) => {
+                  const next = !prev;
+                  appLogger.info(next ? 'Lật dọc video: BẬT' : 'Lật dọc video: TẮT', 'Hiển thị');
+                  return next;
+                });
+              }}
               rotation={rotation}
-              onRotate={() => setRotation((prev) => (prev + 90) % 360)}
+              onRotate={() => {
+                const next = normalizeRotation(rotation + 90);
+                setRotation(next);
+                appLogger.info(`Xoay nhanh video: ${next}°`, 'Hiển thị');
+              }}
+              onRotationChange={(deg) => {
+                const next = normalizeRotation(deg);
+                setRotation(next);
+              }}
               zoomLevel={zoomLevel}
-              onZoomChange={(z) => setZoomLevel(z)}
+              onZoomChange={(z) => {
+                setZoomLevel(z);
+                appLogger.info(`Zoom: ${z === 'fit' ? 'Fit (Vừa vặn)' : `${Math.round(z * 100)}%`}`, 'Hiển thị');
+              }}
               onResetTransform={handleResetTransform}
               previewMask={previewMask}
-              onTogglePreviewMask={() => setPreviewMask((prev) => !prev)}
+              onTogglePreviewMask={() => {
+                setPreviewMask((prev) => {
+                  const next = !prev;
+                  appLogger.info(next ? 'Bật chế độ che phụ đề gốc' : 'Tắt chế độ che phụ đề gốc', 'Che sub');
+                  return next;
+                });
+              }}
               maskStyle={maskStyle}
-              onMaskStyleChange={setMaskStyle}
+              onMaskStyleChange={(st) => {
+                setMaskStyle(st);
+                appLogger.info(`Kiểu che phụ đề: ${st}`, 'Che sub');
+              }}
+              blurStrength={blurStrength}
+              onBlurStrengthChange={setBlurStrength}
               showSubtitleOverlay={showSubtitleOverlay}
-              onToggleSubtitleOverlay={() => setShowSubtitleOverlay((prev) => !prev)}
+              onToggleSubtitleOverlay={() => {
+                setShowSubtitleOverlay((prev) => {
+                  const next = !prev;
+                  appLogger.info(next ? 'Bật hiển thị phụ đề dịch' : 'Tắt hiển thị phụ đề dịch', 'Phụ đề');
+                  return next;
+                });
+              }}
+              subtitlePlacement={subtitlePlacement}
+              onSubtitlePlacementChange={(p) => {
+                setSubtitlePlacement(p);
+                appLogger.info(`Vị trí phụ đề: ${p === 'bottom' ? 'Đáy video (chuẩn điện ảnh)' : 'Vùng quét (đè chữ gốc)'}`, 'Phụ đề');
+              }}
             />
           </main>
 
@@ -637,6 +731,9 @@ export const App: React.FC = () => {
         }}
         presets={presets}
       />
+
+      {/* Hệ thống Toast Thông Báo & Nhật Ký Hoạt Động Toàn Cục (Không bị im lặng) */}
+      <GlobalActivityLogger />
 
       {/* Toast thông báo lỗi nổi tinh tế góc dưới */}
       {errorMessage && (

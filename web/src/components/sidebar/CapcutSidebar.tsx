@@ -16,11 +16,6 @@ import {
   Tv,
   AlignJustify,
   Smartphone,
-  Eye,
-  Layers,
-  Feather,
-  Square,
-  Grid,
 } from 'lucide-react';
 import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../../types/api';
 import { apiClient } from '../../api/client';
@@ -47,8 +42,7 @@ interface CapcutSidebarProps {
   onLanguageChange?: (source: string, target: string) => void;
   isFlippedH?: boolean;
   isFlippedV?: boolean;
-  maskStyle?: 'blur' | 'glass' | 'ambient' | 'feather' | 'box' | 'mosaic' | 'gradient';
-  onMaskStyleChange?: (style: 'blur' | 'glass' | 'ambient' | 'feather' | 'box' | 'mosaic' | 'gradient') => void;
+
   aspectRatio?: AspectRatioType;
   onAspectRatioChange?: (ratio: AspectRatioType) => void;
 }
@@ -70,8 +64,7 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
   onLanguageChange,
   isFlippedH = false,
   isFlippedV = false,
-  maskStyle = 'blur',
-  onMaskStyleChange,
+
   aspectRatio = 'original',
   onAspectRatioChange,
 }) => {
@@ -708,42 +701,8 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
                   <span>Căn giữa chuẩn phụ đề (Khuyến nghị)</span>
                 </button>
 
-                {/* Cài Đặt Kiểu Che Sub Gốc Phổ Biến */}
-                {onMaskStyleChange && (
-                  <div className="space-y-2 pt-2 border-t border-slate-800">
-                    <label className="text-slate-400 font-medium block text-[11px]">Kiểu che phụ đề gốc (Mask Style):</label>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {[
-                        { id: 'blur', name: 'Mờ hòa tan video', desc: 'Màu hòa 100% video, viền tan biến', icon: Sparkles, iconColor: 'text-indigo-400' },
-                        { id: 'glass', name: 'Kính trong suốt', desc: 'Giữ sáng & màu rực rỡ của cảnh', icon: Eye, iconColor: 'text-sky-400' },
-                        { id: 'ambient', name: 'Gradient êm dịu', desc: 'Chuyển sắc mềm, không vệt đen', icon: Layers, iconColor: 'text-cyan-400' },
-                        { id: 'feather', name: 'Viền lông mềm', desc: 'Mờ dạng viên nhung nhẹ', icon: Feather, iconColor: 'text-purple-400' },
-                        { id: 'box', name: 'Hộp đen Cinema', desc: 'Dải đen truyền thống che tuyệt đối', icon: Square, iconColor: 'text-slate-400' },
-                        { id: 'mosaic', name: 'Khảm Mosaic', desc: 'Pixel mờ che phóng sự', icon: Grid, iconColor: 'text-emerald-400' },
-                      ].map((item) => {
-                        const IconComp = item.icon;
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => onMaskStyleChange(item.id as any)}
-                            className={`p-2 rounded-lg border text-left transition flex flex-col gap-0.5 ${
-                              maskStyle === item.id || (item.id === 'ambient' && maskStyle === 'gradient')
-                                ? 'bg-indigo-950/70 border-indigo-500 text-white shadow-md ring-1 ring-indigo-500/50'
-                                : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
-                            }`}
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <IconComp className={`w-3.5 h-3.5 ${item.iconColor} shrink-0`} />
-                              <span className="text-[11px] font-semibold">{item.name}</span>
-                            </div>
-                            <span className="text-[9px] text-slate-500">{item.desc}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+
+                {/* Kiểu che phụ đề gốc đã chuyển lên Toolbar (dropdown đầy đủ 9 kiểu) */}
               </div>
             )}
 
