@@ -38,4 +38,5 @@ gemini_keys_pool.json
 *.db
 *.db-shm
 *.db-wal
-
+/scratch/
+/web/archive/

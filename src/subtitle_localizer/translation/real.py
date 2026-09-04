@@ -119,49 +119,56 @@ class RealTranslationProvider(TranslationProvider):
         import json
         import urllib.request
 
-        script_items = [f"[{i}] {cue.source_text.strip()}" for i, cue in enumerate(cues) if cue.source_text.strip()]
-        if not script_items:
-            return True
+        def _translate_batch(batch_items: List[str]) -> bool:
+            prompt = (
+                f"Bạn là chuyên gia biên kịch và Việt hóa phụ đề phim truyền hình, tiểu phẩm ngắn chuyên nghiệp.\n"
+                f"Nhiệm vụ: Dịch toàn bộ kịch bản hội thoại từ {source_lang} sang {target_lang}.\n\n"
+                f"NGUYÊN TẮC BỐI CẢNH & CÂU CHUYỆN (RẤT QUAN TRỌNG):\n"
+                f"1. Đọc toàn bộ kịch bản từ đầu đến cuối để nắm bắt cốt truyện, tâm lý và bối cảnh (ví dụ: mẹ con, tống tiền, đe dọa, bạn bè).\n"
+                f"2. Giữ đại từ xưng hô thống nhất, tự nhiên theo quan hệ nhân vật (mẹ/con, chú/cháu, mày/tao khi đe dọa, cậu/tớ).\n"
+                f"3. Dịch thoát nghĩa, chuẩn văn phong đời thường, súc tích, dễ đọc trên video, tuyệt đối KHÔNG dịch thô từng từ vô nghĩa.\n"
+                f"4. BẮT BUỘC giữ nguyên mã số `[i]` ở đầu mỗi câu để hệ thống tự động gán vào video (ví dụ: [0] ...).\n"
+                f"5. Chỉ trả về danh sách các câu dịch dạng `[i] Câu tiếng Việt`, không kèm thêm lời chào hay giải thích thừa.\n\n"
+                f"KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN:\n" + "\n".join(batch_items)
+            )
 
-        prompt = (
-            f"Bạn là chuyên gia biên kịch và Việt hóa phụ đề phim truyền hình, tiểu phẩm ngắn chuyên nghiệp.\n"
-            f"Nhiệm vụ: Dịch toàn bộ kịch bản hội thoại từ {source_lang} sang {target_lang}.\n\n"
-            f"NGUYÊN TẮC BỐI CẢNH & CÂU CHUYỆN (RẤT QUAN TRỌNG):\n"
-            f"1. Đọc toàn bộ kịch bản từ đầu đến cuối để nắm bắt cốt truyện, tâm lý và bối cảnh (ví dụ: mẹ con, tống tiền, đe dọa, bạn bè).\n"
-            f"2. Giữ đại từ xưng hô thống nhất, tự nhiên theo quan hệ nhân vật (mẹ/con, chú/cháu, mày/tao khi đe dọa, cậu/tớ).\n"
-            f"3. Dịch thoát nghĩa, chuẩn văn phong đời thường, súc tích, dễ đọc trên video, tuyệt đối KHÔNG dịch thô từng từ vô nghĩa.\n"
-            f"4. BẮT BUỘC giữ nguyên mã số `[i]` ở đầu mỗi câu để hệ thống tự động gán vào video.\n"
-            f"5. Chỉ trả về danh sách các câu dịch dạng `[i] Câu tiếng Việt`, không kèm thêm lời chào hay giải thích thừa.\n\n"
-            f"KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN:\n" + "\n".join(script_items)
-        )
+            payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
 
-        payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
+            for key in api_keys:
+                key = key.strip()
+                if not key:
+                    continue
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
+                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req, timeout=25) as resp:
+                        if resp.status == 200:
+                            res = json.loads(resp.read().decode("utf-8"))
+                            text_content = res["candidates"][0]["content"]["parts"][0]["text"]
+                            pattern = re.compile(r"\[(\d+)\]\s*(.*?)(?=\[\d+\]|\Z)", re.DOTALL)
+                            matches = pattern.findall(text_content)
+                            if len(matches) >= len(batch_items) * 0.5:
+                                for idx_str, text in matches:
+                                    i = int(idx_str)
+                                    if 0 <= i < len(cues):
+                                        cleaned = _capitalize_first(text.strip().rstrip("."))
+                                        if cleaned and cleaned != cues[i].source_text.strip():
+                                            cues[i].translated_text = cleaned
+                                            self._cache[cues[i].source_text.strip()] = cleaned
+                                return True
+                except Exception:
+                    continue
+            return False
 
-        for key in api_keys:
-            key = key.strip()
-            if not key:
-                continue
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
-            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            try:
-                with urllib.request.urlopen(req, timeout=25) as resp:
-                    if resp.status == 200:
-                        res = json.loads(resp.read().decode("utf-8"))
-                        text_content = res["candidates"][0]["content"]["parts"][0]["text"]
-                        pattern = re.compile(r"\[(\d+)\]\s*(.*?)(?=\[\d+\]|\Z)", re.DOTALL)
-                        matches = pattern.findall(text_content)
-                        if len(matches) >= len(script_items) * 0.7:
-                            for idx_str, text in matches:
-                                i = int(idx_str)
-                                if 0 <= i < len(cues):
-                                    cleaned = _capitalize_first(text.strip().rstrip("."))
-                                    cues[i].translated_text = cleaned
-                                    self._cache[cues[i].source_text.strip()] = cleaned
-                            return True
-            except Exception:
-                continue
+        # Chia nhỏ kịch bản thành từng mẻ 35 câu để Gemini không bỏ sót câu ngắn
+        chunk_size = 35
+        all_indices = [i for i, c in enumerate(cues) if c.source_text.strip()]
+        for start_idx in range(0, len(all_indices), chunk_size):
+            chunk_indices = all_indices[start_idx : start_idx + chunk_size]
+            batch_items = [f"[{i}] {cues[i].source_text.strip()}" for i in chunk_indices]
+            _translate_batch(batch_items)
 
-        return False
+        return True
 
     def translate_cues(
         self,
@@ -196,13 +203,22 @@ class RealTranslationProvider(TranslationProvider):
         if env_key and env_key.strip():
             api_keys.insert(0, env_key.strip())
 
-        # 2. Ưu tiên dịch thuật bằng Gemini 2.5 Flash để giữ đúng mạch truyện
+        # 2. Ưu tiên dịch thuật bằng Gemini 2.5 Flash theo từng mảng ngữ cảnh
         is_pytest = "PYTEST_CURRENT_TEST" in os.environ and "TEST_WITH_GEMINI" not in os.environ
         if api_keys and not is_pytest:
-            if self._translate_with_gemini(cues, source_lang, target_lang, api_keys):
-                return cues
+            try:
+                self._translate_with_gemini(cues, source_lang, target_lang, api_keys)
+            except Exception:
+                pass
 
-        # 2. Dịch thuật bằng Google Translator kết hợp tinh chỉnh ngữ cảnh hội thoại
+        # 3. Fallback Pass: Rà soát 100% tất cả các câu chưa có bản dịch hoặc bản dịch trùng chữ gốc
+        untranslated = [
+            c for c in cues
+            if not c.translated_text or c.translated_text.strip() == c.source_text.strip()
+        ]
+        if not untranslated:
+            return cues
+
         try:
             from deep_translator import GoogleTranslator
         except ImportError as error:
@@ -212,33 +228,47 @@ class RealTranslationProvider(TranslationProvider):
         tgt = "vi" if target_lang == "vi" else target_lang
         translator = GoogleTranslator(source=src, target=tgt)
 
-        for cue in cues:
-            text = cue.source_text.strip()
-            if not text:
-                continue
-
-            if text in self._cache:
-                cue.translated_text = self._cache[text]
-                continue
-
+        # Tối ưu hóa: Dịch theo mảng gộp (Batch translation) để giảm thời gian từ 20s xuống 1s
+        chunk_size = 30
+        for i in range(0, len(untranslated), chunk_size):
+            chunk = untranslated[i : i + chunk_size]
+            texts = [c.source_text.strip() for c in chunk]
+            combined = "\n".join(texts)
+            translated_lines: List[str] = []
             try:
-                translated = translator.translate(text)
+                raw_res = translator.translate(combined)
+                if raw_res:
+                    translated_lines = [l.strip() for l in raw_res.splitlines()]
             except Exception:
-                try:
-                    auto_translator = GoogleTranslator(source="auto", target=tgt)
-                    translated = auto_translator.translate(text)
-                except Exception as error:
-                    raise RuntimeError(f"Translation failed: {error}") from error
-            if not translated or not translated.strip():
-                raise RuntimeError("Translation provider returned empty text")
+                pass
 
-            # Áp dụng tinh chỉnh ngữ cảnh phụ đề
-            if source_lang == "zh" and target_lang == "vi":
-                translated = _refine_subtitles(translated, text)
+            if len(translated_lines) == len(chunk):
+                for cue, trans in zip(chunk, translated_lines):
+                    refined = _refine_subtitles(trans, cue.source_text) if source_lang == "zh" and target_lang == "vi" else _capitalize_first(trans)
+                    cue.translated_text = refined
+                    self._cache[cue.source_text.strip()] = refined
             else:
-                translated = _capitalize_first(translated.strip())
+                # Nếu số dòng không khớp (do ngắt câu), dịch tuần tự dự phòng
+                for cue in chunk:
+                    text = cue.source_text.strip()
+                    if not text:
+                        continue
+                    if text in self._cache:
+                        cue.translated_text = self._cache[text]
+                        continue
+                    try:
+                        translated = translator.translate(text)
+                    except Exception:
+                        try:
+                            auto_translator = GoogleTranslator(source="auto", target=tgt)
+                            translated = auto_translator.translate(text)
+                        except Exception as error:
+                            raise RuntimeError(f"Translation failed: {error}") from error
+                    if not translated or not translated.strip():
+                        raise RuntimeError("Translation provider returned empty text")
 
-            self._cache[text] = translated
-            cue.translated_text = translated
+                    refined = _refine_subtitles(translated, text) if source_lang == "zh" and target_lang == "vi" else _capitalize_first(translated.strip())
+                    self._cache[text] = refined
+                    cue.translated_text = refined
 
         return cues

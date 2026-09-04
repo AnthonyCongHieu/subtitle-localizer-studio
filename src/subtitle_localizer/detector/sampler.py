@@ -39,6 +39,7 @@ class AdaptiveFrameSampler:
         roi_norm: Optional[Tuple[float, float, float, float]] = None,
         max_duration_seconds: Optional[float] = None,
         diff_threshold: Optional[float] = None,
+        start_seconds: float = 0.0,
     ) -> Tuple[List[Any], List[float]]:
         """Mở video thực tế và trích xuất danh sách crops cùng mốc thời gian PTS."""
         import cv2
@@ -80,7 +81,9 @@ class AdaptiveFrameSampler:
             x1 = 0
             x2 = width
 
-        curr_frame_idx = 0
+        curr_frame_idx = max(0, int(start_seconds * fps))
+        if curr_frame_idx > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, curr_frame_idx)
         use_grab = hasattr(cap, "grab")
         active_diff_threshold = diff_threshold if diff_threshold is not None else self.diff_threshold
         prev_crop_gray: Optional[np.ndarray] = None

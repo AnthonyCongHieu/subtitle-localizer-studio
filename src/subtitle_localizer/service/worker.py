@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from subtitle_localizer.detector.boundary_refiner import FrameAccurateBoundaryRefiner
 from subtitle_localizer.detector.roi import compute_tight_roi_from_observations, propose_default_roi
 from subtitle_localizer.detector.sampler import AdaptiveFrameSampler
 from subtitle_localizer.domain.models import StageRunV1, SubtitleCueV1
@@ -18,8 +19,9 @@ class BackgroundWorker:
         self.repo = repo
         self.ocr_registry = OcrRegistry()
         self.translation_registry = TranslationRegistry()
-        self.reconstructor = CueReconstructor(min_cue_duration=0.20, lead_in=0.22, lead_out=0.38)
-        self.sampler = AdaptiveFrameSampler(sample_fps=3.0)
+        self.reconstructor = CueReconstructor(min_cue_duration=0.20, lead_in=0.0, lead_out=0.0)
+        self.boundary_refiner = FrameAccurateBoundaryRefiner()
+        self.sampler = AdaptiveFrameSampler(sample_fps=2.0, diff_threshold=3.5)
 
     def run_pipeline_synchronous(
         self,
@@ -61,6 +63,7 @@ class BackgroundWorker:
                 video_path=video_path,
                 roi_norm=roi_tuple,
                 max_duration_seconds=max_duration_seconds,
+                diff_threshold=3.5,
             )
             if not crops or not pts_list:
                 raise RuntimeError(f"No video frames could be decoded: {video_path}")
@@ -108,6 +111,46 @@ class BackgroundWorker:
                         pts_list=pts_list,
                         language=manifest.source_language,
                     )
+
+                # Auto Gap-Rescue Pass: Tự động phân tích các khoảng trống nghi ngờ giữa các câu
+                # và quét sâu để cứu các câu phụ đề mờ hoặc chớp nhoáng (Zero-Miss Automation)
+                if observations and len(observations) >= 4:
+                    pre_cues = self.reconstructor.build_cues(observations)
+                    if len(pre_cues) >= 2:
+                        gap_intervals = []
+                        for i in range(len(pre_cues) - 1):
+                            dur = pre_cues[i + 1].start_pts - pre_cues[i].end_pts
+                            if 1.8 <= dur <= 5.0:
+                                gap_intervals.append((pre_cues[i].end_pts, pre_cues[i + 1].start_pts))
+
+                        if gap_intervals:
+                            rescue_crops = []
+                            rescue_pts = []
+                            for g_start, g_end in gap_intervals[:12]:
+                                g_crops, g_pts = self.sampler.sample_video_frames(
+                                    video_path=video_path,
+                                    roi_norm=roi_tuple,
+                                    max_duration_seconds=g_end,
+                                    diff_threshold=1.5,
+                                    start_seconds=g_start,
+                                )
+                                for c, p in zip(g_crops, g_pts):
+                                    if g_start < p < g_end:
+                                        rescue_crops.append(c)
+                                        rescue_pts.append(p)
+
+                            if rescue_crops:
+                                try:
+                                    rescue_obs = ocr_provider.recognize(
+                                        crops=rescue_crops,
+                                        pts_list=rescue_pts,
+                                        language=manifest.source_language,
+                                    )
+                                    if rescue_obs:
+                                        observations.extend(rescue_obs)
+                                        observations.sort(key=lambda o: o.pts)
+                                except Exception:
+                                    pass
             finally:
                 ocr_provider.unload()
                 ocr_provider = None
@@ -153,6 +196,24 @@ class BackgroundWorker:
             self.repo.save_stage_run(project_id, stage3)
 
             cues = self.reconstructor.build_cues(observations)
+
+            # Stage 3.5: Frame-Accurate Boundary Refinement
+            # Tinh chỉnh mốc thời gian chính xác đến từng khung hình (< 33ms)
+            # bằng kỹ thuật Single-Pass Sequential Decode + Sobel Gradient Spike
+            if cues and roi_tuple:
+                stage_refine = StageRunV1(
+                    stage_name="boundary_refinement",
+                    status="running",
+                    progress=0.78,
+                    metrics={"label": f"Tinh chỉnh ranh giới Frame-Accurate ({len(cues)} câu)..."},
+                )
+                self.repo.save_stage_run(project_id, stage_refine)
+
+                self.boundary_refiner.roi_norm = roi_tuple
+                cues = self.boundary_refiner.refine_cues(
+                    video_path=str(video_path),
+                    cues=cues,
+                )
 
             # Stage 4: Translation Stage (Dịch sang tiếng Việt)
             if manifest.target_language and manifest.target_language != effective_source_lang and manifest.target_language != "none":

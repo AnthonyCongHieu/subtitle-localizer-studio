@@ -371,6 +371,7 @@ class RapidOcrProvider(OcrProvider):
                     )
                 ):
                     best_observation = candidate_observation
+
             if best_observation is not None:
                 best_observation.confidence = round(best_observation.confidence, 3)
                 best_observation.preprocessing_metadata["candidate_disagreement"] = len(set(candidate_texts)) > 1
