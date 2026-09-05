@@ -231,7 +231,7 @@ export const CueTable: React.FC<CueTableProps> = ({
                   ? 'bg-indigo-600 text-white'
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
-              title="Thẻ Chi Tiết (Card View)"
+              title="Chế độ thẻ (Card View)"
             >
               <List className="w-3.5 h-3.5" />
             </button>

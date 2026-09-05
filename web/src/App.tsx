@@ -19,7 +19,8 @@ import { DashboardBatchHub } from './components/project/DashboardBatchHub';
 import { PresetManagerModal } from './components/project/PresetManagerModal';
 import { NewProjectModal } from './components/project/NewProjectModal';
 import { DownloadQueueHub } from './components/project/DownloadQueueHub';
-import { GlobalActivityLogger, appLogger } from './components/common/GlobalActivityLogger';
+import { VideoDownloaderHub } from './components/project/VideoDownloaderHub';
+import { GlobalActivityLogger, appLogger, useAppLoggerCount } from './components/common/GlobalActivityLogger';
 import {
   Layers,
   CheckCircle2,
@@ -34,11 +35,15 @@ import {
   Sliders,
   Ratio,
   ListPlus,
+  Download,
+  Activity,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
-  // Chế độ màn hình: Màn hình Ngoài (Dashboard), Giao diện Studio Chi Tiết, hoặc Hàng Đợi Tải Phim
-  const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue'>('dashboard');
+  const loggerCount = useAppLoggerCount();
+  // Chế độ màn hình: Màn hình Ngoài (Dashboard), Giao diện Studio, Hàng Đợi, hoặc Trung Tâm Tải Video
+  const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader'>('dashboard');
+  const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>('search');
 
   // Quản lý Chuẩn Cấu Hình (Preset Profiles)
   const [presets, setPresets] = useState<PresetProfile[]>(() => getStoredPresets());
@@ -190,7 +195,7 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Chọn dự án để xử lý video và chuyển sang giao diện Studio chi tiết
+  // Chọn dự án để xử lý video và chuyển sang giao diện Studio
   const selectProject = (proj: ProjectManifestV1) => {
     setActiveProject(proj);
     setLocalVideoFile(null);
@@ -404,12 +409,33 @@ export const App: React.FC = () => {
   return (
     <div className="h-screen w-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden select-none">
       {/* ========================================================================= */}
-      {/* 1. HÀNG ĐỢI TẢI PHIM / DASHBOARD / GIAO DIỆN STUDIO CHI TIẾT */}
+      {/* 1. VIEW ROUTER: DOWNLOADER / QUEUE / DASHBOARD / STUDIO */}
       {/* ========================================================================= */}
-      {viewMode === 'queue' ? (
-        <DownloadQueueHub
+      {viewMode === 'downloader' ? (
+        <VideoDownloaderHub
+          initialTab={downloaderTab}
           onSwitchToDashboard={() => setViewMode('dashboard')}
+          onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
+          onRefreshProjects={loadProjects}
+          onBatchProjectsCreated={(newProjs) => {
+            setProjects((prev) => [...prev, ...newProjs]);
+          }}
         />
+      ) : viewMode === 'queue' ? (
+        /* Hàng Đợi Tải Phim: Tích hợp DownloadQueueHub và VideoDownloaderHub */
+        Boolean(false) ? (
+          <DownloadQueueHub onSwitchToDashboard={() => setViewMode('dashboard')} />
+        ) : (
+          <VideoDownloaderHub
+            initialTab="queue"
+            onSwitchToDashboard={() => setViewMode('dashboard')}
+            onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
+            onRefreshProjects={loadProjects}
+            onBatchProjectsCreated={(newProjs) => {
+              setProjects((prev) => [...prev, ...newProjs]);
+            }}
+          />
+        )
       ) : viewMode === 'dashboard' ? (
         <DashboardBatchHub
           projects={projects}
@@ -422,31 +448,54 @@ export const App: React.FC = () => {
           onBatchProjectsCreated={(newProjs) => {
             setProjects((prev) => [...prev, ...newProjs]);
           }}
-          onOpenQueue={() => setViewMode('queue')}
+          onOpenQueue={() => {
+            setDownloaderTab('queue');
+            setViewMode('downloader');
+          }}
+          onOpenDownloader={(tab) => {
+            setDownloaderTab(tab || 'search');
+            setViewMode('downloader');
+          }}
         />
       ) : (
         /* ========================================================================= */
-        /* 2. GIAO DIỆN STUDIO CHI TIẾT */
+        /* 2. GIAO DIỆN STUDIO */
         /* ========================================================================= */
         <>
           {/* Header Studio Chuẩn NLE Có Nút "Quay Lại Dashboard" Nổi Bật */}
-          <header className="h-11 shrink-0 border-b border-slate-800/80 bg-slate-900/95 backdrop-blur px-4 flex items-center justify-between z-50">
+          <header className="h-12 shrink-0 border-b border-slate-800 bg-slate-900/95 backdrop-blur px-4 flex items-center justify-between z-50">
             {/* Trái: Nút Quay Lại Dashboard + Logo + Bộ Chọn Dự Án & Chuẩn Nhanh */}
             <div className="flex items-center gap-3">
-              {/* Nút Quay Lại Dashboard (Màn hình ngoài) */}
+              {/* Nút Quay Lại Dashboard */}
               <button
                 onClick={() => setViewMode('dashboard')}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/60 text-indigo-300 text-xs font-semibold shadow transition active:scale-95"
-                title="Quay lại Màn hình Ngoài (Dashboard & Batch Hub)"
+                title="Quay lại Dashboard"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
                 <LayoutDashboard className="w-3.5 h-3.5" />
                 <span>Dashboard</span>
               </button>
 
-              {/* Nút Hàng Đợi Tải Phim Nâng Cao */}
+              {/* Nút Trung Tâm Tải Video */}
               <button
-                onClick={() => setViewMode('queue')}
+                onClick={() => {
+                  setDownloaderTab('direct');
+                  setViewMode('downloader');
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/60 text-emerald-300 text-xs font-semibold shadow transition active:scale-95"
+                title="Tải video từ liên kết (Hồng Quả, YouTube, XHS...)"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Tải Video</span>
+              </button>
+
+              {/* Nút Hàng Đợi Tải Phim */}
+              <button
+                onClick={() => {
+                  setDownloaderTab('queue');
+                  setViewMode('downloader');
+                }}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold shadow transition active:scale-95"
                 title="Mở Trang Quản Lý Hàng Đợi Tải Phim"
               >
@@ -461,7 +510,7 @@ export const App: React.FC = () => {
                   <Layers className="w-3.5 h-3.5" />
                 </div>
                 <span className="text-xs font-bold text-white tracking-wide uppercase hidden sm:inline">
-                  Studio Chi Tiết
+                  Studio
                 </span>
               </div>
 
@@ -517,7 +566,7 @@ export const App: React.FC = () => {
               )}
             </div>
 
-            {/* Phải: Trạng thái Backend & Nút Bắt đầu Quét */}
+            {/* Phải: Trạng thái Backend, Nhật ký & Nút Bắt đầu Quét */}
             <div className="flex items-center gap-2.5">
               {/* Menu Tỉ Lệ Khung Hình Nhanh Trên Header */}
               <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-md text-xs">
@@ -526,7 +575,7 @@ export const App: React.FC = () => {
                   value={aspectRatio}
                   onChange={(e) => setAspectRatio(e.target.value as AspectRatioType)}
                   className="bg-transparent text-slate-300 font-mono text-[10px] focus:outline-none cursor-pointer"
-                  title="Tỉ lệ khung hình Canvas (CapCut)"
+                  title="Tỉ lệ khung hình Canvas"
                 >
                   <option value="original" className="bg-slate-900">Gốc</option>
                   <option value="16:9" className="bg-slate-900">16:9</option>
@@ -555,6 +604,21 @@ export const App: React.FC = () => {
                   <span className="text-slate-400">Live</span>
                 </div>
               </div>
+
+              {/* Nút Mở Nhật Ký Hoạt Động */}
+              <button
+                onClick={() => appLogger.toggle()}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer shadow-sm"
+                title="Nhật ký hoạt động hệ thống"
+              >
+                <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="hidden sm:inline">Nhật ký</span>
+                {loggerCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold">
+                    {loggerCount}
+                  </span>
+                )}
+              </button>
 
               {/* Nút hành động chính: Bắt đầu quét */}
               <button

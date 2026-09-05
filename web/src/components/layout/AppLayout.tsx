@@ -131,7 +131,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
                   )}
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  Khi bật Gemini AI, toàn bộ kịch bản phim được dịch theo bối cảnh thoại tổng thể, xưng hô chuẩn xác (cậu/tớ, anh/em), từ lóng mạng xã hội và nhịp điệu ngắn gọn của phụ đề video.
+                  Dịch thuật AI theo bối cảnh hội thoại, chuẩn xưng hô và nhịp điệu phụ đề.
                 </p>
               </div>
 

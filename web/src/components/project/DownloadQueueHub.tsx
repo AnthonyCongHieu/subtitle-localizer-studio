@@ -21,7 +21,10 @@ import {
   Film,
   Zap,
   Image,
+  Sliders,
+  Activity,
 } from 'lucide-react';
+import { appLogger, useAppLoggerCount } from '../common/GlobalActivityLogger';
 
 export interface DownloadQueueHubProps {
   onSwitchToDashboard: () => void;
@@ -32,6 +35,7 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
   onSwitchToDashboard,
   onOpenDownloadModal,
 }) => {
+  const loggerCount = useAppLoggerCount();
   const [queueTasks, setQueueTasks] = useState<DownloadQueueTaskItem[]>([]);
   const [isQueuePaused, setIsQueuePaused] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -190,9 +194,9 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
             </div>
             <div>
               <h1 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                <span>Hàng Đợi Tải Phim Nâng Cao</span>
+                <span>Hàng Đợi Tải Phim</span>
                 <span className="px-2 py-0.2 rounded-full bg-indigo-950 border border-indigo-600/50 text-indigo-300 text-[10px] font-semibold">
-                  Multi-Drama Queue
+                  Queue
                 </span>
               </h1>
             </div>
@@ -220,12 +224,12 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
             {isQueuePaused ? (
               <>
                 <Play className="w-3.5 h-3.5 fill-current" />
-                <span>Tiếp tục tất cả (Resume All)</span>
+                <span>Tiếp tục</span>
               </>
             ) : (
               <>
                 <Pause className="w-3.5 h-3.5 fill-current" />
-                <span>Tạm dừng tất cả (Pause All)</span>
+                <span>Tạm dừng</span>
               </>
             )}
           </button>
@@ -239,13 +243,28 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-indigo-400' : ''}`} />
           </button>
 
+          {/* Nút Nhật ký đồng bộ */}
+          <button
+            onClick={() => appLogger.toggle()}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer shadow-sm active:scale-95"
+            title="Nhật ký hoạt động hệ thống"
+          >
+            <Activity className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">Nhật ký</span>
+            {loggerCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold">
+                {loggerCount}
+              </span>
+            )}
+          </button>
+
           {onOpenDownloadModal && (
             <button
               onClick={onOpenDownloadModal}
               className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow transition active:scale-95"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Thêm Phim Vào Hàng Đợi</span>
+              <span>Thêm Phim</span>
             </button>
           )}
         </div>
@@ -426,6 +445,20 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
                           / {target.total_episodes || item.total_eps || 0} tập
                         </span>
                       </div>
+
+                      {item.target_resolution && (
+                        <div className="flex items-center gap-1 text-cyan-300 font-medium bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/60 text-[10px]">
+                          <Sliders className="w-3 h-3 text-cyan-400" />
+                          <span>Độ phân giải: <strong className="text-white uppercase">{item.target_resolution}</strong></span>
+                        </div>
+                      )}
+
+                      {item.concurrency && item.concurrency > 1 && (
+                        <div className="flex items-center gap-1 text-amber-300 font-medium bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/60 text-[10px]">
+                          <Zap className="w-3 h-3 text-amber-400" />
+                          <span>Đa luồng: <strong className="text-white">{item.concurrency} luồng</strong></span>
+                        </div>
+                      )}
 
                       {item.output_dir && (
                         <div

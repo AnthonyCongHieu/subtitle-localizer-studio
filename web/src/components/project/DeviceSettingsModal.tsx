@@ -196,14 +196,14 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({ isOpen
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-bold text-white">Cấu Hình Thiết Bị & Chống Giới Hạn IP</h3>
+                <h3 className="text-sm font-bold text-white">Cài Đặt Thiết Bị & Mạng</h3>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-600/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1">
                   <Shield className="w-3 h-3" />
-                  <span>Hồng Quả / ByteDance</span>
+                  <span>Hồng Quả</span>
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400">
-                Quản lý định danh thiết bị ảo, chu kỳ xoay vòng chống block và cài đặt proxy
+              <p className="text-xs text-slate-400">
+                Định danh thiết bị Android giả lập và định tuyến Proxy
               </p>
             </div>
           </div>
@@ -318,7 +318,7 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({ isOpen
                 className="flex-1 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold rounded-xl shadow-lg transition flex items-center justify-center gap-2 active:scale-95"
               >
                 <RefreshCw className={`w-4 h-4 ${isRotatingDevice ? 'animate-spin' : ''}`} />
-                <span>{isRotatingDevice ? 'Đang gửi đăng ký lên ByteDance...' : '🔄 Cấp Thiết Bị Mới Ngay'}</span>
+                <span>{isRotatingDevice ? 'Đang cấp...' : 'Cấp Thiết Bị Mới'}</span>
               </button>
 
               <button
@@ -369,14 +369,14 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({ isOpen
           <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
             <label className="text-xs font-bold text-white flex items-center gap-1.5">
               <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-              Tần suất tự động cấp thiết bị mới khi tải tập:
+              Chu kỳ tự động xoay thiết bị:
             </label>
             <div className="grid grid-cols-4 gap-2">
               {[
-                { value: 1, label: 'Mỗi 1 tập', desc: 'Khuyên dùng', color: 'text-emerald-400' },
-                { value: 3, label: 'Mỗi 3 tập', desc: 'Tiết kiệm', color: 'text-cyan-400' },
-                { value: 5, label: 'Mỗi 5 tập', desc: 'Tập dài', color: 'text-amber-400' },
-                { value: 0, label: 'Khi lỗi', desc: 'Chỉ khi chặn', color: 'text-slate-400' },
+                { value: 1, label: '1 tập', desc: 'Mặc định', color: 'text-emerald-400' },
+                { value: 3, label: '3 tập', desc: 'Tiết kiệm', color: 'text-cyan-400' },
+                { value: 5, label: '5 tập', desc: 'Tập dài', color: 'text-amber-400' },
+                { value: 0, label: 'Tắt', desc: 'Khi lỗi', color: 'text-slate-400' },
               ].map((opt) => (
                 <button
                   key={opt.value}
@@ -396,23 +396,20 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({ isOpen
                 </button>
               ))}
             </div>
-            <p className="text-[10px] text-slate-500">
-              * Hệ thống chủ động cấp danh tính thiết bị Android mới từ ByteDance theo chu kỳ để triệt tiêu việc tích lũy lịch sử request.
-            </p>
           </div>
 
           {/* Card 3: Tốc độ & Giãn cách giữa các tập */}
           <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
             <label className="text-xs font-bold text-white flex items-center gap-1.5">
               <Gauge className="w-3.5 h-3.5 text-cyan-400" />
-              Tốc độ & Giãn cách nghỉ (Jitter Delay) giữa các tập:
+              Giãn cách giữa các tập:
             </label>
             <div className="grid grid-cols-4 gap-2">
               {[
-                { value: 0.8, label: 'Tốc độ cao', desc: 'Ít tập', color: 'text-rose-400' },
-                { value: 2.0, label: 'Bình thường', desc: 'Khuyên dùng', color: 'text-emerald-400' },
-                { value: 3.5, label: 'Cẩn trọng', desc: '>50 tập', color: 'text-amber-400' },
-                { value: 6.0, label: 'Siêu an toàn', desc: 'Chống block', color: 'text-blue-400' },
+                { value: 0.8, label: 'Nhanh', desc: '0.8s', color: 'text-rose-400' },
+                { value: 2.0, label: 'Mặc định', desc: '2.0s', color: 'text-emerald-400' },
+                { value: 3.5, label: 'Cẩn trọng', desc: '3.5s', color: 'text-amber-400' },
+                { value: 6.0, label: 'An toàn', desc: '6.0s', color: 'text-blue-400' },
               ].map((opt) => (
                 <button
                   key={opt.value}
@@ -573,9 +570,6 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({ isOpen
                 )}
               </div>
             )}
-            <p className="text-[10px] text-slate-500">
-              * Proxy được áp dụng đồng bộ xuyên suốt 4 lớp mạng: requests, urllib, ffmpeg và yt-dlp.
-            </p>
           </div>
         </div>
 

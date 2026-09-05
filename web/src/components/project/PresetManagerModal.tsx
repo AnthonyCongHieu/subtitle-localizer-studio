@@ -199,10 +199,10 @@ export const PresetManagerModal: React.FC<PresetManagerModalProps> = ({
             </div>
             <div>
               <h2 className="text-sm font-bold text-white tracking-wide uppercase">
-                Quản Lý Chuẩn Cấu Hình (Presets Profile)
+                Quản Lý Chuẩn Cấu Hình (Preset)
               </h2>
-              <p className="text-[11px] text-slate-400">
-                Lưu sẵn tỉ lệ khung hình, ngôn ngữ dịch, kiểu che, lật video, zoom % và vùng ROI để áp dụng 1-click
+              <p className="text-xs text-slate-400">
+                Cấu hình tỉ lệ khung hình, kiểu che, lật và nhận diện phụ đề
               </p>
             </div>
           </div>

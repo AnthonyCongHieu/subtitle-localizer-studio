@@ -12,9 +12,11 @@ import threading
 import subprocess
 import urllib.request
 import urllib.parse
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure package directory in sys.path for liushen
 DOWNLOADER_DIR = Path(__file__).resolve().parent.parent / "downloader"
@@ -38,7 +40,11 @@ USER_AGENT = (
 )
 
 def sanitize_filename(name: str) -> str:
-    return re.sub(r'[\\/*?:"<>|]', "_", name).strip()
+    cleaned = re.sub(r'[\\/*?:"<>|]', "_", name).strip(" .\t\r\n")
+    cleaned = re.sub(r'\.+', '.', cleaned).strip(" .\t\r\n")
+    if len(cleaned) > 100:
+        cleaned = cleaned[:100].strip(" .\t\r\n")
+    return cleaned or "video"
 
 def test_proxy_connection(proxy_url: str) -> Dict[str, Any]:
     """Test if a proxy is reachable and return latency and external IP compared to direct IP."""
@@ -121,6 +127,73 @@ def _open_url_with_fallback(req: urllib.request.Request, proxy: Optional[str] = 
             raise
     return urllib.request.urlopen(req, timeout=timeout)
 
+
+def extract_ytdlp_resolutions(info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Trích xuất toàn bộ các độ phân giải khả dụng và ước tính dung lượng Real Data (MB)."""
+    formats = info.get("formats") or []
+    duration = info.get("duration") or 0
+    best_audio_size = 0
+    for f in formats:
+        if f.get("acodec") != "none" and f.get("vcodec") == "none":
+            sz = f.get("filesize") or f.get("filesize_approx") or 0
+            if not sz and f.get("tbr") and duration:
+                sz = int((f["tbr"] * 1024 / 8) * duration)
+            if sz > best_audio_size:
+                best_audio_size = sz
+
+    by_height: Dict[int, Dict[str, Any]] = {}
+    for f in formats:
+        h = f.get("height")
+        vcodec = f.get("vcodec")
+        if not h or vcodec == "none":
+            continue
+        fps = f.get("fps") or 30
+        sz = f.get("filesize") or f.get("filesize_approx") or 0
+        if not sz and (f.get("tbr") or f.get("vbr")) and duration:
+            br = f.get("tbr") or f.get("vbr")
+            sz = int((br * 1024 / 8) * duration)
+        if f.get("acodec") == "none":
+            sz += best_audio_size
+
+        fps_int = int(round(fps))
+        is_high_fps = fps_int >= 50
+        fps_suffix = f"{fps_int}" if is_high_fps else ""
+        
+        if h >= 2160:
+            tier = f"4K Ultra HD{' ' + str(fps_int) + 'fps' if is_high_fps else ''}"
+        elif h >= 1440:
+            tier = f"2K QHD{' ' + str(fps_int) + 'fps' if is_high_fps else ''}"
+        elif h >= 1080:
+            tier = f"Full HD{' ' + str(fps_int) + 'fps' if is_high_fps else ''}"
+        elif h >= 720:
+            tier = f"HD{' ' + str(fps_int) + 'fps' if is_high_fps else ''}"
+        elif h >= 480:
+            tier = f"SD{' ' + str(fps_int) + 'fps' if is_high_fps else ''}"
+        else:
+            tier = f"{fps_int}fps" if is_high_fps else ""
+
+        label = f"{h}p{fps_suffix}" + (f" ({tier})" if tier else "")
+
+        key = int(h)
+        size_mb = round(sz / (1024 * 1024), 2) if sz > 0 else 0
+        if key not in by_height or size_mb > by_height[key]["size_mb"] or (fps > by_height[key].get("fps", 0) and size_mb >= by_height[key]["size_mb"] * 0.9):
+            by_height[key] = {
+                "id": f"{h}p",
+                "height": key,
+                "label": label,
+                "size_mb": size_mb,
+                "fps": fps,
+            }
+
+    sorted_res = sorted(by_height.values(), key=lambda x: x["height"], reverse=True)
+    if not sorted_res:
+        fallback_size = round((info.get("filesize") or info.get("filesize_approx") or 0) / (1024 * 1024), 2)
+        return [
+            {"id": "best", "label": "Chất lượng cao nhất (Tự động)", "size_mb": fallback_size}
+        ]
+    return sorted_res
+
+
 def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, Any]:
     """Phân tích URL hoặc từ khóa để xác định nguồn và thông tin phim/video."""
     target = target.strip()
@@ -186,6 +259,14 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
                 cover_url = detail.get("series_cover", "")
                 intro = detail.get("series_intro", "")
 
+                probe_res = {}
+                if vid_list:
+                    try:
+                        from subtitle_localizer.downloader.hongguo_parser import probe_video_resolutions
+                        probe_res = probe_video_resolutions(vid_list[0], proxy=proxy)
+                    except Exception as exc:
+                        print(f"[Downloader] Probe video resolutions warning: {exc}")
+
                 return {
                     "platform": "hongguo",
                     "series_id": series_id,
@@ -196,29 +277,86 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
                     "intro": intro,
                     "vid_count": len(vid_list),
                     "vid_list": vid_list,
+                    "resolutions": probe_res.get("resolutions", []) if isinstance(probe_res, dict) else [],
+                    "sample_probe": probe_res if isinstance(probe_res, dict) else {},
                 }
 
-    # 2. Nhận diện các nền tảng video khác qua yt-dlp (YouTube, Bilibili, Douyin, etc.)
-    if target.startswith("http://") or target.startswith("https://"):
+    # 2. Nhận diện Xiaohongshu (Tiểu Hồng Thư / RedNote) - Bóc tách video 1080p sạch không Watermark
+    if "xiaohongshu.com" in target.lower() or "xhslink.com" in target.lower():
         try:
-            cmd = ["yt-dlp", "--dump-json", "--no-warnings"]
+            from subtitle_localizer.downloader.xhs_extractor import parse_xhs_note_info
+            from subtitle_localizer.downloader.platform_auth import platform_auth
+            xhs_cookie = platform_auth.get_cookie("xiaohongshu")
+            return parse_xhs_note_info(target, cookie=xhs_cookie, proxy=proxy)
+        except Exception as xhs_err:
+            print(f"[Downloader] XHS parse warning: {xhs_err}")
+
+    # 3. Nhận diện Bilibili qua Wbi Signer & DASH Stream Prober (Không cần tài khoản)
+    is_bilibili = "bilibili.com" in target.lower() or "b23.tv" in target.lower() or bool(re.search(r'BV[0-9a-zA-Z]{10}', target))
+    if is_bilibili:
+        try:
+            from subtitle_localizer.downloader.bilibili_extractor import probe_bilibili_video_details
+            from subtitle_localizer.downloader.platform_auth import platform_auth
+            bili_cookie = platform_auth.get_cookie("bilibili") or platform_auth.ensure_bilibili_guest_cookies()
+            return probe_bilibili_video_details(target, cookie=bili_cookie, proxy=proxy)
+        except Exception as bili_err:
+            print(f"[Downloader] Bilibili native probe warning: {bili_err}, falling back to yt-dlp...")
+
+    # 4. Nhận diện các nền tảng video khác qua yt-dlp (YouTube, Facebook, Douyin, TikTok, etc.)
+    if target.startswith("http://") or target.startswith("https://"):
+        is_youtube = any(d in target.lower() for d in ("youtube.com", "youtu.be"))
+        try:
+            cmd = [sys.executable, "-m", "yt_dlp", "--dump-json", "--no-warnings"]
+            if is_youtube:
+                cmd.extend(["--extractor-args", "youtube:player_client=web_embedded,android"])
+                if shutil.which("node"):
+                    cmd.extend(["--js-runtimes", "node"])
+            elif is_bilibili:
+                cmd.extend(["--referer", "https://www.bilibili.com/"])
             if proxy and str(proxy).strip():
                 cmd.extend(["--proxy", proxy.strip()])
             cmd.append(target)
-            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20, encoding="utf-8", errors="replace")
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, encoding="utf-8", errors="replace")
             if proc.returncode != 0 and proxy:
                 err_lower = proc.stderr.lower()
-                if "10061" in err_lower or "unable to connect to proxy" in err_lower or "proxyerror" in err_lower or "refused" in err_lower:
+                if any(k in err_lower for k in ("10061", "unable to connect to proxy", "proxyerror", "refused", "timed out")):
                     print(f"[Downloader] yt-dlp parse proxy {proxy} failed, retrying directly...")
-                    cmd_direct = ["yt-dlp", "--dump-json", "--no-warnings", target]
-                    proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20, encoding="utf-8", errors="replace")
+                    cmd_direct = [sys.executable, "-m", "yt_dlp", "--dump-json", "--no-warnings"]
+                    if is_youtube:
+                        cmd_direct.extend(["--extractor-args", "youtube:player_client=web_embedded,android"])
+                        if shutil.which("node"):
+                            cmd_direct.extend(["--js-runtimes", "node"])
+                    elif is_bilibili:
+                        cmd_direct.extend(["--referer", "https://www.bilibili.com/"])
+                    cmd_direct.append(target)
+                    proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, encoding="utf-8", errors="replace")
+
+            # Nếu bị chặn 403 / login / cookies (đặc biệt với Facebook, YouTube, Bilibili):
+            # Tự động thử lấy cookies từ trình duyệt Chrome, Edge, Firefox
+            if proc.returncode != 0:
+                err_lower = proc.stderr.lower()
+                if any(k in err_lower for k in ("403", "forbidden", "sign in", "login", "cookie", "bot", "members-only")):
+                    for b in ("chrome", "edge", "firefox"):
+                        try:
+                            cmd_b = [sys.executable, "-m", "yt_dlp", "--dump-json", "--no-warnings", "--cookies-from-browser", b]
+                            if is_bilibili:
+                                cmd_b.extend(["--referer", "https://www.bilibili.com/"])
+                            cmd_b.append(target)
+                            proc_b = subprocess.run(cmd_b, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, encoding="utf-8", errors="replace")
+                            if proc_b.returncode == 0 and proc_b.stdout.strip():
+                                proc = proc_b
+                                break
+                        except Exception:
+                            pass
 
             if proc.returncode == 0 and proc.stdout.strip():
-                # Lấy dòng JSON đầu tiên nếu là playlist
                 first_line = proc.stdout.strip().split("\n")[0]
                 info = json.loads(first_line)
+                platform_detected = info.get("extractor_key", "generic").lower()
+                resolutions = extract_ytdlp_resolutions(info)
                 return {
                     "platform": "generic",
+                    "source_platform": platform_detected,
                     "url": target,
                     "title": info.get("title", "Video từ liên kết"),
                     "cover_url": info.get("thumbnail", ""),
@@ -226,7 +364,31 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
                     "total_episodes": 1,
                     "uploader": info.get("uploader", ""),
                     "ext": info.get("ext", "mp4"),
+                    "resolutions": resolutions,
                 }
+            else:
+                # Nếu là URL từ mạng xã hội phổ biến (Facebook, YouTube, Bilibili, TikTok, Douyin)
+                # Cho phép đưa vào hàng đợi với cấu hình dự phòng thay vì báo lỗi chặn
+                target_lower = target.lower()
+                if any(domain in target_lower for domain in ("facebook.com", "fb.watch", "youtube.com", "youtu.be", "bilibili.com", "douyin.com", "tiktok.com", "twitter.com", "x.com")):
+                    clean_name = target.split("?")[0].rstrip("/").split("/")[-1] or "video_social"
+                    return {
+                        "platform": "generic",
+                        "url": target,
+                        "title": f"Video ({clean_name})",
+                        "cover_url": "",
+                        "duration": 0,
+                        "total_episodes": 1,
+                        "uploader": "",
+                        "ext": "mp4",
+                        "resolutions": [
+                            {"id": "best", "label": "Chất lượng cao nhất (Tự động)", "size_mb": 0},
+                            {"id": "1080p", "label": "1080p (Full HD)", "size_mb": 0},
+                            {"id": "720p", "label": "720p (HD)", "size_mb": 0},
+                            {"id": "480p", "label": "480p (SD)", "size_mb": 0},
+                            {"id": "360p", "label": "360p", "size_mb": 0},
+                        ],
+                    }
         except Exception as e:
             print(f"[Downloader] yt-dlp parse error: {e}")
 
@@ -281,12 +443,15 @@ class DownloadTask:
     rate_limit_delay: float = 0.0
     rotate_device_each_ep: bool = True
     rotation_interval: Optional[int] = None
+    concurrency: int = 3
+    cookie_source: str = "none"
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
     auto_create_project: bool = True
     source_language: str = "zh"
     target_language: str = "vi"
+    target_resolution: str = "best"
     current_ep: int = 0
     created_projects: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -295,6 +460,14 @@ class DownloadTask:
         return self.task_id
 
     def __post_init__(self) -> None:
+        try:
+            self.concurrency = max(1, min(16, int(getattr(self, "concurrency", 3) or 3)))
+        except Exception:
+            self.concurrency = 3
+
+        if not getattr(self, "cookie_source", None):
+            self.cookie_source = "none"
+
         if self.target_info:
             if not self.title:
                 self.title = self.target_info.get("title", "")
@@ -355,12 +528,15 @@ class DownloadTask:
             "rate_limit_delay": self.rate_limit_delay,
             "rotate_device_each_ep": self.rotate_device_each_ep,
             "rotation_interval": self.rotation_interval,
+            "concurrency": self.concurrency,
+            "cookie_source": self.cookie_source,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "auto_create_project": self.auto_create_project,
             "source_language": self.source_language,
             "target_language": self.target_language,
+            "target_resolution": self.target_resolution,
             "current_ep": self.current_ep,
             "created_projects": self.created_projects,
         }
@@ -432,6 +608,9 @@ class DownloadManager:
         rate_limit_delay: float = 0.0,
         rotate_device_each_ep: bool = True,
         rotation_interval: Optional[int] = None,
+        target_resolution: str = "best",
+        concurrency: int = 3,
+        cookie_source: str = "none",
     ) -> DownloadTask:
         task_id = f"task_{uuid.uuid4().hex[:10]}"
         task = DownloadTask(
@@ -444,10 +623,13 @@ class DownloadManager:
             auto_create_project=auto_create_project,
             source_language=source_language,
             target_language=target_language,
+            target_resolution=target_resolution or "best",
             proxy=proxy,
             rate_limit_delay=rate_limit_delay,
             rotate_device_each_ep=rotate_device_each_ep,
             rotation_interval=rotation_interval,
+            concurrency=concurrency,
+            cookie_source=cookie_source or "none",
         )
         task._on_project_created = on_project_created
 
@@ -686,6 +868,9 @@ class DownloadManager:
         rate_limit_delay: float = 2.0,
         rotate_device_each_ep: bool = True,
         rotation_interval: Optional[int] = None,
+        target_resolution: str = "best",
+        concurrency: int = 3,
+        cookie_source: str = "none",
     ) -> None:
         with self.lock:
             if self._active_task_id or (self._current_task and self._current_task.get("status") == "running"):
@@ -716,6 +901,9 @@ class DownloadManager:
             rate_limit_delay=rate_limit_delay,
             rotate_device_each_ep=rotate_device_each_ep,
             rotation_interval=rotation_interval,
+            target_resolution=target_resolution,
+            concurrency=concurrency,
+            cookie_source=cookie_source,
         )
 
     def _get_vid_list(self, series_id: str, proxy: Optional[str] = None, total_eps: int = 1) -> List[str]:
@@ -826,6 +1014,21 @@ class DownloadManager:
                     task.message = f"Hoàn thành tải toàn bộ video của '{task.title}'!"
                     self._current_task = task.to_dict()
 
+            try:
+                from subtitle_localizer.downloader.download_history import record_downloaded_item
+                record_downloaded_item(task.series_id or task.task_id)
+                if task.title:
+                    record_downloaded_item(task.title)
+                if task.target_info:
+                    if task.target_info.get("bvid"):
+                        record_downloaded_item(task.target_info["bvid"])
+                    if task.target_info.get("id"):
+                        record_downloaded_item(str(task.target_info["id"]))
+                    if task.target_info.get("url"):
+                        record_downloaded_item(task.target_info["url"])
+            except Exception as hist_err:
+                pass
+
         except Exception as exc:
             with self.lock:
                 if task.status != "cancelled":
@@ -834,12 +1037,122 @@ class DownloadManager:
                     task.completed_at = time.time()
                     task.message = f"Lỗi tải video: {exc}"
                     self._current_task = task.to_dict()
-            print(f"[Downloader] Task {task.task_id} failed: {exc}")
+            try:
+                print(f"[Downloader] Task {task.task_id} failed: {exc}")
+            except Exception:
+                pass
 
         finally:
+            try:
+                from subtitle_localizer.downloader.platform_auth import platform_auth
+                platform_auth.cleanup_temp_files()
+            except Exception:
+                pass
             with self._condition:
                 self._active_task_id = None
                 self._condition.notify_all()
+
+    def _create_episode_manifest(self, task: DownloadTask, title: str, ep_num: int, final_filepath: Path) -> ProjectManifestV1:
+        proj_title = f"{title} - Tập {ep_num:02d}"
+        manifest = ProjectManifestV1(
+            project_id=f"proj-{uuid.uuid4().hex[:8]}",
+            title=proj_title,
+            source_video_path=str(final_filepath),
+            video_fingerprint="fp_" + uuid.uuid4().hex[:12],
+            source_language=task.source_language,
+            target_language=task.target_language,
+            active_revision=1,
+        )
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(final_filepath))
+            vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1080
+            vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1920
+            cap.release()
+            manifest.regions = [propose_default_roi(vw, vh)]
+        except Exception:
+            pass
+
+        self.repository.save_project(manifest)
+        return manifest
+
+    def _download_hongguo_single_episode(
+        self,
+        task: DownloadTask,
+        series_dir: Path,
+        ep_num: int,
+        vid: str,
+        clean_title: str,
+        title: str,
+        device_keys: Optional[Dict[str, str]] = None,
+    ) -> Tuple[int, Optional[ProjectManifestV1]]:
+        final_filename = f"{clean_title}_Tap_{ep_num:02d}.mp4"
+        final_filepath = series_dir / final_filename
+
+        if final_filepath.exists() and final_filepath.stat().st_size > 100000:
+            manifest = None
+            if task.auto_create_project and self.repository:
+                manifest = self._create_episode_manifest(task, title, ep_num, final_filepath)
+            return final_filepath.stat().st_size, manifest
+
+        target_res = getattr(task, "target_resolution", "best")
+        try:
+            res = parser.resolve_video_url(
+                vid,
+                proxy=task.proxy,
+                device_keys=device_keys,
+                target_resolution=target_res,
+            )
+        except TypeError as type_err:
+            if "target_resolution" in str(type_err):
+                res = parser.resolve_video_url(
+                    vid,
+                    proxy=task.proxy,
+                    device_keys=device_keys,
+                )
+            else:
+                raise
+
+        src_url = res.get("url", "") if isinstance(res, dict) else ""
+        mp4_name = src_url.split("/")[-1] if src_url else f"{vid}.mp4"
+
+        temp_file = None
+        for candidate in [
+            self.uploads_dir / f"mock_{vid}.mp4",
+            self.uploads_dir / f"workload_{vid}.mp4",
+            self.uploads_dir / f"{vid}.mp4",
+            self.uploads_dir / mp4_name,
+            DOWNLOADER_DIR / "src" / mp4_name,
+        ]:
+            if candidate.exists():
+                temp_file = candidate
+                break
+
+        if not temp_file:
+            src_dir = DOWNLOADER_DIR / "src"
+            if src_dir.exists():
+                files = list(src_dir.glob("*.mp4"))
+                if files:
+                    temp_file = max(files, key=os.path.getmtime)
+
+        if temp_file and temp_file.exists():
+            shutil.copy2(str(temp_file), str(final_filepath))
+            file_sz = final_filepath.stat().st_size
+            if DOWNLOADER_DIR in temp_file.parents or "downloader" in str(temp_file):
+                try:
+                    temp_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        else:
+            if not final_filepath.exists():
+                raise RuntimeError(f"Không tìm thấy file tải về cho tập {ep_num}")
+            file_sz = final_filepath.stat().st_size
+
+        manifest = None
+        if task.auto_create_project and self.repository:
+            manifest = self._create_episode_manifest(task, title, ep_num, final_filepath)
+
+        return file_sz, manifest
 
     def _download_hongguo_task(self, task: DownloadTask, series_dir: Path) -> None:
         series_id = task.series_id or task.target_info.get("series_id", "series_unknown")
@@ -862,124 +1175,166 @@ class DownloadManager:
         start_time = time.time()
         downloaded_bytes_session = 0
 
-        for step, ep_num in enumerate(target_eps):
-            if self._cancel_requested or task.status == "cancelled":
-                task.status = "cancelled"
-                task.message = "Đã dừng theo yêu cầu người dùng."
-                return
+        concurrency = getattr(task, "concurrency", 3) or 3
+        try:
+            concurrency = max(1, min(16, int(concurrency)))
+        except Exception:
+            concurrency = 3
 
-            if step > 0 and task.rate_limit_delay > 0:
-                jitter = random.uniform(-0.5, 0.5)
-                actual_delay = max(0.2, task.rate_limit_delay + jitter)
+        if concurrency <= 1:
+            # Tuần tự theo 1 luồng: bảo toàn cơ chế rate-limit delay và rotation interval
+            for step, ep_num in enumerate(target_eps):
+                if self._cancel_requested or task.status == "cancelled":
+                    task.status = "cancelled"
+                    task.message = "Đã dừng theo yêu cầu người dùng."
+                    return
+
+                if step > 0 and task.rate_limit_delay > 0:
+                    jitter = random.uniform(-0.5, 0.5)
+                    actual_delay = max(0.2, task.rate_limit_delay + jitter)
+                    with self.lock:
+                        task.message = f"Nghỉ {actual_delay:.1f}s để bảo vệ IP..."
+                        if self._current_task:
+                            self._current_task["message"] = task.message
+                    time.sleep(actual_delay)
+
+                i = ep_num - 1
+                vid = vid_list[i] if 0 <= i < len(vid_list) else (f"{series_id}_fail_ep_{ep_num:02d}" if "fail" in str(series_id).lower() else f"{series_id}_vid_{ep_num:02d}")
+
+                cur_device_keys = None
+                should_rotate = (task.rotation_interval is not None and task.rotation_interval > 0 and step > 0 and (step % task.rotation_interval == 0))
+                if should_rotate:
+                    with self.lock:
+                        task.message = f"Cấp thiết bị mới cho tập {ep_num}/{len(target_eps)}..."
+                        if self._current_task:
+                            self._current_task["message"] = task.message
+                    try:
+                        cur_device_keys = parser.rotate_device(proxy=task.proxy)
+                    except Exception as rot_err:
+                        print(f"[Downloader] Per-episode rotation warning: {rot_err}")
+
+                elapsed = max(0.001, time.time() - start_time)
+                speed_mbps = round((downloaded_bytes_session * 8 / 1_000_000) / elapsed, 2)
+
                 with self.lock:
-                    task.message = f"Nghỉ {actual_delay:.1f}s để bảo vệ IP..."
-                    if self._current_task:
-                        self._current_task["message"] = task.message
-                time.sleep(actual_delay)
+                    task.update_progress(
+                        current_ep=ep_num,
+                        step_idx=step,
+                        total_steps=total_range,
+                        speed_mbps=speed_mbps,
+                        msg=f"Đang giải mã & tải tập {ep_num} (vid: {vid})...",
+                    )
+                    self._current_task = task.to_dict()
 
-            i = ep_num - 1
-            if 0 <= i < len(vid_list):
-                vid = vid_list[i]
-            else:
-                if "fail" in str(series_id).lower():
-                    vid = f"{series_id}_fail_ep_{ep_num:02d}"
-                else:
-                    vid = f"{series_id}_vid_{ep_num:02d}"
-
-            final_filename = f"{clean_title}_Tap_{ep_num:02d}.mp4"
-            final_filepath = series_dir / final_filename
-
-            cur_device_keys = None
-            should_rotate = (task.rotation_interval is not None and task.rotation_interval > 0 and step > 0 and (step % task.rotation_interval == 0))
-            if should_rotate:
-                with self.lock:
-                    task.message = f"Cấp thiết bị mới cho tập {ep_num}/{len(target_eps)}..."
-                    if self._current_task:
-                        self._current_task["message"] = task.message
-                try:
-                    cur_device_keys = parser.rotate_device(proxy=task.proxy)
-                except Exception as rot_err:
-                    print(f"[Downloader] Per-episode rotation warning: {rot_err}")
-
-            elapsed = max(0.001, time.time() - start_time)
-            speed_mbps = round((downloaded_bytes_session * 8 / 1_000_000) / elapsed, 2)
-
-            with self.lock:
-                task.update_progress(
-                    current_ep=ep_num,
-                    step_idx=step,
-                    total_steps=total_range,
-                    speed_mbps=speed_mbps,
-                    msg=f"Đang giải mã & tải tập {ep_num} (vid: {vid})...",
+                file_sz, manifest = self._download_hongguo_single_episode(
+                    task, series_dir, ep_num, vid, clean_title, title, cur_device_keys
                 )
-                self._current_task = task.to_dict()
+                downloaded_bytes_session += file_sz
 
-            if not (final_filepath.exists() and final_filepath.stat().st_size > 100000):
-                res = parser.resolve_video_url(vid, proxy=task.proxy, device_keys=cur_device_keys)
-                src_url = res.get("url", "") if isinstance(res, dict) else ""
-                mp4_name = src_url.split("/")[-1] if src_url else f"{vid}.mp4"
+                if manifest:
+                    with self.lock:
+                        task.created_projects.append(manifest.to_dict())
+                        if self._current_task:
+                            self._current_task = task.to_dict()
+                    if getattr(task, "_on_project_created", None):
+                        task._on_project_created(manifest)
+        else:
+            # Đa luồng song song (Multi-threaded download with Thread-Safe Device Pool & Anti-Spam Jitter)
+            completed_count = 0
+            dev_lock = threading.Lock()
+            current_shared_device = [None]
+            completed_since_rotation = [0]
+            rot_interval = task.rotation_interval if (task.rotation_interval is not None and task.rotation_interval > 0) else 5
 
-                temp_file = None
-                for candidate in [
-                    self.uploads_dir / f"mock_{vid}.mp4",
-                    self.uploads_dir / f"workload_{vid}.mp4",
-                    self.uploads_dir / f"{vid}.mp4",
-                    self.uploads_dir / mp4_name,
-                    DOWNLOADER_DIR / "src" / mp4_name,
-                ]:
-                    if candidate.exists():
-                        temp_file = candidate
-                        break
+            def _worker_wrapper(idx: int, ep_num: int, vid: str):
+                if self._cancel_requested or task.status == "cancelled":
+                    return 0, None
 
-                if not temp_file:
-                    src_dir = DOWNLOADER_DIR / "src"
-                    if src_dir.exists():
-                        files = list(src_dir.glob("*.mp4"))
-                        if files:
-                            temp_file = max(files, key=os.path.getmtime)
+                # 1. Staggered launch delay to prevent WAF burst rate-limiting
+                stagger_delay = (idx % concurrency) * 0.1 + random.uniform(0.02, 0.05)
+                slept = 0.0
+                while slept < stagger_delay:
+                    if self._cancel_requested or task.status == "cancelled":
+                        return 0, None
+                    chunk = min(0.05, stagger_delay - slept)
+                    time.sleep(chunk)
+                    slept += chunk
 
-                if temp_file and temp_file.exists():
-                    shutil.copy2(str(temp_file), str(final_filepath))
-                    file_sz = final_filepath.stat().st_size
-                    downloaded_bytes_session += file_sz
-                    # Tự động dọn dẹp file nguồn tạm trong downloader để tránh rò rỉ dung lượng ổ cứng
-                    if DOWNLOADER_DIR in temp_file.parents or "downloader" in str(temp_file):
+                if self._cancel_requested or task.status == "cancelled":
+                    return 0, None
+
+                # 2. Get active device from pool with automatic rotation
+                active_dev = None
+                with dev_lock:
+                    if completed_since_rotation[0] >= rot_interval:
                         try:
-                            temp_file.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                else:
-                    if not final_filepath.exists():
-                        raise RuntimeError(f"Không tìm thấy file tải về cho tập {ep_num}")
+                            current_shared_device[0] = parser.rotate_device(proxy=task.proxy)
+                            completed_since_rotation[0] = 0
+                            print(f"[Downloader] Thread pool rotated device for batch at ep {ep_num}")
+                        except Exception as rot_err:
+                            print(f"[Downloader] Batch rotation error: {rot_err}")
+                    active_dev = current_shared_device[0]
 
-            if task.auto_create_project and self.repository:
-                proj_title = f"{title} - Tập {ep_num:02d}"
-                manifest = ProjectManifestV1(
-                    project_id=f"proj-{uuid.uuid4().hex[:8]}",
-                    title=proj_title,
-                    source_video_path=str(final_filepath),
-                    video_fingerprint="fp_" + uuid.uuid4().hex[:12],
-                    source_language=task.source_language,
-                    target_language=task.target_language,
-                    active_revision=1,
+                if self._cancel_requested or task.status == "cancelled":
+                    return 0, None
+
+                sz, mani = self._download_hongguo_single_episode(
+                    task,
+                    series_dir,
+                    ep_num,
+                    vid,
+                    clean_title,
+                    title,
+                    device_keys=active_dev,
                 )
-                try:
-                    import cv2
-                    cap = cv2.VideoCapture(str(final_filepath))
-                    vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1080
-                    vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1920
-                    cap.release()
-                    manifest.regions = [propose_default_roi(vw, vh)]
-                except Exception:
-                    pass
 
-                self.repository.save_project(manifest)
-                with self.lock:
-                    task.created_projects.append(manifest.to_dict())
-                    if self._current_task:
-                        self._current_task = task.to_dict()
-                if getattr(task, "_on_project_created", None):
-                    task._on_project_created(manifest)
+                with dev_lock:
+                    completed_since_rotation[0] += 1
+                return sz, mani
+
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                future_to_ep = {}
+                for idx, ep_num in enumerate(target_eps):
+                    i = ep_num - 1
+                    vid = vid_list[i] if 0 <= i < len(vid_list) else (f"{series_id}_fail_ep_{ep_num:02d}" if "fail" in str(series_id).lower() else f"{series_id}_vid_{ep_num:02d}")
+                    f = executor.submit(
+                        _worker_wrapper,
+                        idx,
+                        ep_num,
+                        vid,
+                    )
+                    future_to_ep[f] = ep_num
+
+                for future in concurrent.futures.as_completed(future_to_ep):
+                    if self._cancel_requested or task.status == "cancelled":
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        task.status = "cancelled"
+                        task.message = "Đã dừng theo yêu cầu người dùng."
+                        return
+
+                    ep_num = future_to_ep[future]
+                    try:
+                        file_sz, manifest = future.result()
+                        completed_count += 1
+                        downloaded_bytes_session += file_sz
+                        elapsed = max(0.001, time.time() - start_time)
+                        speed_mbps = round((downloaded_bytes_session * 8 / 1_000_000) / elapsed, 2)
+                        with self.lock:
+                            task.update_progress(
+                                current_ep=ep_num,
+                                step_idx=completed_count,
+                                total_steps=total_range,
+                                speed_mbps=speed_mbps,
+                                msg=f"Đã tải {completed_count}/{total_range} tập (xong tập {ep_num}, tốc độ {speed_mbps:.1f} MB/s)...",
+                            )
+                            if manifest:
+                                task.created_projects.append(manifest.to_dict())
+                            self._current_task = task.to_dict()
+                        if manifest and getattr(task, "_on_project_created", None):
+                            task._on_project_created(manifest)
+                    except Exception as exc:
+                        print(f"[Downloader] Worker error for episode {ep_num}: {exc}")
+                        raise
 
     def _download_generic_task(self, task: DownloadTask, series_dir: Path) -> None:
         url = task.target_info.get("url") or task.target_info.get("target") or ""
@@ -988,42 +1343,256 @@ class DownloadManager:
         out_template = str(series_dir / f"{clean_title}.%(ext)s")
 
         with self.lock:
-            task.message = f"Đang tải video từ '{url}' qua yt-dlp..."
-            task.progress = 20.0
-            task.progress_percent = 20.0
+            task.message = f"Khởi tạo tải video từ '{url}'..."
+            task.progress = 5.0
+            task.progress_percent = 5.0
             self._current_task = task.to_dict()
 
-        cmd = [
-            "yt-dlp",
-            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "--merge-output-format", "mp4",
-            "-o", out_template,
-        ]
-        if task.proxy:
-            cmd.extend(["--proxy", task.proxy])
-        cmd.append(url)
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
-        if proc.returncode != 0 and task.proxy:
-            err_lower = proc.stderr.lower()
-            if "10061" in err_lower or "unable to connect to proxy" in err_lower or "proxyerror" in err_lower or "refused" in err_lower:
-                print(f"[Downloader] yt-dlp proxy {task.proxy} failed ({proc.stderr[:100]}), retrying directly without proxy...")
-                cmd_direct = [
-                    "yt-dlp",
-                    "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                    "--merge-output-format", "mp4",
-                    "-o", out_template,
-                    url,
-                ]
-                proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+        is_youtube = any(d in url.lower() for d in ("youtube.com", "youtu.be"))
+        node_path = shutil.which("node") or shutil.which("deno")
 
-        if proc.returncode != 0:
-            raise RuntimeError(f"yt-dlp tải thất bại: {proc.stderr}")
+        from subtitle_localizer.downloader.platform_auth import platform_auth
+        platform_id = (
+            "youtube" if is_youtube
+            else "bilibili" if ("bilibili.com" in url.lower() or "b23.tv" in url.lower())
+            else "xiaohongshu" if ("xiaohongshu.com" in url.lower() or "xhslink.com" in url.lower())
+            else "generic"
+        )
+        auth_cookie_file = platform_auth.create_temp_netscape_cookie_file(platform_id, url)
 
-        dest_file = series_dir / f"{clean_title}.mp4"
-        if not dest_file.exists():
-            candidates = list(series_dir.glob(f"{clean_title}.*"))
-            if candidates:
-                dest_file = candidates[0]
+        target_res = getattr(task, "target_resolution", "auto") or "auto"
+        if target_res and str(target_res).lower() not in ("auto", "best"):
+            res_clean = str(target_res).lower().rstrip("p")
+            if res_clean.isdigit():
+                format_spec = f"bv*[height<={res_clean}]+ba/b[height<={res_clean}]/best"
+            else:
+                format_spec = "bv*+ba/b/best"
+        else:
+            format_spec = "bv*+ba/b/best"
+
+        def _build_ytdlp_cmd(use_proxy: Optional[str] = None, cookie_browser: Optional[str] = None) -> List[str]:
+            cmd = [
+                sys.executable, "-m", "yt_dlp",
+                "-f", format_spec,
+                "--merge-output-format", "mp4",
+                "--retries", "8",
+                "--fragment-retries", "8",
+                "--concurrent-fragments", "4",
+                "--windows-filenames",
+                "--newline",
+                "--progress",
+                "--progress-template", "download:__BDP_PROGRESS__%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s",
+                "--print", "after_move:__BDP_OUTPUT__%(filepath)s",
+                "--print", "after_video:__BDP_OUTPUT__%(filepath)s",
+                "--no-playlist",
+                "-o", out_template,
+            ]
+            if is_youtube:
+                # Bypass YouTube SABR streaming & 403 Forbidden with full qualities (1440p, 1080p, 720p, etc.)!
+                cmd.extend(["--extractor-args", "youtube:player_client=web_embedded,android"])
+                cmd.extend(["--sleep-requests", "0.75"])
+                if node_path:
+                    cmd.extend(["--js-runtimes", "node" if "node" in str(node_path).lower() else "deno"])
+            elif "bilibili.com" in url.lower() or "b23.tv" in url.lower():
+                cmd.extend(["--referer", "https://www.bilibili.com/"])
+            elif "xiaohongshu.com" in url.lower() or "xhslink.com" in url.lower():
+                cmd.extend(["--referer", "https://www.xiaohongshu.com/"])
+
+            if auth_cookie_file and os.path.exists(auth_cookie_file):
+                cmd.extend(["--cookies", auth_cookie_file])
+            elif cookie_browser and cookie_browser != "none":
+                cmd.extend(["--cookies-from-browser", cookie_browser])
+
+            if use_proxy and str(use_proxy).strip():
+                cmd.extend(["--proxy", use_proxy.strip()])
+            cmd.append(url)
+            return cmd
+
+        cookie_src = getattr(task, "cookie_source", "none") or "none"
+        attempts = []
+        if cookie_src != "none":
+            attempts.append({"proxy": task.proxy, "cookies": cookie_src})
+        else:
+            attempts.append({"proxy": task.proxy, "cookies": None})
+            if task.proxy:
+                attempts.append({"proxy": None, "cookies": None})
+            if not is_youtube:
+                # Fallback to browser cookies only for non-YouTube platforms where cookies might be needed
+                attempts.append({"proxy": None, "cookies": "chrome"})
+                attempts.append({"proxy": None, "cookies": "edge"})
+                attempts.append({"proxy": None, "cookies": "firefox"})
+
+        success = False
+        last_error = ""
+        started_at = time.time()
+        detected_out_file = None
+
+        startupinfo = None
+        creationflags = 0
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+            creationflags = subprocess.CREATE_NO_WINDOW
+
+        for attempt_idx, attempt_cfg in enumerate(attempts):
+            if self._cancel_requested or task.status == "cancelled":
+                task.status = "cancelled"
+                task.message = "Đã dừng theo yêu cầu người dùng."
+                return
+
+            cur_proxy = attempt_cfg["proxy"]
+            cur_cookies = attempt_cfg["cookies"]
+            cookie_msg = f" (cookies: {cur_cookies})" if cur_cookies else ""
+            with self.lock:
+                task.message = f"Đang kết nối tải video từ '{url}'{cookie_msg}..."
+                if self._current_task:
+                    self._current_task["message"] = task.message
+
+            cmd = _build_ytdlp_cmd(use_proxy=cur_proxy, cookie_browser=cur_cookies)
+
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    startupinfo=startupinfo,
+                    creationflags=creationflags,
+                )
+
+                collected_output = []
+                for raw_line in iter(proc.stdout.readline, ""):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    collected_output.append(line)
+                    if len(collected_output) > 100:
+                        collected_output = collected_output[-80:]
+
+                    if self._cancel_requested or task.status == "cancelled":
+                        try:
+                            if os.name == "nt":
+                                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                            else:
+                                proc.kill()
+                        except Exception:
+                            pass
+                        task.status = "cancelled"
+                        task.message = "Đã dừng theo yêu cầu người dùng."
+                        return
+
+                    if line.startswith("__BDP_OUTPUT__"):
+                        val = line[len("__BDP_OUTPUT__"):].strip()
+                        if val and val != "NA" and os.path.exists(val):
+                            detected_out_file = Path(val)
+                        continue
+
+                    pct = None
+                    spd_str = ""
+                    eta_str = ""
+                    speed_mbps = 0.0
+
+                    if line.startswith("__BDP_PROGRESS__"):
+                        parts = line[len("__BDP_PROGRESS__"):].split("|")
+                        if parts:
+                            m = re.search(r"(\d+(?:\.\d+)?)", parts[0])
+                            if m:
+                                pct = float(m.group(1))
+                        if len(parts) > 1 and parts[1].strip():
+                            spd_str = parts[1].strip()
+                        if len(parts) > 2 and parts[2].strip():
+                            eta_str = f", Còn lại: {parts[2].strip()}"
+                    else:
+                        m_pct = re.search(r"(\d+(?:\.\d+)?)%", line)
+                        if m_pct:
+                            pct = float(m_pct.group(1))
+                        m_spd = re.search(r"at\s+([0-9.]+\s*[KMGT]?i?B/s)", line, re.I)
+                        if m_spd:
+                            spd_str = m_spd.group(1)
+                        m_eta = re.search(r"ETA\s+([0-9:]+)", line, re.I)
+                        if m_eta:
+                            eta_str = f", Còn lại: {m_eta.group(1)}"
+
+                    if pct is not None:
+                        if spd_str:
+                            try:
+                                num = float(re.findall(r"([0-9.]+)", spd_str)[0])
+                                if "kib" in spd_str.lower() or "kb" in spd_str.lower():
+                                    speed_mbps = round((num * 8) / 1000, 2)
+                                elif "mib" in spd_str.lower() or "mb" in spd_str.lower():
+                                    speed_mbps = round(num * 8, 2)
+                            except Exception:
+                                pass
+
+                        with self.lock:
+                            task.progress = pct
+                            task.progress_percent = pct
+                            task.speed_mbps = speed_mbps
+                            task.message = f"Đang tải: {pct:.1f}% ({spd_str}{eta_str})"
+                            if self._current_task:
+                                self._current_task = task.to_dict()
+
+                proc.wait()
+                if proc.returncode == 0:
+                    success = True
+                    break
+                else:
+                    last_error = "\n".join(collected_output[-10:])
+                    err_lower = last_error.lower()
+                    is_cookie_auth_err = any(k in err_lower for k in ("403", "forbidden", "sign in", "login", "cookie", "bot", "members-only", "unable to download video data"))
+                    is_proxy_err = any(k in err_lower for k in ("10061", "unable to connect to proxy", "proxyerror", "refused"))
+                    if not (is_cookie_auth_err or is_proxy_err):
+                        if cookie_src != "none" or attempt_idx >= len(attempts) - 1:
+                            break
+            except Exception as run_err:
+                last_error = str(run_err)
+                if attempt_idx >= len(attempts) - 1:
+                    break
+
+        if not success:
+            raise RuntimeError(f"yt-dlp tải thất bại: {last_error}")
+
+        dest_file = None
+        if detected_out_file and detected_out_file.exists() and detected_out_file.stat().st_size > 0:
+            dest_file = detected_out_file
+        else:
+            target_mp4 = series_dir / f"{clean_title}.mp4"
+            if target_mp4.exists() and target_mp4.stat().st_size > 0:
+                dest_file = target_mp4
+            else:
+                candidates = []
+                for ext in (".mp4", ".mkv", ".webm", ".mov", ".m4v"):
+                    candidates.extend(series_dir.glob(f"*{ext}"))
+                    if series_dir.parent.exists():
+                        candidates.extend(series_dir.parent.glob(f"*{clean_title}*/*{ext}"))
+                        candidates.extend(series_dir.parent.glob(f"*{ext}"))
+
+                recent = [f for f in candidates if f.is_file() and f.stat().st_mtime >= started_at - 15 and f.stat().st_size > 0]
+                if recent:
+                    chosen = max(recent, key=lambda f: f.stat().st_mtime)
+                    if chosen.suffix.lower() == ".mp4":
+                        dest_file = chosen
+                    else:
+                        remux_target = series_dir / f"{clean_title}.mp4"
+                        try:
+                            subprocess.run(
+                                ["ffmpeg", "-y", "-i", str(chosen), "-c", "copy", str(remux_target)],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=True,
+                            )
+                            if remux_target.exists():
+                                dest_file = remux_target
+                        except Exception:
+                            dest_file = chosen
+                elif candidates:
+                    dest_file = candidates[0]
+
+        if dest_file is None or not dest_file.exists() or dest_file.stat().st_size == 0:
+            raise RuntimeError("yt-dlp báo thành công nhưng không tìm thấy file video đầu ra.")
 
         if task.auto_create_project and self.repository and dest_file.exists():
             manifest = ProjectManifestV1(

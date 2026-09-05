@@ -41,6 +41,10 @@ gemini_keys_pool.json
 /scratch/
 /web/archive/
 .agents/
+*_history.json
+*_cache.json
+src/subtitle_localizer/downloader/*.json
+!src/subtitle_localizer/downloader/config.json
 
 # Media binaries
 *.mp4

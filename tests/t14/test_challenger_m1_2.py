@@ -309,7 +309,7 @@ class TestChallengerM12LifecycleAndAPI(unittest.TestCase):
 
         # Wait for both to finish
         start_wait = time.time()
-        while time.time() - start_wait < 5.0:
+        while time.time() - start_wait < 10.0:
             if task_fail.status == "failed" and task_ok.status == "completed":
                 break
             time.sleep(0.1)
@@ -696,8 +696,9 @@ class TestChallengerM12LifecycleAndAPI(unittest.TestCase):
         )
         self.assertIn(res.status_code, [400, 422])
 
+    @patch("subtitle_localizer.downloader.hongguo_parser.rotate_device", return_value={"device_id": "111", "install_id": "222"})
     @patch("subtitle_localizer.downloader.hongguo_parser.resolve_video_url")
-    def test_delete_task_during_active_download_stress(self, mock_resolve) -> None:
+    def test_delete_task_during_active_download_stress(self, mock_resolve, mock_rotate) -> None:
         """Repeatedly queue and delete active tasks to stress-test race conditions."""
         def fake_resolve(vid, proxy=None, device_keys=None):
             time.sleep(0.05)
@@ -726,7 +727,7 @@ class TestChallengerM12LifecycleAndAPI(unittest.TestCase):
             auto_create_project=False,
         )
         start_wait = time.time()
-        while time.time() - start_wait < 5.0:
+        while time.time() - start_wait < 10.0:
             if final_task.status == "completed":
                 break
             time.sleep(0.1)

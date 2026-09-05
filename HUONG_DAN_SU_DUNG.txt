@@ -1,0 +1,46 @@
+===============================================================================
+                HUONG DAN SU DUNG SUBTITLE LOCALIZER STUDIO
+===============================================================================
+
+Chao ban! Day la bo phan mem Subtitle Localizer Studio dung de nhan dien,
+dich thuat va long tieng phu de video tu dong thong minh.
+
+1. YEU CAU HE THONG:
+-------------------------------------------------------------------------------
+- He dieu hanh: Windows 10 / 11 (64-bit)
+- Python: Phien ban 3.11 hoac 3.12 (Tai tai: https://www.python.org/downloads/)
+  * QUAN TRONG: Khi cai dat Python, nho tich chon vao o "[v] Add python.exe to PATH".
+- Node.js (Khuyen nghi): Ban LTS (Tai tai: https://nodejs.org/)
+  * Neu may chua cai Node.js, phan mem van co the chay giao dien Web 100% qua ban build san.
+- FFmpeg (Tuy chon): Danh cho chuc nang xuat video MP4 va tao song am waveform.
+
+2. CACH KHOI DONG (RAT DON GIAN):
+-------------------------------------------------------------------------------
+- Buoc 1: Giai nen toan bo thu muc ZIP nay vao o dia cua ban (vi du: D:\ hoac E:\ hoac Desktop).
+- Buoc 2: Nhap dup chuot vao file:
+          >>> KHOI_DONG_STUDIO.bat <<<
+  * Trong lan dau tien chay: Script se tu dong kiem tra va tai cac thu vien can thiet.
+  * Khi hoan tat, trinh duyet se tu dong mo giao dien Studio:
+    http://localhost:5199  (hoac http://localhost:8899)
+
+3. TICH HOP SAN CAC KEY GEMINI DICH THUAT:
+-------------------------------------------------------------------------------
+- Phan mem da duoc tich hop san toan bo Pool API Key Gemini trong file `gemini_keys_pool.json`.
+- He thong se tu dong xoay tua 45+ Keys Round-Robin de tranh Rate-Limit (429).
+- Ngoai ra van co fallback sang Google Translate mien phi neu can.
+- Ban cung co the xem, them hoac quan ly Key ngay tren giao dien Web (Muc Cai dat / Key Pool).
+
+4. CAU TRUC THU MUC:
+-------------------------------------------------------------------------------
+- KHOI_DONG_STUDIO.bat    : File khoi dong chinh tu dong cai dat va chay toan bo Studio.
+- start_studio.bat         : File khoi dong bo tro (chuc nang tuong duong).
+- CAI_DAT_THU_VIEN.bat     : File cai dat thu cong tat ca thu vien (dung khi can).
+- gemini_keys_pool.json    : File chua danh sach cac Gemini API Key da tich hop san.
+- subtitle_localizer.env   : File cau hinh moi truong da thiet lap san.
+- src/                     : Toan bo ma nguon logic Backend, thuat toan OCR, dich thuat, fake phone.
+- web/                     : Giao dien Web Studio (React + Vite + TailwindCSS).
+- scripts/                 : Cac script dieu khien may chu server.
+- requirements.txt         : Danh sach 14 thu vien Python can thiet.
+
+Chuc ban co nhung trai nghiem tuyet voi voi Subtitle Localizer Studio!
+===============================================================================

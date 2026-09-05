@@ -230,6 +230,7 @@ class TestQueueUiContracts(unittest.TestCase):
             SRC_DIR / "components" / "project" / "UrlDownloadModal.tsx",
             SRC_DIR / "components" / "project" / "EpisodeSelectorGrid.tsx",
             SRC_DIR / "components" / "project" / "DownloadQueueHub.tsx",
+            SRC_DIR / "components" / "project" / "VideoDownloaderHub.tsx",
         ]:
             if f.exists():
                 target_files.append(f)
@@ -242,6 +243,51 @@ class TestQueueUiContracts(unittest.TestCase):
                     match,
                     f"Mojibake detected in {target.name}: matched '{match.group(0) if match else ''}'",
                 )
+
+    def test_video_downloader_hub_standalone_tab_contract(self) -> None:
+        """Verify VideoDownloaderHub is a first-class standalone workspace tab with search-first and direct-link categorization."""
+        hub_file = SRC_DIR / "components" / "project" / "VideoDownloaderHub.tsx"
+        self.assertTrue(hub_file.exists(), f"Missing VideoDownloaderHub.tsx: {hub_file}")
+        content = hub_file.read_text(encoding="utf-8")
+
+        # 1. Standalone workspace navigation contract
+        self.assertIn("onSwitchToDashboard", content)
+
+        # 2. Search-first platform categorization (Bilibili Wbi)
+        self.assertTrue(
+            "bilibili" in content.lower() or "b站" in content.lower(),
+            "Missing Bilibili search-first support in VideoDownloaderHub",
+        )
+        self.assertTrue(
+            "tìm kiếm" in content.lower() or "search" in content.lower(),
+            "Missing Search-First tab and UI in VideoDownloaderHub",
+        )
+
+        # 3. Direct link platform categorization (Hongguo, YouTube, Xiaohongshu, Douyin)
+        self.assertTrue(
+            "hồng quả" in content.lower() or "hongguo" in content.lower(),
+            "Missing Hongguo direct link support",
+        )
+        self.assertTrue(
+            "youtube" in content.lower(),
+            "Missing YouTube direct link support",
+        )
+        self.assertTrue(
+            "xiaohongshu" in content.lower() or "tiểu hồng thư" in content.lower(),
+            "Missing Xiaohongshu clean 1080p direct link support",
+        )
+
+        # 4. Multi-threading concurrency and queue integration
+        self.assertTrue(
+            "concurrency" in content or "đa luồng" in content.lower(),
+            "Missing multi-threading concurrency control",
+        )
+
+        # 5. App.tsx integration
+        app_file = SRC_DIR / "App.tsx"
+        app_content = app_file.read_text(encoding="utf-8")
+        self.assertIn("VideoDownloaderHub", app_content)
+        self.assertIn("downloader", app_content)
 
 
 if __name__ == "__main__":

@@ -333,6 +333,9 @@ export class StudioApiClient {
     rate_limit_delay?: number;
     rotate_device_each_ep?: boolean;
     rotation_interval?: number;
+    target_resolution?: string;
+    concurrency?: number;
+    cookie_source?: string;
   }): Promise<{ status: string }> {
     const res = await fetch(`${API_BASE}/downloader/start`, {
       method: 'POST',
@@ -551,6 +554,90 @@ export class StudioApiClient {
     }
     return res.json();
   }
+
+  // -------------------------------------------------------------------------
+  // Platform Authentication, QR Login & Video Search API
+  // -------------------------------------------------------------------------
+  async getPlatformAuthStatus(): Promise<PlatformAuthStatusResponse> {
+    const res = await fetch(`${API_BASE}/downloader/auth/status`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể lấy trạng thái xác thực nền tảng');
+    return res.json();
+  }
+
+  async generateBilibiliQr(): Promise<BilibiliQrGenResponse> {
+    const res = await fetch(`${API_BASE}/downloader/auth/bilibili/qr/generate`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể tạo mã QR Bilibili');
+    return res.json();
+  }
+
+  async pollBilibiliQr(qrcodeKey: string): Promise<BilibiliQrPollResponse> {
+    const res = await fetch(`${API_BASE}/downloader/auth/bilibili/qr/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể kiểm tra trạng thái quét QR');
+    return res.json();
+  }
+
+  async savePlatformCookie(platform: string, cookie: string): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${API_BASE}/downloader/auth/cookies`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ platform, cookie }),
+    });
+    if (!res.ok) throw new Error('Không thể lưu cookie');
+    return res.json();
+  }
+
+  async deletePlatformCookie(platform: string): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${API_BASE}/downloader/auth/cookies/${encodeURIComponent(platform)}`, {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể xóa cookie');
+    return res.json();
+  }
+
+  async searchVideos(
+    keyword: string,
+    platform: string = 'bilibili',
+    page: number = 1,
+    options?: VideoSearchOptions,
+  ): Promise<VideoSearchResponse> {
+    const res = await fetch(`${API_BASE}/downloader/search`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({
+        keyword,
+        platform,
+        page,
+        order: options?.order || 'totalrank',
+        duration: options?.duration || 0,
+        must_contain: options?.must_contain || undefined,
+        must_not_contain: options?.must_not_contain || undefined,
+        auto_translate: options?.auto_translate ?? true,
+        translate_titles: options?.translate_titles ?? true,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Lỗi tìm kiếm video' }));
+      throw new Error(err.detail || 'Lỗi tìm kiếm video');
+    }
+    return res.json();
+  }
+
+  async clearDownloadHistory(): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${API_BASE}/downloader/history/clear`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể xóa lịch sử tải xuống');
+    return res.json();
+  }
 }
 
 export interface DirectoryValidateResponse {
@@ -575,6 +662,17 @@ export interface ScanEpisodesResponse {
   missing_count: number;
 }
 
+export interface VideoResolutionItem {
+  id: string;
+  label: string;
+  width?: number;
+  height?: number;
+  size_bytes?: number;
+  size_mb?: number;
+  bitrate?: number;
+  fps?: number;
+}
+
 export interface DownloadQueueAddPayload {
   target_info: DownloadTargetInfo | Record<string, any>;
   episodes?: number[];
@@ -588,6 +686,9 @@ export interface DownloadQueueAddPayload {
   rate_limit_delay?: number;
   rotate_device_each_ep?: boolean;
   rotation_interval?: number;
+  target_resolution?: string;
+  concurrency?: number;
+  cookie_source?: string;
 }
 
 export interface DownloadQueueAddResponse {
@@ -608,6 +709,9 @@ export interface DownloadQueueTaskItem {
   total_eps: number;
   episodes?: number[];
   output_dir?: string;
+  target_resolution?: string;
+  concurrency?: number;
+  cookie_source?: string;
   error?: string | null;
   created_at?: number;
 }
@@ -674,7 +778,10 @@ export interface DownloadTargetInfo {
   url?: string;
   duration?: number;
   uploader?: string;
+  author?: string;
   ext?: string;
+  resolutions?: VideoResolutionItem[];
+  sample_probe?: Record<string, any>;
 }
 
 export interface DownloadTaskStatus {
@@ -710,6 +817,63 @@ export interface GeminiPoolStatus {
   masked_keys: string[];
   cooldown_details: Record<string, { remaining_seconds: number; reason: string }>;
   items?: GeminiKeyItem[];
+}
+
+export interface PlatformAuthAccount {
+  logged_in: boolean;
+  user_name?: string;
+  vip_status?: string;
+  cookie_preview?: string;
+  source?: string;
+}
+
+export interface PlatformAuthStatusResponse {
+  platforms: Record<string, PlatformAuthAccount>;
+  accountless_capabilities: Record<string, string>;
+}
+
+export interface BilibiliQrGenResponse {
+  qrcode_key: string;
+  url: string;
+}
+
+export interface BilibiliQrPollResponse {
+  code: number;
+  message: string;
+  url?: string;
+  refresh_token?: string;
+}
+
+export interface VideoSearchResultItem {
+  id: string;
+  bvid?: string;
+  title: string;
+  title_vi?: string;
+  author: string;
+  pic: string;
+  play?: number;
+  danmaku?: number;
+  pubdate?: number;
+  duration?: string;
+  url: string;
+  arcurl?: string;
+  description?: string;
+  platform?: string;
+  downloaded?: boolean;
+}
+
+export interface VideoSearchOptions {
+  order?: string;
+  duration?: number;
+  must_contain?: string;
+  must_not_contain?: string;
+  auto_translate?: boolean;
+  translate_titles?: boolean;
+}
+
+export interface VideoSearchResponse {
+  results: VideoSearchResultItem[];
+  platform: string;
 }
 
 export const apiClient = new StudioApiClient();

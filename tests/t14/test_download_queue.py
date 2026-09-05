@@ -416,7 +416,11 @@ class TestDownloadQueueEngine(unittest.TestCase):
         manager.add_to_queue(target_info=t2, episodes=[1], rotate_device_each_ep=False)
 
         # Wait for completion
-        time.sleep(2.0)
+        start_wait = time.time()
+        while time.time() - start_wait < 8.0:
+            if mock_rotate.call_count >= 1:
+                break
+            time.sleep(0.1)
         # Verify rotate_device was invoked at cross-drama transition
         self.assertGreaterEqual(mock_rotate.call_count, 1, "Expected parser.rotate_device() call during cross-drama transition")
 

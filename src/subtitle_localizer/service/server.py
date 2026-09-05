@@ -6,7 +6,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 try:
@@ -93,6 +93,9 @@ class DownloadStartRequest(BaseModel):
     rate_limit_delay: float = 2.0
     rotate_device_each_ep: bool = True
     rotation_interval: Optional[int] = None
+    target_resolution: Optional[str] = "best"
+    concurrency: Optional[int] = 3
+    cookie_source: Optional[str] = "none"
 
 
 class DownloadQueueAddRequest(BaseModel):
@@ -108,6 +111,9 @@ class DownloadQueueAddRequest(BaseModel):
     rate_limit_delay: float = 0.0
     rotate_device_each_ep: bool = True
     rotation_interval: Optional[int] = None
+    target_resolution: Optional[str] = "best"
+    concurrency: Optional[int] = 3
+    cookie_source: Optional[str] = "none"
 
     @field_validator("target_info")
     @classmethod
@@ -137,6 +143,9 @@ class DownloadQueueTaskItem(BaseModel):
     total_eps: int = 0
     episodes: Optional[List[int]] = None
     output_dir: Optional[str] = None
+    target_resolution: Optional[str] = "best"
+    concurrency: Optional[int] = 3
+    cookie_source: Optional[str] = "none"
     error: Optional[str] = None
     created_at: Optional[float] = None
 
@@ -233,6 +242,23 @@ class CustomDeviceRequest(BaseModel):
 
 class RotateDeviceRequest(BaseModel):
     proxy: Optional[str] = None
+
+
+class SavePlatformCookieRequest(BaseModel):
+    platform: str
+    cookie: str
+
+
+class VideoSearchRequest(BaseModel):
+    keyword: str
+    platform: str = "bilibili"
+    page: int = 1
+    order: str = "totalrank"
+    duration: int = 0
+    must_contain: Optional[str] = None
+    must_not_contain: Optional[str] = None
+    auto_translate: bool = True
+    translate_titles: bool = True
 
 
 def create_app(
@@ -413,6 +439,9 @@ def create_app(
                 rate_limit_delay=req.rate_limit_delay,
                 rotate_device_each_ep=req.rotate_device_each_ep,
                 rotation_interval=req.rotation_interval,
+                target_resolution=req.target_resolution or "best",
+                concurrency=req.concurrency or 3,
+                cookie_source=req.cookie_source or "none",
             )
             return {"status": "started"}
         except RuntimeError as re:
@@ -455,6 +484,9 @@ def create_app(
                 rate_limit_delay=req.rate_limit_delay,
                 rotate_device_each_ep=req.rotate_device_each_ep,
                 rotation_interval=req.rotation_interval,
+                target_resolution=req.target_resolution or "best",
+                concurrency=req.concurrency or 3,
+                cookie_source=req.cookie_source or "none",
             )
             queue_info = download_manager.get_queue()
             tasks = queue_info.get("tasks", [])
@@ -622,6 +654,92 @@ def create_app(
         info = parser.get_device_status_info()
         info["message"] = "Đã lưu thông tin thiết bị tùy chỉnh!"
         return info
+
+    # -------------------------------------------------------------------------
+    # Platform Auth, QR Login & Universal Video Search Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/v1/downloader/auth/status")
+    async def get_auth_status(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.platform_auth import platform_auth
+        return platform_auth.list_auth_status()
+
+    @app.post("/api/v1/downloader/auth/bilibili/qr/generate")
+    async def generate_bilibili_qr_endpoint(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.platform_auth import platform_auth
+        try:
+            return platform_auth.generate_bilibili_qr()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @app.get("/api/v1/downloader/auth/bilibili/qr/poll")
+    async def poll_bilibili_qr_endpoint(qrcode_key: str = Query(...), authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.platform_auth import platform_auth
+        try:
+            return platform_auth.poll_bilibili_qr(qrcode_key)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @app.post("/api/v1/downloader/auth/cookies")
+    async def save_platform_cookie_endpoint(req: SavePlatformCookieRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.platform_auth import platform_auth
+        platform_auth.save_cookie(req.platform, req.cookie)
+        return {"success": True, "message": f"Đã lưu cookie cho nền tảng {req.platform}!"}
+
+    @app.delete("/api/v1/downloader/auth/cookies/{platform}")
+    async def delete_platform_cookie_endpoint(platform: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.platform_auth import platform_auth
+        deleted = platform_auth.delete_cookie(platform)
+        return {"success": deleted, "message": f"Đã đăng xuất/xóa cookie {platform}!"}
+
+    @app.post("/api/v1/downloader/search")
+    async def search_videos_endpoint(req: VideoSearchRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.bilibili_extractor import search_bilibili_videos, search_youtube_videos
+        from subtitle_localizer.downloader.platform_auth import platform_auth
+        from subtitle_localizer.downloader.download_history import is_item_downloaded
+        p = req.platform.lower()
+        if p == "bilibili":
+            cookie = platform_auth.get_cookie("bilibili") or platform_auth.ensure_bilibili_guest_cookies()
+            results = search_bilibili_videos(
+                req.keyword,
+                cookie=cookie,
+                page=req.page,
+                order=req.order,
+                duration=req.duration,
+                must_contain=req.must_contain,
+                must_not_contain=req.must_not_contain,
+                auto_translate=req.auto_translate,
+                translate_titles=req.translate_titles,
+            )
+        elif p == "youtube":
+            results = search_youtube_videos(
+                req.keyword,
+                max_results=16,
+                must_contain=req.must_contain,
+                must_not_contain=req.must_not_contain,
+                translate_titles=req.translate_titles,
+            )
+        else:
+            results = []
+
+        for r in results:
+            item_id = r.get("bvid") or r.get("id") or r.get("url")
+            r["downloaded"] = bool(item_id and is_item_downloaded(item_id))
+
+        return {"results": results, "platform": p}
+
+    @app.post("/api/v1/downloader/history/clear")
+    async def clear_download_history_endpoint(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.download_history import clear_download_history
+        clear_download_history()
+        return {"success": True, "message": "Đã xóa toàn bộ lịch sử tải xuống cục bộ."}
 
     @app.get("/api/v1/projects/{project_id}/cues")
     async def get_cues(project_id: str, authorization: Optional[str] = Header(None)) -> List[Dict[str, Any]]:
@@ -1426,5 +1544,16 @@ def create_app(
                     await websocket.send_json({"type": "pong"})
         except WebSocketDisconnect:
             ws_manager.disconnect(websocket)
+
+    # Phục vụ Web UI static nếu web/dist đã được build
+    possible_dist_dirs = [
+        Path(__file__).resolve().parents[3] / "web" / "dist",
+        Path.cwd() / "web" / "dist",
+    ]
+    for d in possible_dist_dirs:
+        if d.exists() and (d / "index.html").exists():
+            from fastapi.staticfiles import StaticFiles
+            app.mount("/", StaticFiles(directory=str(d), html=True), name="static_web")
+            break
 
     return app

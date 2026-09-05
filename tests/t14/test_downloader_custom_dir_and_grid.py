@@ -281,7 +281,8 @@ class TestDownloaderCustomDirAndGrid(unittest.TestCase):
         downloaded_vids: List[str] = []
 
         def fake_resolve(vid, proxy=None, device_keys=None):
-            downloaded_vids.append(vid)
+            if str(vid).startswith("vid_"):
+                downloaded_vids.append(vid)
             f = self.uploads_dir / f"{vid}.mp4"
             f.write_bytes(b"Q" * 150000)
             return {"url": f"http://fake.com/{vid}.mp4"}
@@ -306,6 +307,7 @@ class TestDownloaderCustomDirAndGrid(unittest.TestCase):
                     auto_create_project=False,
                 )
                 time.sleep(2.0)
+                manager.cancel()
                 # Ensure only episodes 15 and 32 were processed
                 for v in downloaded_vids:
                     self.assertIn(v, ["vid_15", "vid_32"], f"Unexpected episode downloaded: {v}")

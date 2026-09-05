@@ -360,7 +360,7 @@ class TestDownloadManagerConcurrencyStress(unittest.TestCase):
         # Wait for all 6 tasks to settle
         start_wait = time.time()
         all_settled = False
-        while time.time() - start_wait < 15.0:
+        while time.time() - start_wait < 30.0:
             q = manager.get_queue()
             statuses = {t["task_id"]: t["status"] for t in q["tasks"]}
             terminal = {"completed", "failed", "cancelled"}

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import QRCode from 'qrcode';
 import {
   apiClient,
   DownloadTargetInfo,
@@ -6,6 +7,8 @@ import {
   DeviceStatusInfo,
   DownloadQueueTaskItem,
   DownloadQueueListResponse,
+  PlatformAuthStatusResponse,
+  VideoSearchResultItem,
 } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
 import { EpisodeSelectorGrid } from './EpisodeSelectorGrid';
@@ -41,6 +44,12 @@ import {
   ArrowUp,
   ArrowDown,
   Zap,
+  Sliders,
+  HardDrive,
+  Globe,
+  QrCode,
+  User,
+  Key,
 } from 'lucide-react';
 
 interface UrlDownloadModalProps {
@@ -89,18 +98,78 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
   const [isAddingToQueue, setIsAddingToQueue] = useState(false);
   const [queueAddSuccess, setQueueAddSuccess] = useState<string | null>(null);
 
-  // Tab gộp: 'download' (Tải phim mới) | 'queue' (Hàng đợi tải)
-  const [modalTab, setModalTab] = useState<'download' | 'queue'>('download');
+  // Tab điều hướng: 'download' (Dán link) | 'search' (Tìm kiếm Bilibili) | 'queue' (Hàng đợi) | 'auth' (Tài khoản & VIP)
+  const [modalTab, setModalTab] = useState<'download' | 'search' | 'queue' | 'auth'>('download');
   const [queueTasks, setQueueTasks] = useState<DownloadQueueTaskItem[]>([]);
   const [isQueuePaused, setIsQueuePaused] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
   const [queueActionMsg, setQueueActionMsg] = useState<string | null>(null);
 
+  // Search video state
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [searchPlatform] = useState('bilibili');
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<VideoSearchResultItem[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  // Platform Auth & In-App QR login state
+  const [authStatus, setAuthStatus] = useState<PlatformAuthStatusResponse | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(false);
+  const [biliQrDataUrl, setBiliQrDataUrl] = useState<string | null>(null);
+  const [isGeneratingQr, setIsGeneratingQr] = useState(false);
+  const [biliQrStatusText, setBiliQrStatusText] = useState<string | null>(null);
+  const [biliQrStatusType, setBiliQrStatusType] = useState<'waiting' | 'scanned' | 'success' | 'expired' | 'error' | null>(null);
+  const qrPollIntervalRef = useRef<any>(null);
+
+  // Manual Cookie Management state
+  const [customPlatform, setCustomPlatform] = useState<string>('bilibili');
+  const [customCookieInput, setCustomCookieInput] = useState('');
+  const [isSavingCookie, setIsSavingCookie] = useState(false);
+  const [cookieFeedback, setCookieFeedback] = useState<string | null>(null);
+
   // Range and download options
   const [autoCreateProject, setAutoCreateProject] = useState(true);
   const [sourceLang, setSourceLang] = useState('zh');
   const [targetLang, setTargetLang] = useState('vi');
+
+  // Video Resolution & Real Data Size Estimation state
+  const [selectedResolution, setSelectedResolution] = useState<string>('best');
+
+  // Multi-thread Concurrency & Universal Browser Cookies state
+  const [concurrency, setConcurrency] = useState<number>(() => {
+    const saved = localStorage.getItem('sls_download_concurrency');
+    return saved ? parseInt(saved, 10) : 3;
+  });
+  const [cookieSource, setCookieSource] = useState<string>(() => {
+    return localStorage.getItem('sls_cookie_source') || 'none';
+  });
+
+  const activeResItem = useMemo(() => {
+    if (!targetInfo?.resolutions || targetInfo.resolutions.length === 0) return null;
+    if (selectedResolution === 'best' || !selectedResolution) {
+      return targetInfo.resolutions[0];
+    }
+    const found = targetInfo.resolutions.find(r => 
+      r.id.toLowerCase().includes(selectedResolution.toLowerCase()) || 
+      selectedResolution.toLowerCase().includes(r.id.toLowerCase())
+    );
+    return found || targetInfo.resolutions[0];
+  }, [targetInfo?.resolutions, selectedResolution]);
+
+  const singleEpisodeMb = useMemo(() => {
+    if (!activeResItem?.size_mb) return 0;
+    return activeResItem.size_mb;
+  }, [activeResItem]);
+
+  const countSelected = useMemo(() => {
+    if (selectedEpisodes.length > 0) return selectedEpisodes.length;
+    return targetInfo?.total_episodes || 1;
+  }, [selectedEpisodes, targetInfo?.total_episodes]);
+
+  const totalEstimatedMb = useMemo(() => {
+    return singleEpisodeMb * countSelected;
+  }, [singleEpisodeMb, countSelected]);
 
   // Task running state
   const [taskStatus, setTaskStatus] = useState<DownloadTaskStatus | null>(null);
@@ -142,6 +211,7 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     }
 
     loadDeviceInfo();
+    loadAuthStatus();
     fetchQueueTasks(false);
 
     apiClient
@@ -162,6 +232,7 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     return () => {
       stopPolling();
       clearInterval(queueInterval);
+      stopBiliQrPolling();
     };
   }, [isOpen, initialOpenSettings]);
 
@@ -176,6 +247,123 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
       })
       .catch((err) => console.warn('Could not load device info:', err))
       .finally(() => setIsLoadingDevice(false));
+  };
+
+  const loadAuthStatus = () => {
+    setIsLoadingAuth(true);
+    apiClient
+      .getPlatformAuthStatus()
+      .then((st) => setAuthStatus(st))
+      .catch((err) => console.warn('Could not load auth status:', err))
+      .finally(() => setIsLoadingAuth(false));
+  };
+
+  const stopBiliQrPolling = () => {
+    if (qrPollIntervalRef.current) {
+      clearInterval(qrPollIntervalRef.current);
+      qrPollIntervalRef.current = null;
+    }
+  };
+
+  const handleGenerateBilibiliQr = async () => {
+    stopBiliQrPolling();
+    setIsGeneratingQr(true);
+    setBiliQrStatusText('Đang tạo mã QR Bilibili...');
+    setBiliQrStatusType('waiting');
+    try {
+      const res = await apiClient.generateBilibiliQr();
+      const dataUrl = await QRCode.toDataURL(res.url, { width: 220, margin: 2 });
+      setBiliQrDataUrl(dataUrl);
+      setBiliQrStatusText('Mở ứng dụng Bilibili trên điện thoại để quét mã QR.');
+
+      qrPollIntervalRef.current = setInterval(async () => {
+        try {
+          const pollRes = await apiClient.pollBilibiliQr(res.qrcode_key);
+          if (pollRes.code === 0) {
+            stopBiliQrPolling();
+            setBiliQrStatusType('success');
+            setBiliQrStatusText('Đăng nhập Bilibili thành công! VIP & Video HD đã mở khóa.');
+            loadAuthStatus();
+          } else if (pollRes.code === 86090) {
+            setBiliQrStatusType('scanned');
+            setBiliQrStatusText('Đã quét mã! Vui lòng nhấn [Xác nhận đăng nhập] trên ứng dụng Bilibili.');
+          } else if (pollRes.code === 86038) {
+            stopBiliQrPolling();
+            setBiliQrStatusType('expired');
+            setBiliQrStatusText('Mã QR đã hết hạn. Vui lòng bấm tạo mã mới.');
+          }
+        } catch (pollErr) {
+          console.warn('Lỗi polling Bilibili QR:', pollErr);
+        }
+      }, 2500);
+    } catch (err: any) {
+      setBiliQrStatusType('error');
+      setBiliQrStatusText(`Lỗi tạo mã QR: ${err?.message || err}`);
+    } finally {
+      setIsGeneratingQr(false);
+    }
+  };
+
+  const handleSavePlatformCookie = async () => {
+    if (!customCookieInput.trim()) {
+      alert('Vui lòng nhập chuỗi Cookie');
+      return;
+    }
+    setIsSavingCookie(true);
+    setCookieFeedback(null);
+    try {
+      const res = await apiClient.savePlatformCookie(customPlatform, customCookieInput.trim());
+      setCookieFeedback(res.message);
+      setCustomCookieInput('');
+      loadAuthStatus();
+      setTimeout(() => setCookieFeedback(null), 4000);
+    } catch (err: any) {
+      setCookieFeedback(`Lỗi: ${err?.message}`);
+    } finally {
+      setIsSavingCookie(false);
+    }
+  };
+
+  const handleDeletePlatformCookie = async (plat: string) => {
+    if (!confirm(`Bạn có chắc muốn xóa cookie của nền tảng ${plat}?`)) return;
+    try {
+      await apiClient.deletePlatformCookie(plat);
+      loadAuthStatus();
+    } catch (err: any) {
+      alert(`Lỗi: ${err?.message}`);
+    }
+  };
+
+  const handleSearchVideos = async (kw?: string) => {
+    const keyword = (kw || searchKeyword).trim();
+    if (!keyword) {
+      setSearchError('Vui lòng nhập từ khóa tìm kiếm.');
+      return;
+    }
+    if (kw) {
+      setSearchKeyword(kw);
+    }
+    setIsSearching(true);
+    setSearchError(null);
+    try {
+      const res = await apiClient.searchVideos(keyword, searchPlatform, 1);
+      setSearchResults(res.results || []);
+      if (!res.results || res.results.length === 0) {
+        setSearchError('Không tìm thấy video nào với từ khóa này.');
+      }
+    } catch (err: any) {
+      setSearchError(err?.message || 'Lỗi khi tìm kiếm video.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSelectSearchResult = (item: VideoSearchResultItem) => {
+    const link = item.url || item.arcurl || (item.bvid ? `https://www.bilibili.com/video/${item.bvid}` : '');
+    if (!link) return;
+    setUrlInput(link);
+    setModalTab('download');
+    handleParse(link);
   };
 
   const startPolling = () => {
@@ -311,6 +499,9 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
         rate_limit_delay: rateLimitDelay,
         rotate_device_each_ep: rotationInterval > 0,
         rotation_interval: rotationInterval,
+        target_resolution: selectedResolution,
+        concurrency: concurrency,
+        cookie_source: cookieSource,
       });
       setQueueAddSuccess(`Đã thêm "${targetInfo.title}" (${selectedEpisodes.length} tập) vào hàng đợi tải (Vị trí #${res.position})!`);
       // Gộp luồng: Tự động chuyển ngay sang tab Hàng Đợi Tải để theo dõi tiến trình
@@ -415,22 +606,32 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     setTimeout(() => setQueueActionMsg(null), 3500);
   };
 
-  const handleParse = async () => {
-    const raw = urlInput.trim();
+  const handleParse = async (overrideTarget?: string) => {
+    const raw = (overrideTarget || urlInput).trim();
     if (!raw) {
       setParseError('Vui lòng dán liên kết hoặc nhập tên bộ phim.');
       return;
+    }
+    if (overrideTarget) {
+      setUrlInput(overrideTarget);
     }
 
     setIsParsing(true);
     setParseError(null);
     setTargetInfo(null);
+    setTaskStatus(null);
     setQueueAddSuccess(null);
     setCoverDownloadMsg(null);
 
     try {
       const res = await apiClient.parseDownloadTarget(raw);
       setTargetInfo(res);
+
+      if (res.resolutions && res.resolutions.length > 0) {
+        setSelectedResolution(res.resolutions[0].id);
+      } else {
+        setSelectedResolution('best');
+      }
 
       // Tự động khởi tạo danh sách tập được chọn và quét ổ đĩa
       const allEps = Array.from({ length: res.total_episodes || 1 }, (_, i) => i + 1);
@@ -472,7 +673,14 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
         rate_limit_delay: rateLimitDelay,
         rotate_device_each_ep: rotationInterval > 0,
         rotation_interval: rotationInterval,
+        target_resolution: selectedResolution,
+        concurrency: concurrency,
+        cookie_source: cookieSource,
       });
+
+      // Tự động chuyển ngay sang tab Hàng Đợi Tải và nạp danh sách để người dùng thấy rõ tiến trình
+      setModalTab('queue');
+      fetchQueueTasks(false);
 
       // Update immediate state & start polling
       setTaskStatus({
@@ -602,20 +810,41 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Switcher: Tải Phim Mới vs Hàng Đợi Tải */}
+        {/* Tab Switcher: Dán Link Tải vs Tìm Kiếm Bilibili vs Hàng Đợi Tải vs Tài Khoản & VIP */}
         <div className="px-5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-1 pt-1">
+          <div className="flex items-center gap-1 pt-1 overflow-x-auto">
             <button
               type="button"
               onClick={() => setModalTab('download')}
-              className={`px-4 py-2 text-xs font-bold rounded-t-xl transition flex items-center gap-2 border-b-2 ${
+              className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition flex items-center gap-1.5 border-b-2 whitespace-nowrap ${
                 modalTab === 'download'
                   ? 'text-indigo-300 border-indigo-500 bg-slate-900'
                   : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-900/50'
               }`}
             >
               <Link className="w-3.5 h-3.5" />
-              <span>Tải Phim Mới</span>
+              <span>Dán Link Tải</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setModalTab('search');
+                if (searchResults.length === 0 && !searchKeyword) {
+                  handleSearchVideos('短剧');
+                }
+              }}
+              className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition flex items-center gap-1.5 border-b-2 whitespace-nowrap ${
+                modalTab === 'search'
+                  ? 'text-indigo-300 border-indigo-500 bg-slate-900'
+                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-900/50'
+              }`}
+            >
+              <Search className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Tìm Kiếm Bilibili</span>
+              <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800">
+                0 Cần Nick
+              </span>
             </button>
 
             <button
@@ -624,7 +853,7 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                 setModalTab('queue');
                 fetchQueueTasks(false);
               }}
-              className={`px-4 py-2 text-xs font-bold rounded-t-xl transition flex items-center gap-2 border-b-2 ${
+              className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition flex items-center gap-1.5 border-b-2 whitespace-nowrap ${
                 modalTab === 'queue'
                   ? 'text-indigo-300 border-indigo-500 bg-slate-900'
                   : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-900/50'
@@ -643,6 +872,25 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                   {queueTasks.length}
                 </span>
               )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setModalTab('auth');
+                loadAuthStatus();
+              }}
+              className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition flex items-center gap-1.5 border-b-2 whitespace-nowrap ${
+                modalTab === 'auth'
+                  ? 'text-indigo-300 border-indigo-500 bg-slate-900'
+                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-900/50'
+              }`}
+            >
+              <User className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Tài Khoản & VIP</span>
+              {authStatus?.platforms?.bilibili?.logged_in ? (
+                <span className="w-2 h-2 rounded-full bg-emerald-400" title="Bilibili VIP / Đã đăng nhập" />
+              ) : null}
             </button>
           </div>
 
@@ -685,13 +933,19 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-5 space-y-4 overflow-y-auto flex-1 min-h-[420px]">
-          {modalTab === 'download' ? (
+          {modalTab === 'download' && (
             <>
           {/* Input Row */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-              <Link className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Dán đường link hoặc nhập tên phim Hồng Quả:</span>
+            <label className="block text-xs font-semibold text-slate-200 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Link className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Dán liên kết (Bilibili, Xiaohongshu, Hồng Quả, Douyin, YouTube) hoặc tên phim:</span>
+              </span>
+              <span className="text-[10px] font-medium text-emerald-400 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <span>Tải được ngay 0 cần tài khoản</span>
+              </span>
             </label>
             <div className="flex gap-2">
               <input
@@ -702,11 +956,11 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                   if (e.key === 'Enter') handleParse();
                 }}
                 disabled={isParsing || isRunning}
-                placeholder="Ví dụ: https://hongguoduanju.com/episode?series_id=... hoặc gõ tên '婚从天降'"
+                placeholder="Dán link Bilibili (BV...), Xiaohongshu (xhslink...), Douyin, YouTube, Hồng Quả hoặc gõ tên phim..."
                 className="flex-1 px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-xs text-slate-100 placeholder-slate-500 focus:outline-none transition"
               />
               <button
-                onClick={handleParse}
+                onClick={() => handleParse()}
                 disabled={isParsing || isRunning || !urlInput.trim()}
                 className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold rounded-xl shadow transition flex items-center gap-1.5 flex-shrink-0"
               >
@@ -723,9 +977,17 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                 )}
               </button>
             </div>
-            <p className="text-[10px] text-slate-500">
-              * Mẹo: Hỗ trợ link web/app Hồng Quả, Series ID số, tên phim chữ Hán, hoặc link YouTube/Bilibili.
-            </p>
+            <div className="flex items-center justify-between text-[10px] text-slate-500">
+              <span>* Hỗ trợ tự động: Bilibili (720p/480p), Tiểu Hồng Thư (1080p sạch không logo), Douyin, YouTube, Hồng Quả (mở khóa full).</span>
+              <button
+                type="button"
+                onClick={() => setModalTab('search')}
+                className="text-cyan-400 hover:underline flex items-center gap-1"
+              >
+                <Search className="w-3 h-3" />
+                <span>Tìm kiếm video trên Bilibili &rarr;</span>
+              </button>
+            </div>
           </div>
 
           {/* Lỗi phân tích nếu có */}
@@ -815,6 +1077,129 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                         <span>Hỗ trợ tải 100% tập khóa qua CENC Engine</span>
                       </div>
                     )}
+                  </div>
+
+                  {/* Lựa chọn độ phân giải và ước tính dung lượng REAL DATA */}
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                        <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Độ phân giải tải xuống:</span>
+                      </label>
+                      <select
+                        value={selectedResolution}
+                        onChange={(e) => setSelectedResolution(e.target.value)}
+                        className="px-2.5 py-1.5 bg-slate-950 border border-slate-700 text-cyan-300 font-medium text-xs rounded-lg focus:outline-none focus:border-cyan-500 cursor-pointer"
+                      >
+                        <option value="best">Tự động (Chất lượng cao nhất)</option>
+                        {targetInfo.resolutions && targetInfo.resolutions.length > 0 ? (
+                          targetInfo.resolutions.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.label} {r.size_mb ? `(~${r.size_mb} MB/tập)` : ''}
+                            </option>
+                          ))
+                        ) : (
+                          <>
+                            <option value="1080p">1080p (Full HD - Nét nhất)</option>
+                            <option value="720p">720p (HD - Chuẩn khuyên dùng)</option>
+                            <option value="540p">540p (Tiết kiệm dung lượng)</option>
+                            <option value="480p">480p (SD - Mượt nhẹ)</option>
+                            <option value="360p">360p (Dung lượng thấp nhất)</option>
+                          </>
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Hộp ước tính dung lượng thực tế (REAL DATA TỪ MÁY CHỦ) */}
+                    <div className="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-800/40 text-xs flex flex-wrap items-center justify-between gap-2 text-cyan-200">
+                      <div className="flex items-center gap-2">
+                        <HardDrive className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+                        <div>
+                          <span className="text-slate-300">Dung lượng 1 tập (Real Data): </span>
+                          <strong className="text-white font-mono">
+                            {singleEpisodeMb > 0 ? `~${singleEpisodeMb.toFixed(2)} MB` : 'Đang đồng bộ...'}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 bg-slate-900/90 px-2.5 py-1 rounded-md border border-slate-700/60">
+                        <span className="text-slate-400">
+                          Tổng dung lượng ước tính ({countSelected} tập):
+                        </span>
+                        <strong className="text-emerald-400 font-bold font-mono">
+                          {totalEstimatedMb > 0
+                            ? totalEstimatedMb >= 1024
+                              ? `${(totalEstimatedMb / 1024).toFixed(2)} GB (~${totalEstimatedMb.toFixed(0)} MB)`
+                              : `~${totalEstimatedMb.toFixed(1)} MB`
+                            : '—'}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Cấu hình Đa luồng tải cùng lúc & Trình duyệt Cookies */}
+                  <div className="pt-2 border-t border-slate-800 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                        <Zap className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Số luồng tải đồng thời (Multi-threading):</span>
+                      </label>
+                      <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                        {[
+                          { value: 1, label: '1 luồng', tag: 'Tuần tự' },
+                          { value: 2, label: '2 luồng', tag: '' },
+                          { value: 3, label: '3 luồng', tag: 'Khuyên dùng' },
+                          { value: 5, label: '5 luồng', tag: 'Nhanh' },
+                          { value: 8, label: '8 luồng', tag: 'Siêu tốc' },
+                        ].map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => {
+                              setConcurrency(opt.value);
+                              localStorage.setItem('sls_download_concurrency', String(opt.value));
+                            }}
+                            className={`px-2 py-1 rounded text-xs font-semibold transition flex items-center gap-1 ${
+                              concurrency === opt.value
+                                ? 'bg-amber-500 text-slate-950 shadow-sm'
+                                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                            }`}
+                          >
+                            <span>{opt.label}</span>
+                            {opt.tag && (
+                              <span className={`text-[9px] px-1 py-0.2 rounded font-normal ${
+                                concurrency === opt.value
+                                  ? 'bg-amber-600 text-slate-950 font-bold'
+                                  : 'bg-slate-800 text-slate-500'
+                              }`}>
+                                {opt.tag}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Lựa chọn Cookies trình duyệt cho nguồn video mạng xã hội */}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                        <Globe className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Cookies đăng nhập (Facebook / YouTube / Bilibili):</span>
+                      </label>
+                      <select
+                        value={cookieSource}
+                        onChange={(e) => {
+                          setCookieSource(e.target.value);
+                          localStorage.setItem('sls_cookie_source', e.target.value);
+                        }}
+                        className="px-2.5 py-1.5 bg-slate-950 border border-slate-700 text-indigo-300 font-medium text-xs rounded-lg focus:outline-none focus:border-indigo-500 cursor-pointer"
+                      >
+                        <option value="none">Tự động nhận diện (Khuyên dùng)</option>
+                        <option value="chrome">Google Chrome</option>
+                        <option value="edge">Microsoft Edge</option>
+                        <option value="firefox">Mozilla Firefox</option>
+                      </select>
+                    </div>
                   </div>
 
                   {/* R1: Tùy chỉnh và ghi nhớ đường dẫn lưu video thực tế trên ổ cứng */}
@@ -1248,9 +1633,21 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                   </span>
                 </div>
 
-                <span className="font-mono font-bold text-cyan-400">
-                  {taskStatus.progress_percent?.toFixed(1)}%
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-bold text-cyan-400">
+                    {taskStatus.progress_percent?.toFixed(1)}%
+                  </span>
+                  {(taskStatus.status === 'completed' || taskStatus.status === 'failed') && (
+                    <button
+                      type="button"
+                      onClick={() => setTaskStatus(null)}
+                      className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800/80 transition-colors"
+                      title="Đóng thông báo"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Progress bar */}
@@ -1293,8 +1690,165 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
             </div>
           )}
             </>
-          ) : (
-            /* TAB 2: HÀNG ĐỢI TẢI PHIM */
+          )}
+
+          {/* TAB 2: TÌM KIẾM VIDEO TRÊN BILIBILI (0 CẦN NICK) */}
+          {modalTab === 'search' && (
+            <div className="space-y-4 animate-in fade-in">
+              {/* Thanh tìm kiếm */}
+              <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Search className="w-4 h-4 text-cyan-400" />
+                    <span className="text-xs font-bold text-white">Tìm Kiếm Video & Phim Ngắn Bilibili</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-800/60 px-2.5 py-0.5 rounded-full">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                    <span>Chế độ Khách (Guest Fingerprint + Wbi): 0 Cần Nick</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={searchKeyword}
+                    onChange={(e) => setSearchKeyword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSearchVideos();
+                    }}
+                    placeholder="Nhập từ khóa tìm kiếm (Ví dụ: 短剧, phim ngắn, anime, vlog, review...)"
+                    className="flex-1 px-3.5 py-2.5 bg-slate-900 border border-slate-700 focus:border-cyan-500 rounded-xl text-xs text-slate-100 placeholder-slate-500 focus:outline-none transition"
+                  />
+                  <button
+                    onClick={() => handleSearchVideos()}
+                    disabled={isSearching || !searchKeyword.trim()}
+                    className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white text-xs font-bold rounded-xl shadow transition flex items-center gap-1.5 flex-shrink-0 active:scale-95"
+                  >
+                    {isSearching ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Đang tìm...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Search className="w-3.5 h-3.5" />
+                        <span>Tìm Kiếm</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Từ khóa gợi ý nhanh */}
+                <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                  <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-amber-400" />
+                    Gợi ý:
+                  </span>
+                  {['短剧 (Phim ngắn)', '逆袭', '战神', '都市', '仙侠', 'Hoạt hình', 'Review Phim'].map((tag) => {
+                    const cleanTag = tag.split(' ')[0];
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => handleSearchVideos(cleanTag)}
+                        className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] text-slate-300 hover:text-cyan-300 transition"
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Lỗi tìm kiếm nếu có */}
+              {searchError && (
+                <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-xl text-xs text-amber-300 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                  <span>{searchError}</span>
+                </div>
+              )}
+
+              {/* Danh sách kết quả tìm kiếm */}
+              {isSearching ? (
+                <div className="h-64 flex flex-col items-center justify-center text-center p-6 border border-slate-800 rounded-2xl bg-slate-950/40 space-y-3">
+                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin" />
+                  <p className="text-xs text-slate-300 font-medium">Đang ký chữ ký bảo mật Wbi & tìm kiếm video trên Bilibili...</p>
+                </div>
+              ) : searchResults.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[480px] overflow-y-auto pr-1">
+                  {searchResults.map((item) => {
+                    const cleanTitle = item.title.replace(/<[^>]+>/g, '');
+                    const cleanPic = item.pic.startsWith('//') ? `https:${item.pic}` : item.pic;
+                    return (
+                      <div
+                        key={item.id || item.bvid}
+                        className="p-2.5 bg-slate-950/70 hover:bg-slate-900/90 border border-slate-800 hover:border-slate-700 rounded-xl transition flex gap-3 group"
+                      >
+                        <div className="relative w-28 h-20 flex-shrink-0 overflow-hidden rounded-lg bg-slate-900 border border-slate-800">
+                          {cleanPic ? (
+                            <img
+                              src={cleanPic}
+                              alt={cleanTitle}
+                              className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-slate-600">
+                              <Film className="w-6 h-6" />
+                            </div>
+                          )}
+                          {item.duration && (
+                            <span className="absolute bottom-1 right-1 px-1.5 py-0.2 bg-black/80 rounded text-[9px] font-mono text-white font-medium">
+                              {item.duration}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-w-0 flex flex-col justify-between">
+                          <div>
+                            <h4 className="text-xs font-bold text-white line-clamp-2 leading-tight group-hover:text-cyan-300 transition" title={cleanTitle}>
+                              {cleanTitle}
+                            </h4>
+                            <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400">
+                              <span className="truncate max-w-[120px]">{item.author}</span>
+                              {item.play !== undefined && (
+                                <span>{item.play > 10000 ? `${(item.play / 10000).toFixed(1)}vạn view` : `${item.play} view`}</span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="pt-1.5 flex items-center justify-between">
+                            <span className="text-[9px] font-mono text-slate-500">{item.bvid}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectSearchResult(item)}
+                              className="px-2.5 py-1 rounded-lg bg-cyan-600/30 hover:bg-cyan-600 border border-cyan-500/50 hover:border-cyan-400 text-cyan-200 hover:text-white text-[10px] font-bold flex items-center gap-1 transition active:scale-95 shadow-sm"
+                            >
+                              <Download className="w-3 h-3" />
+                              <span>Tải & Phân tích</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="h-64 flex flex-col items-center justify-center text-center p-6 border-2 border-dashed border-slate-800 rounded-2xl bg-slate-950/40 space-y-3">
+                  <Search className="w-10 h-10 text-slate-600" />
+                  <div className="space-y-1">
+                    <h3 className="text-white font-bold text-xs">Sẵn sàng tìm kiếm video trên Bilibili</h3>
+                    <p className="text-slate-400 text-[11px] max-w-sm">
+                      Nhập từ khóa hoặc bấm chọn từ khóa gợi ý phía trên để bắt đầu tìm kiếm video trực tiếp.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: HÀNG ĐỢI TẢI PHIM */}
+          {modalTab === 'queue' && (
             <div className="space-y-3.5 animate-in fade-in">
               {queueActionMsg && (
                 <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in">
@@ -1533,12 +2087,260 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
               )}
             </div>
           )}
+
+          {/* TAB 4: TÀI KHOẢN & VIP / NỀN TẢNG */}
+          {modalTab === 'auth' && (
+            <div className="space-y-4 animate-in fade-in">
+              {/* BANNER GIẢI ĐÁP QUAN TRỌNG: CHẾ ĐỘ 0 CẦN TÀI KHOẢN */}
+              <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-950/50 via-slate-950 to-slate-900 border border-emerald-800/60 space-y-3">
+                <div className="flex items-center gap-2 text-emerald-400">
+                  <Shield className="w-4 h-4" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider">
+                    Khả Năng Hoạt Động Không Cần Tài Khoản (Zero-Account System)
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  <strong className="text-emerald-300">Không cần đăng nhập trước!</strong> Hệ thống đã được trang bị các thuật toán vượt rào và giả lập danh tính tự động, cho phép bạn tìm kiếm, xem trước và tải xuống trọn vẹn từ các nền tảng:
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                  <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                        Bilibili (B站)
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-semibold">Tự động cấp Guest</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-tight">
+                      Tự động tạo Dynamic Fingerprint (<code className="text-cyan-300 font-mono">buvid3/buvid4</code>) + Ký Wbi SHA-256. Tìm kiếm video, xem và tải 720p/480p không cần đăng nhập.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-rose-400" />
+                        Xiaohongshu (Tiểu Hồng Thư)
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-semibold">1080p Không Watermark</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-tight">
+                      Trích xuất trực tiếp CDN ByteDance (<code className="text-rose-300 font-mono">originVideoKey</code>), tải video 1080p sạch không dính logo watermark, 0 cần tài khoản.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-400" />
+                        Hồng Quả (Hongguo)
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-semibold">100% Mở Khóa VIP</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-tight">
+                      Cơ chế thiết bị di động ảo hóa (<code className="text-amber-300 font-mono">device_register</code>) giải mã DRM CENC, tải trọn vẹn 100% tập khóa mà không cần đăng nhập.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-red-500" />
+                        YouTube & Douyin
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-semibold">1080p - 4K Direct</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-tight">
+                      Mô phỏng Web Embedded & Android Client qua yt-dlp + Node.js runtime, tải video chất lượng cao mà không cần đăng nhập tài khoản.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* KHU VỰC ĐĂNG NHẬP NÂNG CAO CHO NGƯỜI CÓ TÀI KHOẢN HOẶC VIP */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* 1. Bilibili In-App QR Scan */}
+                <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3 flex flex-col justify-between">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <QrCode className="w-4 h-4 text-cyan-400" />
+                        <h4 className="text-xs font-bold text-white">Đăng Nhập Bilibili Bằng Mã QR</h4>
+                      </div>
+                      {authStatus?.platforms?.bilibili?.logged_in ? (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] font-bold">
+                          Đã đăng nhập
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px]">
+                          Chế độ Khách
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-[11px] text-slate-400">
+                      {authStatus?.platforms?.bilibili?.logged_in
+                        ? 'Tài khoản Bilibili đã được kết nối. Bạn có thể tải video chất lượng cao nhất (1080p 60fps / 4K) và nội dung VIP.'
+                        : 'Quét mã QR bằng App Bilibili trên điện thoại để mở khóa chất lượng 1080p 60fps, 4K hoặc phim VIP.'}
+                    </p>
+
+                    {authStatus?.platforms?.bilibili?.logged_in ? (
+                      <div className="p-3 bg-emerald-950/30 border border-emerald-800/40 rounded-xl space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-300">Tên người dùng:</span>
+                          <strong className="text-white">{authStatus.platforms.bilibili.user_name || 'Bilibili Member'}</strong>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-300">Cấp bậc VIP:</span>
+                          <span className="font-semibold text-amber-300">{authStatus.platforms.bilibili.vip_status || 'Thường'}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePlatformCookie('bilibili')}
+                          className="w-full mt-2 py-1.5 bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Đăng Xuất / Xóa Cookie Bilibili</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 pt-1">
+                        {biliQrDataUrl ? (
+                          <div className="flex flex-col items-center p-3 bg-white/5 border border-slate-800 rounded-xl space-y-2.5">
+                            <img
+                              src={biliQrDataUrl}
+                              alt="Bilibili QR Code"
+                              className="w-44 h-44 rounded-lg bg-white p-2 shadow-lg"
+                            />
+                            <div className="text-center space-y-1">
+                              <p className={`text-xs font-semibold ${
+                                biliQrStatusType === 'success' ? 'text-emerald-400' :
+                                biliQrStatusType === 'scanned' ? 'text-amber-400' :
+                                biliQrStatusType === 'expired' ? 'text-rose-400' : 'text-cyan-300'
+                              }`}>
+                                {biliQrStatusText}
+                              </p>
+                              <p className="text-[10px] text-slate-500">
+                                Mở app Bilibili &rarr; Nhấn biểu tượng Quét mã ở góc trên &rarr; Quét mã này
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleGenerateBilibiliQr}
+                              disabled={isGeneratingQr}
+                              className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] rounded-lg border border-slate-700 transition"
+                            >
+                              Làm mới mã QR
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleGenerateBilibiliQr}
+                            disabled={isGeneratingQr}
+                            className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold shadow transition flex items-center justify-center gap-2 active:scale-95"
+                          >
+                            <QrCode className="w-4 h-4" />
+                            <span>{isGeneratingQr ? 'Đang tạo mã QR...' : 'Tạo Mã QR Đăng Nhập Bilibili'}</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. Quản lý Cookie Thủ Công Cho Các Nền Tảng Khác */}
+                <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3 flex flex-col justify-between">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Key className="w-4 h-4 text-indigo-400" />
+                        <h4 className="text-xs font-bold text-white">Quản Lý Cookie Nền Tảng (Tùy Chọn)</h4>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={loadAuthStatus}
+                        className="text-slate-400 hover:text-white p-1"
+                        title="Tải lại trạng thái"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isLoadingAuth ? 'animate-spin text-indigo-400' : ''}`} />
+                      </button>
+                    </div>
+
+                    <p className="text-[11px] text-slate-400">
+                      Dán chuỗi Cookie từ trình duyệt nếu bạn muốn đăng nhập thủ công cho Douyin, Tiểu Hồng Thư, YouTube hoặc Bilibili:
+                    </p>
+
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center gap-2">
+                        <label className="text-[11px] text-slate-300 font-semibold">Nền tảng:</label>
+                        <select
+                          value={customPlatform}
+                          onChange={(e) => setCustomPlatform(e.target.value)}
+                          className="px-2 py-1 bg-slate-900 border border-slate-700 text-xs text-white rounded-lg focus:outline-none"
+                        >
+                          <option value="bilibili">Bilibili</option>
+                          <option value="douyin">Douyin</option>
+                          <option value="xhs">Xiaohongshu (Tiểu Hồng Thư)</option>
+                          <option value="youtube">YouTube</option>
+                        </select>
+
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          {authStatus?.platforms?.[customPlatform]?.logged_in ? (
+                            <span className="text-emerald-400 font-semibold">● Đã có cookie</span>
+                          ) : (
+                            <span className="text-slate-500">○ Đang dùng Guest</span>
+                          )}
+                        </span>
+                      </div>
+
+                      <textarea
+                        value={customCookieInput}
+                        onChange={(e) => setCustomCookieInput(e.target.value)}
+                        placeholder="Dán chuỗi Cookie (Ví dụ: SESSDATA=...; bili_jct=... hoặc cookie Netscape)..."
+                        rows={3}
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 focus:border-indigo-500 rounded-xl text-[11px] font-mono text-slate-200 placeholder-slate-600 focus:outline-none transition resize-none"
+                      />
+
+                      {cookieFeedback && (
+                        <p className="text-[11px] text-emerald-400 font-medium">{cookieFeedback}</p>
+                      )}
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleSavePlatformCookie}
+                          disabled={isSavingCookie || !customCookieInput.trim()}
+                          className="flex-1 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 active:scale-95"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{isSavingCookie ? 'Đang lưu...' : 'Lưu Cookie'}</span>
+                        </button>
+
+                        {authStatus?.platforms?.[customPlatform]?.logged_in && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePlatformCookie(customPlatform)}
+                            className="px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 rounded-lg text-xs font-semibold transition"
+                            title="Xóa cookie nền tảng này"
+                          >
+                            Xóa
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer Modal Actions */}
         <div className="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
           <div className="text-[11px] text-slate-500">
-            {modalTab === 'download' ? (
+            {modalTab === 'download' && (
               isRunning ? (
                 <span className="text-amber-400 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
@@ -1547,18 +2349,31 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
               ) : (
                 <span>Lưu tại: <span className="font-mono text-slate-400">{outputDir}</span></span>
               )
-            ) : (
+            )}
+            {modalTab === 'search' && (
+              <span className="text-slate-400 flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Tìm kiếm và tải video đa nền tảng.</span>
+              </span>
+            )}
+            {modalTab === 'queue' && (
               <span className="flex items-center gap-1.5">
-                <span className="font-semibold text-slate-300">Tổng cộng {queueTasks.length} bộ phim trong hàng đợi</span>
+                <span className="font-semibold text-slate-300">{queueTasks.length} tác vụ trong hàng đợi</span>
                 <span className="text-slate-500">
-                  {isQueuePaused ? '(Đang tạm dừng)' : '(Đang tự động điều phối)'}
+                  {isQueuePaused ? '(Tạm dừng)' : '(Đang điều phối)'}
                 </span>
+              </span>
+            )}
+            {modalTab === 'auth' && (
+              <span className="text-slate-400 flex items-center gap-1">
+                <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Đăng nhập tài khoản nền tảng khi cần tải chất lượng cao (1080p/4K).</span>
               </span>
             )}
           </div>
 
           <div className="flex items-center gap-2.5">
-            {modalTab === 'download' ? (
+            {modalTab === 'download' && (
               isRunning ? (
                 <button
                   onClick={handleCancel}
@@ -1577,7 +2392,6 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                   </button>
                   {targetInfo && (
                     <>
-                      {/* R3/R4: Nút thêm vào hàng đợi tải nhiều phim */}
                       <button
                         onClick={handleAddToQueue}
                         disabled={isAddingToQueue || selectedEpisodes.length === 0}
@@ -1604,7 +2418,28 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                   )}
                 </>
               )
-            ) : (
+            )}
+
+            {modalTab === 'search' && (
+              <>
+                <button
+                  onClick={onClose}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalTab('download')}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow transition flex items-center gap-1.5 active:scale-95"
+                >
+                  <Link className="w-3.5 h-3.5" />
+                  <span>Dán Link Trực Tiếp</span>
+                </button>
+              </>
+            )}
+
+            {modalTab === 'queue' && (
               <>
                 <button
                   onClick={onClose}
@@ -1619,6 +2454,33 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                 >
                   <Link className="w-3.5 h-3.5" />
                   <span>+ Thêm Phim Mới</span>
+                </button>
+              </>
+            )}
+
+            {modalTab === 'auth' && (
+              <>
+                <button
+                  onClick={onClose}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="button"
+                  onClick={loadAuthStatus}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 active:scale-95"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAuth ? 'animate-spin text-cyan-400' : ''}`} />
+                  <span>Làm mới trạng thái</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalTab('download')}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow transition flex items-center gap-1.5 active:scale-95"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Đến Tải Phim</span>
                 </button>
               </>
             )}

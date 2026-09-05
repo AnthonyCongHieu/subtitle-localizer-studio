@@ -4,9 +4,9 @@ import { ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
 import { PresetProfile, getDefaultPreset } from '../../types/presets';
 import { UrlDownloadModal } from './UrlDownloadModal';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
+import { appLogger, useAppLoggerCount } from '../common/GlobalActivityLogger';
 import {
   Film,
-  Download,
   CheckSquare,
   Square,
   Play,
@@ -34,6 +34,7 @@ import {
   Globe,
   Smartphone,
   Layers,
+  Activity,
 } from 'lucide-react';
 
 interface DashboardBatchHubProps {
@@ -46,6 +47,7 @@ interface DashboardBatchHubProps {
   onRefreshProjects: () => void;
   onBatchProjectsCreated?: (newProjects: ProjectManifestV1[]) => void;
   onOpenQueue?: () => void;
+  onOpenDownloader?: (tab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings') => void;
 }
 
 interface BatchQueueItem {
@@ -380,11 +382,11 @@ const BatchVideoCard: React.FC<{
           </span>
         </div>
 
-        {/* Nút Phóng To / Mở Studio Chi Tiết */}
+        {/* Nút Phóng To / Mở Studio */}
         <button
           onClick={() => onSelectProject(project)}
           className="p-1 text-slate-400 hover:text-indigo-300 transition flex items-center gap-1 text-[10px] font-semibold"
-          title="Mở Studio Chi Tiết"
+          title="Vào Studio"
         >
           <Maximize2 className="w-3 h-3" />
         </button>
@@ -403,12 +405,13 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   onRefreshProjects,
   onBatchProjectsCreated,
   onOpenQueue,
+  onOpenDownloader,
 }) => {
+  const loggerCount = useAppLoggerCount();
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [activeBatchPresetId, setActiveBatchPresetId] = useState<string>('');
   const [gridCols, setGridCols] = useState<2 | 3 | 4>(3);
   const [sidebarTab, setSidebarTab] = useState<'pipeline' | 'layers' | 'tune'>('layers');
-  const [subTab, setSubTab] = useState<'layers' | 'details'>('layers');
 
   // Trạng thái các Layer (Bật / Tắt theo ảnh tham khảo)
   const [layerVisibility, setLayerVisibility] = useState({
@@ -676,7 +679,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   return (
     <div className="flex-1 w-full h-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
       {/* 1. Header Đỉnh Chuẩn Mẫu (Header Bar) */}
-      <header className="h-11 shrink-0 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between z-40">
+      <header className="h-12 shrink-0 bg-slate-900/95 border-b border-slate-800 px-4 flex items-center justify-between z-40 backdrop-blur">
         {/* Trái: Logo & Các Tab Điều Hướng */}
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider">
@@ -703,36 +706,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               <Settings className="w-3.5 h-3.5 text-indigo-400" />
               <span>Thiết Lập</span>
             </button>
-            <button
-              onClick={() => {
-                if (projects.length > 0) onSelectProject(projects[0]);
-              }}
-              className="px-2.5 py-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition flex items-center gap-1.5 font-medium"
-            >
-              <FileText className="w-3.5 h-3.5 text-amber-400" />
-              <span>Kịch bản</span>
-            </button>
-            <button
-              onClick={() => {
-                if (projects.length > 0) onSelectProject(projects[0]);
-              }}
-              className="px-2.5 py-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition flex items-center gap-1.5 font-medium text-rose-300"
-            >
-              <span>Chi tiết Studio</span>
-            </button>
-            <button
-              onClick={() => {
-                if (projects.length > 0) {
-                  window.open(apiClient.getExportSrtUrl(projects[0].project_id, true), '_blank');
-                }
-              }}
-              className="px-2.5 py-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition flex items-center gap-1.5 font-medium"
-            >
-              <Download className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Tải xuống SRT</span>
-            </button>
 
-            {onOpenQueue && (
+            {onOpenQueue ? (
               <button
                 onClick={onOpenQueue}
                 className="px-2.5 py-1 rounded text-emerald-300 bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-700/50 transition flex items-center gap-1.5 font-semibold text-xs shadow-sm active:scale-95"
@@ -741,12 +716,21 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                 <Layers className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Hàng Đợi</span>
               </button>
-            )}
+            ) : onOpenDownloader ? (
+              <button
+                onClick={() => onOpenDownloader('queue')}
+                className="px-2.5 py-1 rounded text-emerald-300 bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-700/50 transition flex items-center gap-1.5 font-semibold text-xs shadow-sm active:scale-95"
+                title="Mở Trang Quản Lý Hàng Đợi Tải Phim"
+              >
+                <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Hàng Đợi</span>
+              </button>
+            ) : null}
           </div>
         </div>
 
-        {/* Phải: Ngôn ngữ, Trạng thái Engine & Nút Mở Studio */}
-        <div className="flex items-center gap-3 text-xs">
+        {/* Phải: Ngôn ngữ, Keys Pool, Nhật Ký, Trạng thái Engine & Nút Vào Studio */}
+        <div className="flex items-center gap-2.5 text-xs">
           <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 text-[10px] font-mono">
             <span className="text-cyan-400 font-bold">VI</span>
             <span className="text-slate-600">|</span>
@@ -759,7 +743,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               fetchGeminiPoolStatus();
             }}
             className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-amber-500/50 text-amber-300 font-semibold text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
-            title="Quản lý danh sách API keys và xem trạng thái xoay tua Round-Robin"
+            title="Quản lý danh sách API keys và xem trạng thái xoay tua"
           >
             <Key className="w-3.5 h-3.5 text-amber-400" />
             <span>
@@ -772,9 +756,23 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             )}
           </button>
 
+          <button
+            onClick={() => appLogger.toggle()}
+            className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-cyan-500/50 text-slate-300 hover:text-white font-medium text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+            title="Nhật ký hoạt động hệ thống"
+          >
+            <Activity className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Nhật ký</span>
+            {loggerCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold">
+                {loggerCount}
+              </span>
+            )}
+          </button>
+
           <span className="px-2.5 py-1 rounded bg-emerald-950/80 border border-emerald-600/50 text-emerald-400 font-bold text-[10px] tracking-wide flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Local Engine Sẵn Sàng</span>
+            <span>Engine Sẵn Sàng</span>
           </span>
 
           <button
@@ -930,28 +928,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             </button>
           </div>
 
-          {/* Subtabs khi ở tab Thành phần (layers) */}
-          {sidebarTab === 'layers' && (
-            <div className="flex border-b border-slate-800 bg-slate-950/60 text-[10px] font-semibold">
-              <button
-                onClick={() => setSubTab('layers')}
-                className={`flex-1 py-1.5 text-center transition ${
-                  subTab === 'layers' ? 'bg-slate-800/80 text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Lớp (Layers)
-              </button>
-              <button
-                onClick={() => setSubTab('details')}
-                className={`flex-1 py-1.5 text-center transition ${
-                  subTab === 'details' ? 'bg-slate-800/80 text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Chi tiết
-              </button>
-            </div>
-          )}
-
           {/* Nội Dung Các Lớp & Tùy Chọn Theo Tab */}
           <div className="flex-1 overflow-y-auto p-3 space-y-4">
             {sidebarTab === 'pipeline' && (
@@ -959,11 +935,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                 <div>
                   <h4 className="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-indigo-500" />
-                    Cấu Hình Pipeline Hàng Loạt
+                    Cấu Hình Pipeline
                   </h4>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Quy trình tự động hóa 4 bước: Quét phụ đề OCR &rarr; Dịch AI &rarr; Lồng tiếng TTS &rarr; Xuất MP4.
-                  </p>
                 </div>
 
                 <div className="space-y-2 p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px]">
@@ -995,10 +968,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                     <option value="vi-VN-HoaiMyNeural">Hoài My (vi-VN-HoaiMyNeural - Nữ dịu dàng)</option>
                   </select>
                 </div>
-
-                <div className="p-2.5 rounded-lg bg-indigo-950/30 border border-indigo-500/30 text-[11px] text-indigo-200">
-                  ⚡ <strong>100% Dữ liệu thật</strong>: Toàn bộ quá trình quét, dịch và lồng tiếng chạy trên video thực tế.
-                </div>
               </div>
             )}
 
@@ -1007,11 +976,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                 <div>
                   <h4 className="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-amber-500" />
-                    Hiệu Chỉnh Video Đầu Ra
+                    Hiệu Chỉnh Video
                   </h4>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Tùy chỉnh che mờ phụ đề gốc, hòa âm giọng đọc và căn chỉnh khung hình.
-                  </p>
                 </div>
 
                 <div className="space-y-2.5 text-[11px]">
@@ -1028,7 +994,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                   </div>
 
                   <div>
-                    <label className="text-slate-400 block mb-1">Âm lượng nhạc nền khi có thuyết minh:</label>
+                    <label className="text-slate-400 block mb-1">Âm lượng nhạc nền:</label>
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
@@ -1040,14 +1006,13 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                       />
                       <span className="font-mono text-slate-300 text-xs">25%</span>
                     </div>
-                    <span className="text-[10px] text-slate-500">Tự động hạ nhỏ nhạc nền để nổi bật giọng đọc</span>
                   </div>
                 </div>
               </div>
             )}
 
-            {sidebarTab === 'layers' && subTab === 'layers' && (
-              <>
+            {sidebarTab === 'layers' && (
+              <div className="space-y-4">
                 {/* 1. Nhóm Video & Ảnh */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-slate-800">
@@ -1152,52 +1117,30 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                     />
                   </div>
                 </div>
-              </>
-            )}
 
-            {sidebarTab === 'layers' && subTab === 'details' && (
-              /* Subtab Chi Tiết (Inspector) */
-              <div className="space-y-3 text-xs">
-                <div>
-                  <label className="text-slate-400 block mb-1 font-medium">Chuẩn áp dụng:</label>
+                {/* Chuẩn hiện tại */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>Chuẩn áp dụng:</span>
+                    <button
+                      onClick={onOpenPresetManager}
+                      className="text-indigo-400 hover:text-indigo-300 font-medium transition"
+                    >
+                      Quản lý
+                    </button>
+                  </div>
                   <select
                     value={activeBatchPresetId || defaultPreset?.id}
                     onChange={(e) => setActiveBatchPresetId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-slate-200"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-[11px] focus:outline-none focus:border-indigo-500 transition"
                   >
                     {presets.map((p) => (
-                      <option key={p.id} value={p.id}>
+                      <option key={p.id} value={p.id} className="bg-slate-900 text-slate-200">
                         {p.name}
                       </option>
                     ))}
                   </select>
                 </div>
-
-                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5 text-[11px]">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Kiểu che:</span>
-                    <span className="font-semibold text-cyan-300">Mờ hòa tan video</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Tỉ lệ khung hình:</span>
-                    <span className="font-semibold text-indigo-300">16:9 Cinema</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Ngôn ngữ:</span>
-                    <span className="font-semibold text-amber-300">Trung (zh) &rarr; Việt (vi)</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Tọa độ ROI:</span>
-                    <span className="font-mono text-slate-400">Y: 81%, H: 15%, W: 88%</span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={onOpenPresetManager}
-                  className="w-full py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 rounded font-semibold transition"
-                >
-                  Chỉnh sửa Profile Chuẩn
-                </button>
               </div>
             )}
           </div>
@@ -1206,7 +1149,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
 
       {/* 3. Thanh Quy Trình Tự Động Hóa Đáy (Batch Pipeline Action Bar) */}
       <footer className="h-14 shrink-0 bg-slate-900 border-t border-slate-800 px-4 flex items-center justify-between z-40 select-none">
-        {/* Nhóm Nút Xử Lý Hàng Loạt Chuẩn 5 Bước */}
+        {/* Nhóm Nút Xử Lý Hàng Loạt */}
         <div className="flex items-center gap-2">
           {/* File Input Ẩn */}
           <input
@@ -1222,40 +1165,45 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             onClick={() => batchFileInputRef.current?.click()}
             disabled={isBatchUploading || isQueueRunning}
             className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow transition disabled:opacity-50"
-            title="Thêm một hoặc nhiều video từ máy tính vào danh sách"
+            title="Thêm video từ máy tính"
           >
             <FolderPlus className="w-3.5 h-3.5" />
             <span>{isBatchUploading ? 'Đang nạp...' : 'Thêm video'}</span>
           </button>
 
           <button
-            onClick={() => setShowUrlDownloadModal(true)}
+            onClick={() => {
+              if (onOpenDownloader) {
+                onOpenDownloader('direct');
+              } else {
+                setShowUrlDownloadModal(true);
+              }
+            }}
             disabled={isQueueRunning}
-            className="px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow transition disabled:opacity-50"
-            title="Tải trọn bộ video từ đường link bất kỳ và quản lý hàng đợi tải (hỗ trợ mở khóa toàn bộ tập VIP Hồng Quả, YouTube, Bilibili...)"
+            className="px-3 py-2 bg-emerald-700/80 hover:bg-emerald-600 active:scale-95 text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow transition disabled:opacity-50 border border-emerald-600/40"
+            title="Tải từ link video"
           >
             <Globe className="w-3.5 h-3.5 text-emerald-300" />
-            <span>Tải từ Link & Hàng Đợi</span>
-            <span className="px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-200 text-[9px] font-bold border border-emerald-400/30">
-              Hồng Quả
-            </span>
+            <span>Tải từ Link</span>
           </button>
 
           <button
             onClick={() => setShowDeviceSettingsModal(true)}
             disabled={isQueueRunning}
             className="px-3 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 border border-slate-700 shadow transition disabled:opacity-50"
-            title="Xem và điều chỉnh định danh thiết bị Android ByteDance, proxy, và tần suất xoay thiết bị"
+            title="Cấu hình thiết bị & proxy"
           >
             <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
             <span>Thiết bị & Proxy</span>
           </button>
 
+          <div className="h-5 w-px bg-slate-800 mx-1 hidden sm:block" />
+
           <button
             onClick={() => handleStartQueue('ocr')}
             disabled={isQueueRunning || projects.length === 0}
             className="px-3 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-semibold text-xs rounded-lg flex items-center gap-1.5 border border-slate-700 transition disabled:opacity-40"
-            title="Quét trích xuất phụ đề gốc cho các video đã chọn"
+            title="Trích xuất phụ đề OCR"
           >
             <FileText className="w-3.5 h-3.5 text-indigo-400" />
             <span>Trích phụ đề</span>
@@ -1265,7 +1213,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             onClick={() => handleStartQueue('translate')}
             disabled={isQueueRunning || projects.length === 0}
             className="px-3 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-semibold text-xs rounded-lg flex items-center gap-1.5 border border-slate-700 transition disabled:opacity-40"
-            title="Dịch thuật AI theo ngôn ngữ đích"
+            title="Dịch thuật AI"
           >
             <Languages className="w-3.5 h-3.5 text-cyan-400" />
             <span>Dịch</span>
@@ -1275,7 +1223,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             onClick={() => handleStartQueue('dubbing')}
             disabled={isQueueRunning || projects.length === 0}
             className="px-3 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-semibold text-xs rounded-lg flex items-center gap-1.5 border border-slate-700 transition disabled:opacity-40"
-            title="Sinh giọng đọc thuyết minh tiếng Việt"
+            title="Lồng tiếng thuyết minh"
           >
             <Mic className="w-3.5 h-3.5 text-emerald-400" />
             <span>Lồng tiếng</span>
@@ -1285,7 +1233,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             onClick={() => handleStartQueue('all')}
             disabled={isQueueRunning || projects.length === 0}
             className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 active:scale-95 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 shadow transition disabled:opacity-40"
-            title="Chạy tuần tự toàn bộ quy trình và kết xuất video MP4"
+            title="Chạy toàn bộ quy trình và kết xuất MP4"
           >
             <Rocket className="w-4 h-4" />
             <span>Xuất ({selectedProjectIds.length > 0 ? selectedProjectIds.length : projects.length})</span>
@@ -1745,7 +1693,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                 </h3>
                 <p className="text-xs text-slate-400 leading-relaxed">
                   {deleteConfirmType === 'selected'
-                    ? `Bạn có chắc chắn muốn xóa ${selectedProjectIds.length} video/dự án đang được tích chọn? Thao tác này sẽ xóa vĩnh viễn dữ liệu phụ đề và kịch bản đã tạo.`
+                    ? `Bạn có chắc chắn muốn xóa ${selectedProjectIds.length} video/dự án đang được tích chọn? Thao tác này sẽ xóa vĩnh viễn dữ liệu phụ đề đã tạo.`
                     : `Bạn có chắc chắn muốn xóa TẤT CẢ ${projects.length} dự án trong danh sách? Thao tác này không thể hoàn tác.`}
                 </p>
               </div>

@@ -26,7 +26,11 @@ USER_AGENT = (
 
 
 def sanitize_filename(name: str) -> str:
-    return re.sub(r'[\\/*?:"<>|]', "_", name).strip()
+    cleaned = re.sub(r'[\\/*?:"<>|]', "_", name).strip(" .\t\r\n")
+    cleaned = re.sub(r'\.+', '.', cleaned).strip(" .\t\r\n")
+    if len(cleaned) > 100:
+        cleaned = cleaned[:100].strip(" .\t\r\n")
+    return cleaned or "video"
 
 
 def fetch_html(url: str) -> str:

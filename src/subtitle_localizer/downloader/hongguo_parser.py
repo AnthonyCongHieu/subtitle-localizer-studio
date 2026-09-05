@@ -359,11 +359,12 @@ def handle_video_request(
     max_retries: int = 3,
     proxy: Optional[str] = None,
     device_keys: Optional[Dict[str, str]] = None,
+    target_resolution: str = "best",
 ) -> Dict[str, Any]:
     """
     Top-level handler. Given a video_id, returns the flattened response payload.
     """
-    return resolve_video_url(video_id, request, max_retries, proxy=proxy, device_keys=device_keys)
+    return resolve_video_url(video_id, request, max_retries, proxy=proxy, device_keys=device_keys, target_resolution=target_resolution)
 
 
 def resolve_video_url(
@@ -372,6 +373,7 @@ def resolve_video_url(
     max_retries: int = 3,
     proxy: Optional[str] = None,
     device_keys: Optional[Dict[str, str]] = None,
+    target_resolution: str = "best",
 ) -> Dict[str, Any]:
     """
     Full flow (with retries):
@@ -442,6 +444,7 @@ def resolve_video_url(
                 video_id,
                 max_retries=3,
                 proxy=proxy,
+                target_resolution=target_resolution,
             )
             return result
         except Exception as exc:
@@ -544,9 +547,10 @@ def download_and_decrypt_video(
     video_id: str,
     max_retries: int = 3,
     proxy: Optional[str] = None,
+    target_resolution: str = "best",
 ) -> Dict[str, Any]:
     """
-    Call fallback_api → parse video_info.data → pick best quality →
+    Call fallback_api → parse video_info.data → pick requested/best quality →
     download encrypted MP4 → CENC decrypt → serve locally.
     Returns a flattened response dict.
     """
@@ -581,10 +585,10 @@ def download_and_decrypt_video(
                     key_seed_b64 = video_data.get("key_seed", "")
                     key_seed_raw = b64_decode_padded(key_seed_b64)
 
-                    # pick best quality
+                    # pick requested quality
                     video_list = video_data.get("video_list", {})
                     if isinstance(video_list, dict):
-                        best_key, best_item = select_best_quality(video_list)
+                        best_key, best_item = select_best_quality(video_list, target_resolution=target_resolution)
                         if best_key and best_item:
                             spade_a = best_item.get("spade_a", "")
                             content_key = None
@@ -1002,26 +1006,184 @@ def parse_track(
     return sizes, offsets, cns, aux_off, aux_sz, ns
 
 
-def select_best_quality(video_list: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    """Pick the best quality video entry (max vheight; tie-break on bitrate)."""
-    best_key = ""
-    best_item: Dict[str, Any] = {}
-    best_height = 0
+def select_best_quality(video_list: Dict[str, Any], target_resolution: str = "best") -> Tuple[str, Dict[str, Any]]:
+    """
+    Pick video entry matching target_resolution (e.g. '1080p', '720p', '540p', '480p', '360p', or 'best').
+    Falls back gracefully to highest available quality if exact match is unavailable.
+    """
+    if not video_list or not isinstance(video_list, dict):
+        return "", {}
+
+    target = str(target_resolution or "best").strip().lower().replace("p", "")
+
+    def _pick_best(vlist: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        b_key = ""
+        b_item: Dict[str, Any] = {}
+        b_height = 0
+        for k, item in vlist.items():
+            if not isinstance(item, dict):
+                continue
+            h = max(int(item.get("vheight", 0)), int(item.get("vwidth", 0)))
+            if h > b_height:
+                b_height = h
+                b_key = k
+                b_item = item
+            elif h == b_height and b_item:
+                cur_br = int(item.get("bitrate", 0))
+                best_br = int(b_item.get("bitrate", 0))
+                if cur_br > best_br:
+                    b_key = k
+                    b_item = item
+        return b_key, b_item
+
+    if target in ("", "best", "auto"):
+        return _pick_best(video_list)
+
+    target_val = int(target) if target.isdigit() else 0
+
+    # 1. Exact match by definition or min(w, h)
     for k, item in video_list.items():
         if not isinstance(item, dict):
             continue
+        definition = str(item.get("definition", "")).lower().replace("p", "")
+        w = int(item.get("vwidth", 0))
         h = int(item.get("vheight", 0))
-        if h > best_height:
-            best_height = h
-            best_key = k
-            best_item = item
-        elif h == best_height and best_item:
-            cur_br = int(item.get("bitrate", 0))
-            best_br = int(best_item.get("bitrate", 0))
-            if cur_br > best_br:
-                best_key = k
-                best_item = item
-    return best_key, best_item
+        min_dim = min(w, h) if (w > 0 and h > 0) else max(w, h)
+        if definition == target or (target_val > 0 and min_dim == target_val):
+            return k, item
+
+    # 2. Closest match
+    if target_val > 0:
+        candidates = []
+        for k, item in video_list.items():
+            if not isinstance(item, dict):
+                continue
+            w = int(item.get("vwidth", 0))
+            h = int(item.get("vheight", 0))
+            min_dim = min(w, h) if (w > 0 and h > 0) else max(w, h)
+            if min_dim > 0:
+                candidates.append((abs(min_dim - target_val), -min_dim, k, item))
+        if candidates:
+            candidates.sort(key=lambda x: (x[0], x[1]))
+            return candidates[0][2], candidates[0][3]
+
+    return _pick_best(video_list)
+
+
+_PROBE_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+
+
+def probe_video_resolutions(video_id: str, proxy: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Query ByteDance server to probe REAL available video resolutions and exact byte sizes
+    for episode video_id. Returns real data (not mock data).
+    """
+    now = time.time()
+    if video_id in _PROBE_CACHE:
+        ts, cached = _PROBE_CACHE[video_id]
+        if now - ts < 600:
+            return cached
+
+    try:
+        current_device_keys = get_device_keys()
+        target_url = build_video_model_url(
+            current_device_keys["device_id"], current_device_keys["install_id"]
+        )
+        post_payload = {
+            "biz_param": {
+                "detail_page_version": 0,
+                "device_level": 3,
+                "disable_digg_stat": False,
+                "need_all_video_definition": True,
+                "need_mp4_align": False,
+                "use_os_player": False,
+                "use_server_dns": False,
+                "video_platform": 1024,
+            },
+            "mixed_video_id_map": {
+                "1004": [video_id],
+            },
+        }
+        signed_url, headers, post_body = sign_json_request_with_liushen(
+            target_url, post_payload, current_device_keys
+        )
+        resp = curl_request(signed_url, headers, post_body, 30, proxy=proxy)
+        data = json.loads(resp)
+        fallback_api, video_model = extract_fallback_api(data, video_id)
+
+        fb_headers = {"User-Agent": USER_AGENT}
+        fb_resp = curl_request(fallback_api, fb_headers, None, 30, proxy=proxy)
+        fb_data = json.loads(fb_resp)
+        video_data = fb_data.get("video_info", {}).get("data", {})
+        video_list = video_data.get("video_list", {})
+
+        resolutions = []
+        raw_sizes = {}
+        duration = float(video_model.get("duration") or video_data.get("duration") or 0.0)
+
+        items = [(k, item) for k, item in video_list.items() if isinstance(item, dict)]
+        items.sort(
+            key=lambda x: (
+                max(int(x[1].get("vheight", 0)), int(x[1].get("vwidth", 0))),
+                int(x[1].get("bitrate", 0))
+            ),
+            reverse=True
+        )
+
+        for k, item in items:
+            definition = str(item.get("definition", "")).lower()
+            w = int(item.get("vwidth", 0))
+            h = int(item.get("vheight", 0))
+            size_bytes = int(item.get("size", 0))
+            bitrate = int(item.get("bitrate", 0))
+            fps = int(item.get("fps", 0))
+
+            min_dim = min(w, h) if (w > 0 and h > 0) else max(w, h)
+            res_id = definition if definition else (f"{min_dim}p" if min_dim > 0 else k)
+
+            size_mb = round(size_bytes / (1024 * 1024), 2)
+            if "1080" in res_id:
+                label = "1080p (Full HD - Nét nhất)"
+            elif "720" in res_id:
+                label = "720p (HD - Chuẩn khuyên dùng)"
+            elif "540" in res_id:
+                label = "540p (Tiết kiệm dung lượng)"
+            elif "480" in res_id:
+                label = "480p (SD - Mượt nhẹ)"
+            elif "360" in res_id:
+                label = "360p (Dung lượng thấp nhất)"
+            else:
+                label = f"{res_id.upper()} ({w}x{h})"
+
+            res_entry = {
+                "id": res_id,
+                "label": label,
+                "width": w,
+                "height": h,
+                "size_bytes": size_bytes,
+                "size_mb": size_mb,
+                "bitrate": bitrate,
+                "fps": fps,
+            }
+            resolutions.append(res_entry)
+            raw_sizes[res_id] = size_bytes
+
+        result = {
+            "video_id": video_id,
+            "duration": duration,
+            "resolutions": resolutions,
+            "raw_sizes": raw_sizes,
+        }
+        _PROBE_CACHE[video_id] = (now, result)
+        return result
+    except Exception as exc:
+        print(f"[hongguo_parser] probe_video_resolutions error: {exc}")
+        return {
+            "video_id": video_id,
+            "duration": 0.0,
+            "resolutions": [],
+            "raw_sizes": {},
+        }
 
 
 def build_response_payload(

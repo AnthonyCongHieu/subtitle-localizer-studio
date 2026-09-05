@@ -30,15 +30,56 @@ export interface ToastItem {
 }
 
 type LoggerListener = (item: ActivityLogItem, showToast: boolean) => void;
+type OpenListener = (isOpen: boolean) => void;
+type CountListener = (count: number) => void;
+
 class AppLoggerService {
   private listeners: Set<LoggerListener> = new Set();
+  private openListeners: Set<OpenListener> = new Set();
+  private countListeners: Set<CountListener> = new Set();
   private logs: ActivityLogItem[] = [];
+  private _isOpen: boolean = false;
 
   subscribe(listener: LoggerListener) {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  subscribeOpen(listener: OpenListener) {
+    this.openListeners.add(listener);
+    listener(this._isOpen);
+    return () => {
+      this.openListeners.delete(listener);
+    };
+  }
+
+  subscribeCount(listener: CountListener) {
+    this.countListeners.add(listener);
+    listener(this.logs.length);
+    return () => {
+      this.countListeners.delete(listener);
+    };
+  }
+
+  isOpen(): boolean {
+    return this._isOpen;
+  }
+
+  setOpen(open: boolean) {
+    this._isOpen = open;
+    this.openListeners.forEach((fn) => {
+      try {
+        fn(open);
+      } catch (e) {
+        console.error('Lỗi listener open:', e);
+      }
+    });
+  }
+
+  toggle() {
+    this.setOpen(!this._isOpen);
   }
 
   log(message: string, level: LogLevel = 'info', category: string = 'Hệ thống', showToast = true) {
@@ -54,28 +95,27 @@ class AppLoggerService {
     this.logs.unshift(item);
     if (this.logs.length > 200) this.logs.pop();
 
-    // Đẩy việc cập nhật state của listeners vào queueMicrotask để tránh cảnh báo
-    // "Cannot update a component while rendering a different component" của React
-    if (typeof queueMicrotask === 'function') {
-      queueMicrotask(() => {
-        this.listeners.forEach((fn) => {
-          try {
-            fn(item, showToast);
-          } catch (e) {
-            console.error('Lỗi listener logger:', e);
-          }
-        });
+    const notify = () => {
+      this.listeners.forEach((fn) => {
+        try {
+          fn(item, showToast);
+        } catch (e) {
+          console.error('Lỗi listener logger:', e);
+        }
       });
+      this.countListeners.forEach((fn) => {
+        try {
+          fn(this.logs.length);
+        } catch (e) {
+          console.error('Lỗi listener count:', e);
+        }
+      });
+    };
+
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(notify);
     } else {
-      setTimeout(() => {
-        this.listeners.forEach((fn) => {
-          try {
-            fn(item, showToast);
-          } catch (e) {
-            console.error('Lỗi listener logger:', e);
-          }
-        });
-      }, 0);
+      setTimeout(notify, 0);
     }
   }
 
@@ -101,10 +141,25 @@ class AppLoggerService {
 
   clearLogs() {
     this.logs = [];
+    this.countListeners.forEach((fn) => {
+      try {
+        fn(0);
+      } catch (e) {
+        console.error('Lỗi listener count:', e);
+      }
+    });
   }
 }
 
 export const appLogger = new AppLoggerService();
+
+export function useAppLoggerCount(): number {
+  const [count, setCount] = useState<number>(0);
+  useEffect(() => {
+    return appLogger.subscribeCount((cnt) => setCount(cnt));
+  }, []);
+  return count;
+}
 
 export const GlobalActivityLogger: React.FC = () => {
   const [logs, setLogs] = useState<ActivityLogItem[]>([]);
@@ -114,7 +169,7 @@ export const GlobalActivityLogger: React.FC = () => {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    return appLogger.subscribe((newItem, showToast) => {
+    const unsubLog = appLogger.subscribe((newItem, showToast) => {
       setLogs((prev) => [newItem, ...prev.slice(0, 199)]);
 
       if (showToast) {
@@ -128,7 +183,27 @@ export const GlobalActivityLogger: React.FC = () => {
         }, duration);
       }
     });
+
+    const unsubOpen = appLogger.subscribeOpen((open) => {
+      setIsOpen(open);
+    });
+
+    return () => {
+      unsubLog();
+      unsubOpen();
+    };
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        setIsOpen(false);
+        appLogger.setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
 
   const handleDismissToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -156,20 +231,21 @@ export const GlobalActivityLogger: React.FC = () => {
 
   return (
     <>
-      {/* 1. TOAST NOTIFICATION STACK */}
-      <div className='fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full'>
+      {/* 1. Toasts positioned at top-14 right-4 so they NEVER cover bottom toolbar/timeline */}
+      <div className='fixed top-14 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full'>
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={'pointer-events-auto flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-2xl backdrop-blur-md text-xs transition-all duration-200 animate-in slide-in-from-bottom-3 ' + (
-              toast.type === 'success'
+            className={
+              'pointer-events-auto px-3.5 py-2.5 rounded-xl border text-xs shadow-2xl backdrop-blur-md flex items-start gap-2.5 animate-in slide-in-from-right-3 duration-200 ' +
+              (toast.type === 'success'
                 ? 'bg-emerald-950/90 border-emerald-700/60 text-emerald-100 shadow-emerald-950/40'
                 : toast.type === 'error'
-                ? 'bg-rose-950/95 border-rose-700/80 text-rose-100 shadow-rose-950/50'
+                ? 'bg-rose-950/90 border-rose-700/60 text-rose-100 shadow-rose-950/40'
                 : toast.type === 'warning'
                 ? 'bg-amber-950/90 border-amber-700/60 text-amber-100 shadow-amber-950/40'
-                : 'bg-slate-900/90 border-slate-700/70 text-slate-100 shadow-slate-950/50'
-            )}
+                : 'bg-slate-900/90 border-slate-700/70 text-slate-100 shadow-slate-950/50')
+            }
           >
             {toast.type === 'success' && <CheckCircle2 className='w-4 h-4 text-emerald-400 shrink-0 mt-0.5' />}
             {toast.type === 'error' && <AlertCircle className='w-4 h-4 text-rose-400 shrink-0 mt-0.5' />}
@@ -188,108 +264,116 @@ export const GlobalActivityLogger: React.FC = () => {
         ))}
       </div>
 
-      {/* 2. NÚT MỞ NHẬT KÝ HOẠT ĐỘNG */}
-      <button
-        type='button'
-        onClick={() => setIsOpen(!isOpen)}
-        className={'fixed bottom-3 left-3 z-40 px-2.5 py-1 rounded-lg border text-[11px] font-mono flex items-center gap-1.5 backdrop-blur transition shadow-lg ' + (
-          isOpen
-            ? 'bg-indigo-600 text-white border-indigo-400 shadow-indigo-600/30'
-            : 'bg-slate-900/85 hover:bg-slate-800 text-slate-300 border-slate-700/80'
-        )}
-        title='Mở Nhật Ký Hoạt Động Toàn Cục (Logs & Notifications)'
-      >
-        <Activity className={'w-3.5 h-3.5 ' + (logs.length > 0 ? 'text-cyan-400 animate-pulse' : 'text-slate-400')} />
-        <span>Nhật ký</span>
-        {logs.length > 0 && (
-          <span className='px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700'>
-            {logs.length}
-          </span>
-        )}
-      </button>
-
-      {/* 3. BẢNG NHẬT KÝ HOẠT ĐỘNG (DRAWER) */}
+      {/* 2. Slide-over drawer on the right side - Clean, desktop style */}
       {isOpen && (
-        <div className='fixed bottom-12 left-3 z-50 w-96 max-w-[calc(100vw-24px)] max-h-[420px] bg-slate-900/95 border border-slate-800 rounded-xl shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden text-xs animate-in slide-in-from-bottom-4'>
-          <div className='h-9 px-3 border-b border-slate-800 flex items-center justify-between bg-slate-950/60 shrink-0'>
-            <div className='flex items-center gap-1.5 font-semibold text-slate-200'>
-              <Activity className='w-3.5 h-3.5 text-cyan-400' />
-              <span>Nhật Ký Hoạt Động Toàn Cục</span>
-            </div>
+        <>
+          <div
+            className='fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] transition-opacity animate-in fade-in duration-150'
+            onClick={() => {
+              setIsOpen(false);
+              appLogger.setOpen(false);
+            }}
+          />
 
-            <div className='flex items-center gap-1'>
-              <button
-                onClick={handleCopyLogs}
-                className='p-1 text-slate-400 hover:text-cyan-300 rounded transition'
-                title='Sao chép toàn bộ log'
-              >
-                {copied ? <Check className='w-3.5 h-3.5 text-emerald-400' /> : <Copy className='w-3.5 h-3.5' />}
-              </button>
-              <button
-                onClick={handleClear}
-                className='p-1 text-slate-400 hover:text-rose-400 rounded transition'
-                title='Xóa lịch sử log'
-              >
-                <Trash2 className='w-3.5 h-3.5' />
-              </button>
-              <button
-                onClick={() => setIsOpen(false)}
-                className='p-1 text-slate-400 hover:text-white rounded transition ml-1'
-                title='Đóng'
-              >
-                <X className='w-3.5 h-3.5' />
-              </button>
-            </div>
-          </div>
-
-          <div className='px-3 py-1.5 border-b border-slate-800 flex items-center gap-1 bg-slate-950/30 text-[10px] shrink-0'>
-            {(['all', 'info', 'success', 'warning', 'error'] as const).map((lvl) => (
-              <button
-                key={lvl}
-                onClick={() => setFilterLevel(lvl)}
-                className={'px-2 py-0.5 rounded capitalize transition ' + (
-                  filterLevel === lvl
-                    ? 'bg-indigo-600 text-white font-medium'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+          <div className='fixed top-0 right-0 h-full w-96 max-w-[calc(100vw-2rem)] z-50 bg-slate-900/98 border-l border-slate-800 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden text-xs animate-in slide-in-from-right duration-200'>
+            <div className='h-12 px-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/70 shrink-0'>
+              <div className='flex items-center gap-2 font-semibold text-slate-200'>
+                <Activity className='w-4 h-4 text-cyan-400' />
+                <span>Nhật ký hoạt động</span>
+                {logs.length > 0 && (
+                  <span className='px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono'>
+                    {logs.length}
+                  </span>
                 )}
-              >
-                {lvl === 'all' ? 'Tất cả' : lvl}
-              </button>
-            ))}
-          </div>
-
-          <div className='flex-1 overflow-y-auto p-2 space-y-1.5 font-mono text-[11px] min-h-[160px]'>
-            {filteredLogs.length === 0 ? (
-              <div className='h-32 flex flex-col items-center justify-center text-slate-500 text-center'>
-                <Clock className='w-5 h-5 mb-1 opacity-50' />
-                <span>Chưa có hoạt động nào được ghi lại</span>
               </div>
-            ) : (
-              filteredLogs.map((log) => (
-                <div
-                  key={log.id}
-                  className={'p-1.5 rounded border flex items-start gap-1.5 leading-snug ' + (
-                    log.level === 'success'
-                      ? 'bg-emerald-950/30 border-emerald-900/40 text-emerald-300'
-                      : log.level === 'error'
-                      ? 'bg-rose-950/40 border-rose-900/50 text-rose-300'
-                      : log.level === 'warning'
-                      ? 'bg-amber-950/30 border-amber-900/40 text-amber-300'
-                      : 'bg-slate-950/40 border-slate-800 text-slate-300'
-                  )}
+
+              <div className='flex items-center gap-1.5'>
+                <button
+                  onClick={handleCopyLogs}
+                  className='p-1.5 text-slate-400 hover:text-cyan-300 rounded-md hover:bg-slate-800 transition'
+                  title='Sao chép toàn bộ log'
                 >
-                  <span className='text-[10px] text-slate-500 shrink-0 mt-0.5'>{log.time}</span>
-                  {log.category && (
-                    <span className='px-1 py-0.2 rounded bg-slate-900 text-slate-400 border border-slate-800 text-[9px] shrink-0'>
-                      {log.category}
-                    </span>
-                  )}
-                  <span className='flex-1 break-words'>{log.message}</span>
+                  {copied ? <Check className='w-3.5 h-3.5 text-emerald-400' /> : <Copy className='w-3.5 h-3.5' />}
+                </button>
+                <button
+                  onClick={handleClear}
+                  className='p-1.5 text-slate-400 hover:text-rose-400 rounded-md hover:bg-slate-800 transition'
+                  title='Xóa lịch sử log'
+                >
+                  <Trash2 className='w-3.5 h-3.5' />
+                </button>
+                <button
+                  onClick={() => {
+                    setIsOpen(false);
+                    appLogger.setOpen(false);
+                  }}
+                  className='p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition'
+                  title='Đóng'
+                >
+                  <X className='w-4 h-4' />
+                </button>
+              </div>
+            </div>
+
+            <div className='px-3 py-2 border-b border-slate-800 flex items-center gap-1 bg-slate-950/40 text-[11px] shrink-0'>
+              {(
+                [
+                  { key: 'all', label: 'Tất cả' },
+                  { key: 'info', label: 'Thông tin' },
+                  { key: 'success', label: 'Thành công' },
+                  { key: 'warning', label: 'Cảnh báo' },
+                  { key: 'error', label: 'Lỗi' },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setFilterLevel(tab.key)}
+                  className={
+                    'px-2.5 py-1 rounded-md transition font-medium text-[10px] ' +
+                    (filterLevel === tab.key
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/80')
+                  }
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className='flex-1 overflow-y-auto p-3 space-y-2 font-mono text-[11px]'>
+              {filteredLogs.length === 0 ? (
+                <div className='h-40 flex flex-col items-center justify-center text-slate-500 text-center'>
+                  <Clock className='w-5 h-5 mb-1.5 opacity-40' />
+                  <span className='font-sans text-xs'>Chưa có hoạt động nào được ghi lại</span>
                 </div>
-              ))
-            )}
+              ) : (
+                filteredLogs.map((log) => (
+                  <div
+                    key={log.id}
+                    className={
+                      'p-2 rounded-lg border flex items-start gap-2 leading-relaxed ' +
+                      (log.level === 'success'
+                        ? 'bg-emerald-950/20 border-emerald-900/40 text-emerald-300'
+                        : log.level === 'error'
+                        ? 'bg-rose-950/30 border-rose-900/50 text-rose-300'
+                        : log.level === 'warning'
+                        ? 'bg-amber-950/20 border-amber-900/40 text-amber-300'
+                        : 'bg-slate-950/50 border-slate-800 text-slate-300')
+                    }
+                  >
+                    <span className='text-[10px] text-slate-500 shrink-0 mt-0.5'>{log.time}</span>
+                    {log.category && (
+                      <span className='px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 border border-slate-800 text-[9px] shrink-0 font-sans font-medium'>
+                        {log.category}
+                      </span>
+                    )}
+                    <span className='flex-1 break-words font-sans text-xs'>{log.message}</span>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </>
   );
