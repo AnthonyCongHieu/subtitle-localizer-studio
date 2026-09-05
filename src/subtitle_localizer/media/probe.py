@@ -85,7 +85,7 @@ def probe_media(video_path: Path | str) -> MediaProbeResult:
         str(path),
     ]
     try:
-        res = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        res = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
         data = json.loads(res.stdout)
     except Exception as err:
         raise RuntimeError(f"FFprobe failed to analyze {path}: {err}")
@@ -104,7 +104,7 @@ def probe_media(video_path: Path | str) -> MediaProbeResult:
         str(path),
     ]
     try:
-        pts_res = subprocess.run(pts_cmd, check=False, capture_output=True, text=True)
+        pts_res = subprocess.run(pts_cmd, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if pts_res.returncode == 0:
             pts_data = json.loads(pts_res.stdout)
             frames = pts_data.get("frames", [])

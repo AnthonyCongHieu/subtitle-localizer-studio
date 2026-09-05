@@ -105,7 +105,12 @@ export class StudioApiClient {
 
   async exportMp4(
     projectId: string,
-    options: { use_translated: boolean; mask_mode: 'box' | 'blur' | 'none' },
+    options: {
+      use_translated?: boolean;
+      mask_mode?: string;
+      flip_h?: boolean;
+      flip_v?: boolean;
+    },
   ): Promise<{ status: 'completed'; output_path: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/export/mp4`, {
       method: 'POST',

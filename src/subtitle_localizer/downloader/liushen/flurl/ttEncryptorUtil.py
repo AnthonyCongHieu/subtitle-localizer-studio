@@ -1,7 +1,11 @@
 import secrets
 import hashlib
-from Crypto.Cipher import AES  # pip install pycryptodome
-from Crypto.Util.Padding import pad, unpad
+try:
+    from Crypto.Cipher import AES
+    from Crypto.Util.Padding import pad, unpad
+except ImportError:
+    from Cryptodome.Cipher import AES
+    from Cryptodome.Util.Padding import pad, unpad
 
 
 def generate_rand_number():

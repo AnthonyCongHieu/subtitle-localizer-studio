@@ -54,7 +54,29 @@ class AppLoggerService {
     this.logs.unshift(item);
     if (this.logs.length > 200) this.logs.pop();
 
-    this.listeners.forEach((fn) => fn(item, showToast));
+    // Đẩy việc cập nhật state của listeners vào queueMicrotask để tránh cảnh báo
+    // "Cannot update a component while rendering a different component" của React
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(() => {
+        this.listeners.forEach((fn) => {
+          try {
+            fn(item, showToast);
+          } catch (e) {
+            console.error('Lỗi listener logger:', e);
+          }
+        });
+      });
+    } else {
+      setTimeout(() => {
+        this.listeners.forEach((fn) => {
+          try {
+            fn(item, showToast);
+          } catch (e) {
+            console.error('Lỗi listener logger:', e);
+          }
+        });
+      }, 0);
+    }
   }
 
   success(message: string, category = 'Thành công', showToast = true) {

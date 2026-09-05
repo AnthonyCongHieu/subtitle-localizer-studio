@@ -44,6 +44,8 @@ class CommandRequest(BaseModel):
 class Mp4ExportRequest(BaseModel):
     use_translated: bool = True
     mask_mode: str = "blur"
+    flip_h: bool = False
+    flip_v: bool = False
 
 
 class BatchRunRequest(BaseModel):
@@ -853,7 +855,13 @@ def create_app(
             raise HTTPException(status_code=404, detail="Chưa có file thuyết minh cho dự án này")
         return FileResponse(path=str(voiceover_path), media_type="audio/mpeg", filename=f"voiceover_{project_id}.mp3")
 
-    def _do_export_mp4(project_id: str, mask_mode: str = "blur", use_translated: bool = True) -> str:
+    def _do_export_mp4(
+        project_id: str,
+        mask_mode: str = "blur",
+        use_translated: bool = True,
+        flip_h: bool = False,
+        flip_v: bool = False,
+    ) -> str:
         project = repository.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -861,7 +869,11 @@ def create_app(
         source_path = Path(project.source_video_path)
         if not source_path.exists() or not source_path.is_file():
             raise HTTPException(status_code=404, detail="Source video not found")
-        if mask_mode not in {"box", "blur", "none"}:
+        valid_mask_modes = {
+            "box", "blur", "feather_tight", "optical_blend", "soft_cinema",
+            "feather", "glass", "ambient", "mosaic", "gradient", "crop", "sttn_lama", "none"
+        }
+        if mask_mode not in valid_mask_modes:
             raise HTTPException(status_code=422, detail="Unsupported mask mode")
 
         from subtitle_localizer.render.ass import AssExporter
@@ -907,18 +919,25 @@ def create_app(
                 use_translated=use_translated,
             )
 
-            x = f"iw*{region.x}" if region else "0"
-            y = f"ih*{region.y}" if region else "ih*0.8"
-            width = f"iw*{region.width}" if region else "iw"
-            height = f"ih*{region.height}" if region else "ih*0.2"
+            if region:
+                roi_x = int(region.x * vw)
+                roi_y = int(region.y * vh)
+                roi_w = max(2, int(region.width * vw))
+                roi_h = max(2, int(region.height * vh))
+            else:
+                roi_x = 0
+                roi_y = int(vh * 0.8)
+                roi_w = vw
+                roi_h = max(2, int(vh * 0.2))
+
             mask_filter = None
             if mask_mode != "none":
                 mask_filter = SubtitleMasker().get_filter_string(
                     mode=mask_mode,
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height,
+                    x=roi_x,
+                    y=roi_y,
+                    width=roi_w,
+                    height=roi_h,
                 )
 
             with tempfile.NamedTemporaryFile(
@@ -935,6 +954,8 @@ def create_app(
                 ass_path=ass_path,
                 mask_filter=mask_filter,
                 use_nvenc=True,
+                flip_h=flip_h,
+                flip_v=flip_v,
             )
 
             # Nếu có file lồng tiếng TTS, tự động hòa trộn vào video xuất kèm audio ducking
@@ -1273,11 +1294,14 @@ def create_app(
         exporter = SrtExporter()
         srt_content = exporter.export_srt_text(cues, use_translated=use_translated)
         from fastapi.responses import Response
-        filename = f"{project.title}.srt"
+        import urllib.parse
+        clean_title = (project.title or "subtitles").strip()
+        filename = f"{clean_title}.srt"
+        encoded_filename = urllib.parse.quote(filename)
         return Response(
             content=srt_content.encode("utf-8"),
             media_type="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": f"attachment; filename=\"subtitles.srt\"; filename*=UTF-8''{encoded_filename}"},
         )
 
     @app.get("/api/v1/projects/{project_id}/export/ass")
@@ -1291,11 +1315,14 @@ def create_app(
         exporter = AssExporter()
         ass_content = exporter.export_ass_text(cues, script_title=project.title, use_translated=use_translated)
         from fastapi.responses import Response
-        filename = f"{project.title}.ass"
+        import urllib.parse
+        clean_title = (project.title or "subtitles").strip()
+        filename = f"{clean_title}.ass"
+        encoded_filename = urllib.parse.quote(filename)
         return Response(
             content=ass_content.encode("utf-8"),
             media_type="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": f"attachment; filename=\"subtitles.ass\"; filename*=UTF-8''{encoded_filename}"},
         )
 
     @app.post("/api/v1/projects/{project_id}/export/mp4")
@@ -1309,6 +1336,8 @@ def create_app(
             project_id=project_id,
             mask_mode=request.mask_mode,
             use_translated=request.use_translated,
+            flip_h=request.flip_h,
+            flip_v=request.flip_v,
         )
         return {"status": "completed", "output_path": rendered_path}
 

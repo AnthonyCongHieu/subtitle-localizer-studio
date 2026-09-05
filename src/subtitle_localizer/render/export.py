@@ -18,6 +18,8 @@ class VideoExporter:
         mask_filter: Optional[str] = None,
         use_nvenc: bool = True,
         crf: int = 20,
+        flip_h: bool = False,
+        flip_v: bool = False,
     ) -> List[str]:
         src = Path(source_video_path).resolve()
         out = Path(output_video_path).resolve()
@@ -31,6 +33,12 @@ class VideoExporter:
             # Windows path escaping cho FFmpeg sub filter
             ass_filter_path = str(ass_resolved).replace("\\", "/").replace(":", "\\:")
             filters.append(f"subtitles='{ass_filter_path}'")
+
+        # Áp dụng lật video ngang / dọc theo yêu cầu xuất video để lách bản quyền
+        if flip_h:
+            filters.append("hflip")
+        if flip_v:
+            filters.append("vflip")
 
         vf_arg = ",".join(filters) if filters else None
         vcodec = "h264_nvenc" if use_nvenc else "libx264"
@@ -65,6 +73,8 @@ class VideoExporter:
         ass_path: Optional[Path | str] = None,
         mask_filter: Optional[str] = None,
         use_nvenc: bool = True,
+        flip_h: bool = False,
+        flip_v: bool = False,
     ) -> Path:
         out = Path(output_video_path).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -80,10 +90,13 @@ class VideoExporter:
             ass_path=ass_path,
             mask_filter=mask_filter,
             use_nvenc=use_nvenc,
+            flip_h=flip_h,
+            flip_v=flip_v,
         )
 
         try:
-            res = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            # Thêm encoding='utf-8' và errors='replace' để chống lỗi UnicodeDecodeError charmap trên Windows
+            res = subprocess.run(cmd, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
             if res.returncode != 0:
                 # Nếu NVENC lỗi, thử fallback sang CPU libx264
                 if use_nvenc:
@@ -93,8 +106,10 @@ class VideoExporter:
                         ass_path=ass_path,
                         mask_filter=mask_filter,
                         use_nvenc=False,
+                        flip_h=flip_h,
+                        flip_v=flip_v,
                     )
-                    res2 = subprocess.run(fallback_cmd, check=False, capture_output=True, text=True)
+                    res2 = subprocess.run(fallback_cmd, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
                     if res2.returncode != 0:
                         raise RuntimeError(f"FFmpeg render failed: {res2.stderr or res2.stdout}")
                 else:

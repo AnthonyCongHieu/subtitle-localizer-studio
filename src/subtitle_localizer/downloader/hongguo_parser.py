@@ -22,10 +22,15 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from urllib.parse import urlsplit, parse_qsl
-
 import requests
-from Crypto.Cipher import AES
-from Crypto.Util import Counter
+
+try:
+    from Crypto.Cipher import AES
+    from Crypto.Util import Counter
+except ImportError:
+    # Hỗ trợ môi trường sử dụng pycryptodomex (namespace Cryptodome)
+    from Cryptodome.Cipher import AES
+    from Cryptodome.Util import Counter
 
 LIUSHEN_DIR = Path(__file__).resolve().parent / "liushen"
 if str(LIUSHEN_DIR) not in sys.path:
@@ -49,7 +54,16 @@ def load_dotenv_file(path: Path) -> None:
 
 load_dotenv_file(Path(__file__).resolve().parent / ".env")
 
-from flurl.core import core_sixgod
+try:
+    from flurl.core import core_sixgod
+except (ImportError, Exception):
+    try:
+        from liushen.flurl.core import core_sixgod
+    except (ImportError, Exception):
+        try:
+            from subtitle_localizer.downloader.liushen.flurl.core import core_sixgod
+        except (ImportError, Exception):
+            core_sixgod = None
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 

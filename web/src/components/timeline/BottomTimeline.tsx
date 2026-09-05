@@ -160,17 +160,41 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
           const targetTime = i * step;
 
           await new Promise<void>((resolve) => {
-            offscreenVideo.currentTime = targetTime;
+            let timer: any = null;
+            const cleanup = () => {
+              if (timer) clearTimeout(timer);
+              offscreenVideo.onseeked = null;
+              offscreenVideo.onerror = null;
+            };
+
+            // Timeout bảo vệ chống treo vô hạn nếu trình duyệt không bắn sự kiện seeked
+            timer = setTimeout(() => {
+              cleanup();
+              resolve();
+            }, 1000);
+
             offscreenVideo.onseeked = () => {
+              cleanup();
               if (ctx) {
-                ctx.drawImage(offscreenVideo, 0, 0, canvas.width, canvas.height);
-                result.push({
-                  time: targetTime,
-                  dataUrl: canvas.toDataURL('image/jpeg', 0.6),
-                });
+                try {
+                  ctx.drawImage(offscreenVideo, 0, 0, canvas.width, canvas.height);
+                  result.push({
+                    time: targetTime,
+                    dataUrl: canvas.toDataURL('image/jpeg', 0.6),
+                  });
+                } catch {
+                  // Bỏ qua lỗi context canvas
+                }
               }
               resolve();
             };
+
+            offscreenVideo.onerror = () => {
+              cleanup();
+              resolve();
+            };
+
+            offscreenVideo.currentTime = targetTime;
           });
         }
 

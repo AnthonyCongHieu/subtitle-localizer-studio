@@ -614,9 +614,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             prev.map((it, i) => (i === idx ? { ...it, status: 'translating' } : it))
           );
           setQueueStatusMessage(`[${idx + 1}/${targets.length}] Đang dịch thuật AI: "${targetProj.title}"...`);
-          try {
-            await apiClient.retranslateProject(targetProj.project_id);
-          } catch {}
+          await apiClient.retranslateProject(targetProj.project_id);
         }
 
         if (action === 'all' || action === 'dubbing') {
@@ -636,12 +634,12 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             prev.map((it, i) => (i === idx ? { ...it, status: 'exporting' } : it))
           );
           setQueueStatusMessage(`[${idx + 1}/${targets.length}] Đang render xuất video MP4: "${targetProj.title}"...`);
-          try {
-            await apiClient.exportMp4(targetProj.project_id, {
-              use_translated: true,
-              mask_mode: 'blur',
-            });
-          } catch {}
+          const chosenPreset = presets.find((p) => p.id === activeBatchPresetId) || defaultPreset;
+          const targetMaskMode = chosenPreset?.mask_style || 'blur';
+          await apiClient.exportMp4(targetProj.project_id, {
+            use_translated: true,
+            mask_mode: targetMaskMode,
+          });
         }
 
         setQueueItems((prev) =>

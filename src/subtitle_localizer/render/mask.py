@@ -22,8 +22,18 @@ class SubtitleMasker:
             overlay_x = str(x).replace("iw", "main_w").replace("ih", "main_h")
             overlay_y = str(y).replace("iw", "main_w").replace("ih", "main_h")
             radius = 14 if mode in ("feather_tight", "optical_blend") else 10
+            # Giới hạn an toàn bán kính: trong video YUV420p, luma/chroma radius không được vượt quá kích thước frame
+            # Thiết lập chroma_radius=0 và clamp luma_radius triệt tiêu vĩnh viễn lỗi FFmpeg -22 trên ROI hẹp
+            try:
+                h_val = int(height)
+                if h_val > 0:
+                    radius = max(1, min(radius, max(1, (h_val // 2) - 1)))
+            except (ValueError, TypeError):
+                # Khi height là biểu thức chuỗi (ví dụ "ih*0.02") không thể parse sang int,
+                # ép radius an toàn <= 4 để FFmpeg không bị crash -22 kể cả khi frame cực hẹp
+                radius = min(radius, 4)
             power = 3
-            return f"split[main][sub];[sub]crop={width}:{height}:{x}:{y},boxblur=luma_radius={radius}:luma_power={power}[blurred];[main][blurred]overlay={overlay_x}:{overlay_y}"
+            return f"split[main][sub];[sub]crop={width}:{height}:{x}:{y},boxblur=luma_radius={radius}:luma_power={power}:chroma_radius=0[blurred];[main][blurred]overlay={overlay_x}:{overlay_y}"
 
         elif mode == "crop":
             # Cắt bớt phần dưới

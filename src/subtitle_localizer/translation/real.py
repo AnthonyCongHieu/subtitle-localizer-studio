@@ -78,10 +78,20 @@ def _refine_subtitles(text: str, source_text: str) -> str:
     if "tất cả họ đang trên đường đến" in lower_res:
         result = "Xe đang trên đường tới rồi"
 
-    # Áp dụng từ điển ngữ cảnh chuyên sâu
-    for zh_term, vi_term in DEFAULT_CHINESE_VIETNAMESE_GLOSSARY.items():
-        if zh_term in source_text:
-            pass
+    # Áp dụng từ điển ngữ cảnh chuyên sâu khi câu gốc khớp trọn vẹn hoặc chứa thuật ngữ
+    clean_src = source_text.strip()
+    if clean_src in DEFAULT_CHINESE_VIETNAMESE_GLOSSARY:
+        result = DEFAULT_CHINESE_VIETNAMESE_GLOSSARY[clean_src]
+    else:
+        for zh_term, vi_term in DEFAULT_CHINESE_VIETNAMESE_GLOSSARY.items():
+            if zh_term in source_text and len(zh_term) >= 2:
+                # Thay thế các cụm từ thô ráp thành từ ngữ tự nhiên
+                if zh_term in ("换平台", "换个平台") and "nền tảng" in lower_res:
+                    result = re.sub(r'(?i)thay đổi nền tảng|nền tảng', 'app khác', result)
+                elif zh_term in ("打车", "打了一辆") and ("ô tô" in lower_res or "xe hơi" in lower_res):
+                    result = re.sub(r'(?i)có được một chiếc ô tô|bắt xe', 'gọi xe', result)
+                elif zh_term in ("家人们", "宝子们") and ("gia đình" in lower_res or "người nhà" in lower_res):
+                    result = re.sub(r'(?i)gia đình|người nhà', vi_term, result)
 
     return _capitalize_first(result)
 

@@ -112,6 +112,32 @@ class RenderAndExportTest(unittest.TestCase):
 
             self.assertGreater(rendered.stat().st_size, 0)
 
+    def test_video_exporter_horizontal_and_vertical_flip(self) -> None:
+        exporter = VideoExporter()
+        cmd = exporter.build_ffmpeg_render_command(
+            source_video_path="input.mp4",
+            output_video_path="output.mp4",
+            use_nvenc=False,
+            flip_h=True,
+            flip_v=True,
+        )
+        vf_joined = " ".join(cmd)
+        self.assertIn("hflip", vf_joined)
+        self.assertIn("vflip", vf_joined)
+
+    def test_subtitle_masker_supports_all_9_modes(self) -> None:
+        masker = SubtitleMasker()
+        modes = [
+            "box", "blur", "feather_tight", "optical_blend", "soft_cinema",
+            "feather", "glass", "ambient", "mosaic", "gradient", "crop", "sttn_lama", "none"
+        ]
+        for mode in modes:
+            filter_str = masker.get_filter_string(mode=mode, x=100, y=800, width=800, height=50)
+            if mode == "none":
+                self.assertEqual(filter_str, "")
+            else:
+                self.assertTrue(len(filter_str) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()

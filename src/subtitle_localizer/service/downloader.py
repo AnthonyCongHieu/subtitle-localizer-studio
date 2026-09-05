@@ -205,13 +205,13 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
             if proxy and str(proxy).strip():
                 cmd.extend(["--proxy", proxy.strip()])
             cmd.append(target)
-            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20, encoding="utf-8", errors="replace")
             if proc.returncode != 0 and proxy:
                 err_lower = proc.stderr.lower()
                 if "10061" in err_lower or "unable to connect to proxy" in err_lower or "proxyerror" in err_lower or "refused" in err_lower:
                     print(f"[Downloader] yt-dlp parse proxy {proxy} failed, retrying directly...")
                     cmd_direct = ["yt-dlp", "--dump-json", "--no-warnings", target]
-                    proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+                    proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20, encoding="utf-8", errors="replace")
 
             if proc.returncode == 0 and proc.stdout.strip():
                 # Lấy dòng JSON đầu tiên nếu là playlist
@@ -719,6 +719,13 @@ class DownloadManager:
         )
 
     def _get_vid_list(self, series_id: str, proxy: Optional[str] = None, total_eps: int = 1) -> List[str]:
+        count = max(1, total_eps)
+        # Nếu là ID mock / test (chứa chữ cái), trả về danh sách mock ngay lập tức
+        if "fail" in str(series_id).lower():
+            return [f"{series_id}_fail_ep_{i:02d}" for i in range(1, count + 1)]
+        if not str(series_id).isdigit():
+            return [f"{series_id}_vid_{i:02d}" for i in range(1, count + 1)]
+
         err_msg = ""
         try:
             detail_url = f"https://hongguoduanju.com/detail?series_id={series_id}"
@@ -736,11 +743,6 @@ class DownloadManager:
             err_msg = str(exc)
             print(f"[Downloader] Error fetching vid_list for series {series_id}: {exc}")
 
-        count = max(1, total_eps)
-        if "fail" in str(series_id).lower():
-            return [f"{series_id}_fail_ep_{i:02d}" for i in range(1, count + 1)]
-        if not str(series_id).isdigit():
-            return [f"{series_id}_vid_{i:02d}" for i in range(1, count + 1)]
         raise ValueError(
             f"Không thể lấy danh sách tập phim thực tế từ trang web Hồng Quả (ID: {series_id}). "
             f"Lỗi: {err_msg or 'Không tìm thấy dữ liệu _ROUTER_DATA'}. Vui lòng kiểm tra lại mạng hoặc proxy."
@@ -940,6 +942,12 @@ class DownloadManager:
                     shutil.copy2(str(temp_file), str(final_filepath))
                     file_sz = final_filepath.stat().st_size
                     downloaded_bytes_session += file_sz
+                    # Tự động dọn dẹp file nguồn tạm trong downloader để tránh rò rỉ dung lượng ổ cứng
+                    if DOWNLOADER_DIR in temp_file.parents or "downloader" in str(temp_file):
+                        try:
+                            temp_file.unlink(missing_ok=True)
+                        except Exception:
+                            pass
                 else:
                     if not final_filepath.exists():
                         raise RuntimeError(f"Không tìm thấy file tải về cho tập {ep_num}")
@@ -994,7 +1002,7 @@ class DownloadManager:
         if task.proxy:
             cmd.extend(["--proxy", task.proxy])
         cmd.append(url)
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
         if proc.returncode != 0 and task.proxy:
             err_lower = proc.stderr.lower()
             if "10061" in err_lower or "unable to connect to proxy" in err_lower or "proxyerror" in err_lower or "refused" in err_lower:
@@ -1006,7 +1014,7 @@ class DownloadManager:
                     "-o", out_template,
                     url,
                 ]
-                proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
 
         if proc.returncode != 0:
             raise RuntimeError(f"yt-dlp tải thất bại: {proc.stderr}")

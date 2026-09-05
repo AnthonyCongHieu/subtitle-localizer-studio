@@ -135,6 +135,8 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
       const res = await apiClient.exportMp4(activeProject.project_id, {
         use_translated: true,
         mask_mode: maskMode,
+        flip_h: applyFlipToExport && isFlippedH,
+        flip_v: applyFlipToExport && isFlippedV,
       });
       setExportMessage(`Xuất video thành công: ${res.output_path}`);
     } catch (err: any) {
@@ -531,7 +533,14 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
                           onChange={(e: any) => setMaskMode(e.target.value)}
                           className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-slate-200"
                         >
-                          <option value="blur">Làm mờ (Blur Sub Gốc)</option>
+                          <option value="blur">Làm mờ tiêu chuẩn (Standard Blur)</option>
+                          <option value="feather_tight">Lông vũ viền mượt (Feather Tight)</option>
+                          <option value="optical_blend">Hòa trộn quang học (Optical Blend)</option>
+                          <option value="soft_cinema">Điện ảnh mềm (Soft Cinema)</option>
+                          <option value="feather">Viền mờ bo góc (Feather)</option>
+                          <option value="glass">Kính mờ (Frosted Glass)</option>
+                          <option value="ambient">Ánh sáng môi trường (Ambient)</option>
+                          <option value="mosaic">Điểm mờ Mosaic (Mosaic)</option>
                           <option value="box">Hộp đen (Black Box)</option>
                           <option value="none">Không che</option>
                         </select>
@@ -645,7 +654,7 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
                     </div>
                     <input
                       type="range"
-                      min="40"
+                      min="0"
                       max="95"
                       value={Math.round(region.y * 100)}
                       onChange={(e) => handleSliderY(parseInt(e.target.value))}

@@ -2,8 +2,10 @@
 import base64
 import hashlib
 import random
-
-from Crypto.Util.Padding import pad
+try:
+    from Crypto.Util.Padding import pad
+except ImportError:
+    from Cryptodome.Util.Padding import pad
 
 def ror(value, count):
     count %= 64
