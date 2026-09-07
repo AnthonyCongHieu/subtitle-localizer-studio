@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-from subtitle_localizer.domain.models import ProjectManifestV1, RegionTrackV1
+from subtitle_localizer.domain.models import ProjectManifestV1, RegionTrackV1, SubtitleCueV1
 from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
 from subtitle_localizer.service.server import create_app
@@ -368,6 +368,47 @@ class ProjectSettingsAndRoiTest(unittest.TestCase):
         res_dl = client.get(f"/api/v1/projects/{proj_id}/audio/voiceover?download=true", headers=headers)
         self.assertEqual(res_dl.status_code, 200)
         self.assertIn("attachment", res_dl.headers.get("content-disposition", "").lower())
+
+    def test_cue_audio_fallback_and_existing(self):
+        """Kiểm tra phát audio câu lẻ cả khi có sẵn file hoặc khi fallback trích xuất từ master."""
+        from fastapi.testclient import TestClient
+        from subtitle_localizer.service.server import create_app
+        app = create_app(database=self.db, repo=self.repo, auth_token="test-token", output_root=self.output_root)
+        client = TestClient(app)
+        headers = {"Authorization": "Bearer test-token"}
+
+        proj_id = "proj-cue-audio-test"
+        proj = ProjectManifestV1(
+            project_id=proj_id,
+            title="Cue Audio Test",
+            source_video_path="E:/dummy.mp4",
+            video_fingerprint="fp-cue-audio",
+            source_language="zh",
+        )
+        self.repo.save_project(proj)
+        cue = SubtitleCueV1(
+            cue_id="cue_test_101",
+            start_pts=1.0,
+            end_pts=3.5,
+            source_text="你好",
+            translated_text="Xin chào",
+        )
+        self.repo.save_cues(proj_id, [cue])
+
+        # 404 when neither cue file nor master voiceover exists
+        res_404 = client.get(f"/api/v1/projects/{proj_id}/cues/cue_test_101/audio", headers=headers)
+        self.assertEqual(res_404.status_code, 404)
+
+        # When cue file exists directly
+        cues_dir = self.output_root / proj_id / "cues"
+        cues_dir.mkdir(parents=True, exist_ok=True)
+        cue_file = cues_dir / "cue_test_101.mp3"
+        cue_file.write_bytes(b"MOCK_CUE_MP3")
+
+        res_direct = client.get(f"/api/v1/projects/{proj_id}/cues/cue_test_101/audio", headers=headers)
+        self.assertEqual(res_direct.status_code, 200)
+        self.assertEqual(res_direct.content, b"MOCK_CUE_MP3")
+
 
 
 

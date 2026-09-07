@@ -68,6 +68,7 @@ interface LeftMediaSidebarProps {
   onDeletePreset?: (presetId: string) => void;
   onUpdatePreset?: (preset: PresetProfile) => void;
   selectedCueId?: string | null;
+  onUpdateActiveProject?: (patch: Partial<ProjectManifestV1>) => void;
 }
 
 export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
@@ -93,6 +94,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   onDeletePreset,
   onUpdatePreset,
   selectedCueId: _selectedCueId,
+  onUpdateActiveProject,
 }) => {
   const [activeTab, setActiveTab] = useState<LeftSidebarTab>('subtitles');
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,16 +130,27 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
     apiClient
       .getPipelineSettings()
       .then((pipe) => {
-        if (isMounted && pipe?.dubbing?.voice) {
-          setSelectedVoice(pipe.dubbing.voice);
+        if (isMounted && pipe?.dubbing) {
+          const prov = pipe.dubbing.provider || 'edge';
+          let voice = pipe.dubbing.voice || 'vi-VN-NamMinhNeural';
+          // Nếu hệ thống đang cấu hình CapCut nhưng giọng lưu trữ là Edge, tự động ưu tiên chọn giọng CapCut hot trend
+          if (prov === 'capcut' && detectVoiceProvider(voice) !== 'capcut') {
+            voice = pipe.dubbing.voice_male || 'BV075_streaming';
+          }
+          setSelectedVoice(voice);
         }
       })
       .catch(() => {});
 
     const handleSettingsUpdate = (e: any) => {
       const updated = e.detail;
-      if (updated?.dubbing?.voice && updated._source !== 'LeftMediaSidebar') {
-        setSelectedVoice(updated.dubbing.voice);
+      if (updated?.dubbing && updated._source !== 'LeftMediaSidebar') {
+        const prov = updated.dubbing.provider || 'edge';
+        let voice = updated.dubbing.voice || 'vi-VN-NamMinhNeural';
+        if (prov === 'capcut' && detectVoiceProvider(voice) !== 'capcut') {
+          voice = updated.dubbing.voice_male || 'BV075_streaming';
+        }
+        setSelectedVoice(voice);
       }
     };
     window.addEventListener('pipeline-settings-updated', handleSettingsUpdate);
@@ -216,6 +229,12 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
       if (res.cue_audio_url) {
         playSingleCueAudio(cue.cue_id, res.cue_audio_url);
       }
+      if (onUpdateActiveProject) {
+        onUpdateActiveProject({
+          has_voiceover: true,
+          voiceover_path: res.audio_url,
+        });
+      }
       if (onRefreshCues) onRefreshCues();
       if (onRefreshProject) onRefreshProject();
     } catch (err: any) {
@@ -231,18 +250,24 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
     setDubAllMsg('Đang tạo thuyết minh lồng tiếng toàn bộ video...');
     try {
       const prov = detectVoiceProvider(selectedVoice);
-      await apiClient.runDubbing(activeProject.project_id, {
+      const res = await apiClient.runDubbing(activeProject.project_id, {
         voice: selectedVoice,
         provider: prov,
       });
-      setDubAllMsg('✓ Lồng tiếng toàn video hoàn tất!');
+      setDubAllMsg('✓ Lồng tiếng toàn video hoàn tất! Đã đồng bộ với Timeline.');
+      if (onUpdateActiveProject) {
+        onUpdateActiveProject({
+          has_voiceover: true,
+          voiceover_path: res.audio_url,
+        });
+      }
       if (onRefreshProject) onRefreshProject();
       if (onRefreshCues) onRefreshCues();
     } catch (err: any) {
       setDubAllMsg(`Lỗi: ${err?.message || 'Thất bại'}`);
     } finally {
       setIsDubbingAll(false);
-      setTimeout(() => setDubAllMsg(null), 4000);
+      setTimeout(() => setDubAllMsg(null), 5000);
     }
   };
 
@@ -939,7 +964,24 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
             </p>
 
             <div className="space-y-1.5 pt-1">
-              <label className="text-slate-400 text-[10px] block">Chọn giọng đọc chính:</label>
+              <div className="flex items-center justify-between">
+                <label className="text-slate-400 text-[10px] block">Chọn giọng đọc chính:</label>
+                {detectVoiceProvider(selectedVoice) === 'capcut' && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                    🎬 CapCut Cloud TTS
+                  </span>
+                )}
+                {detectVoiceProvider(selectedVoice) === 'edge' && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
+                    ⚡ Microsoft Edge-TTS
+                  </span>
+                )}
+                {detectVoiceProvider(selectedVoice) === 'gemini' && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                    🌟 Gemini AI TTS
+                  </span>
+                )}
+              </div>
               <select
                 value={selectedVoice}
                 onChange={(e) => handleVoiceChange(e.target.value)}

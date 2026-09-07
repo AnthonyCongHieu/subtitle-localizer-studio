@@ -878,20 +878,29 @@ async def generate_timed_voiceover(
     if cues_out_dir:
         cues_out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Xử lý tuần tự từng câu với khoảng nghỉ nhỏ để ổn định đường truyền
-    for idx, (cue, cleaned_text) in enumerate(valid_cues):
-        target_voice = voice
-        if mode == "multi":
-            speaker = detect_cue_speaker(cue, cleaned_text)
-            target_voice = voice_female if speaker == "female" else voice_male
+    # Tổng hợp âm thanh song song có kiểm soát (Concurrency Semaphore) để tăng tốc độ 4x
+    sem = asyncio.Semaphore(max(1, min(batch_size, 4)))
 
-        mp3_res = await synthesize_text(
-            cleaned_text,
-            voice=target_voice,
-            rate=rate,
-            provider=provider,
-            prompt_style=prompt_style,
-        )
+    async def _fetch_single(i: int, c: SubtitleCueV1, text: str):
+        target_v = voice
+        if mode == "multi":
+            speaker = detect_cue_speaker(c, text)
+            target_v = voice_female if speaker == "female" else voice_male
+        async with sem:
+            audio_bytes = await synthesize_text(
+                text,
+                voice=target_v,
+                rate=rate,
+                provider=provider,
+                prompt_style=prompt_style,
+            )
+            return i, c, text, audio_bytes
+
+    tasks = [_fetch_single(i, c, t) for i, (c, t) in enumerate(valid_cues)]
+    results = await asyncio.gather(*tasks)
+    results.sort(key=lambda r: r[0])
+
+    for idx, cue, cleaned_text, mp3_res in results:
         if not mp3_res:
             logger.warning(f"Bỏ qua câu {cue.cue_id} do không nhận được audio")
             continue
@@ -914,10 +923,12 @@ async def generate_timed_voiceover(
                 f"(tốc độ {speed_factor:.2f}x, slot {slot_dur:.2f}s)"
             )
 
-        # Xuất từng câu riêng biệt nếu được yêu cầu (CapCut-ready format)
+        # Xuất từng câu riêng biệt nếu được yêu cầu (chuẩn CapCut và phục vụ nút Nghe câu lẻ)
         if cues_out_dir:
             cue_filename = f"{idx+1:03d}_{cue.start_pts:05.2f}-{cue.end_pts:05.2f}.mp3"
             _encode_pcm_to_mp3(pcm_samples, cues_out_dir / cue_filename, sample_rate=sample_rate)
+            # Lưu đồng thời theo mã cue_id để endpoint GET /api/v1/projects/{id}/cues/{cue_id}/audio phát tức thì
+            _encode_pcm_to_mp3(pcm_samples, cues_out_dir / f"{cue.cue_id}.mp3", sample_rate=sample_rate)
 
         # Tính vị trí mẫu bắt đầu trong master buffer
         start_sample = max(0, int(cue.start_pts * sample_rate))
@@ -930,10 +941,6 @@ async def generate_timed_voiceover(
 
         # Đặt mẫu âm thanh vào timeline
         master_buffer[start_sample:end_sample] += pcm_samples
-
-        # Nghỉ nhẹ giữa các câu để tránh rate limit
-        if idx < len(valid_cues) - 1:
-            await asyncio.sleep(0.08)
 
     # Xuất ra file MP3 đồng bộ
     out = _encode_pcm_to_mp3(master_buffer, output_path, sample_rate=sample_rate)

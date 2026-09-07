@@ -111,9 +111,11 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
   useEffect(() => {
     const audio = voiceAudioRef.current;
     if (!audio || !hasVoiceover) return;
-    if (Math.abs(audio.currentTime - currentTime) > 0.25) {
-      audio.currentTime = currentTime;
-    }
+    try {
+      if (audio.readyState >= 1 && Math.abs(audio.currentTime - currentTime) > 0.25) {
+        audio.currentTime = currentTime;
+      }
+    } catch {}
   }, [currentTime, hasVoiceover]);
 
   useEffect(() => {
@@ -803,8 +805,16 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
       {/* Audio element phát thuyết minh lồng tiếng A1 đồng bộ NLE */}
       <audio
         ref={voiceAudioRef}
+        key={`${projectId}-${hasVoiceover}`}
         src={projectId && hasVoiceover ? apiClient.getVoiceoverAudioUrl(projectId) : undefined}
         preload="auto"
+        onLoadedMetadata={() => {
+          if (voiceAudioRef.current) {
+            try {
+              voiceAudioRef.current.currentTime = currentTime;
+            } catch {}
+          }
+        }}
       />
     </div>
   );

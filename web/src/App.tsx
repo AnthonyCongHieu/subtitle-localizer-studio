@@ -553,6 +553,13 @@ export const App: React.FC = () => {
       const list = await apiClient.listProjects();
       setProjects(list);
 
+      // Cập nhật thuộc tính mới nhất (has_voiceover, voiceover_path, cues_count...) cho tập phim đang mở
+      setActiveProject((current) => {
+        if (!current) return current;
+        const found = list.find((p) => p.project_id === current.project_id);
+        return found ? { ...current, ...found } : current;
+      });
+
       // Tự động khôi phục lại tập phim đang mở nếu người dùng F5
       if (!hasRestoredProjectRef.current && savedState?.activeProjectId) {
         hasRestoredProjectRef.current = true;
@@ -1002,6 +1009,12 @@ export const App: React.FC = () => {
               onUpdatePreset={handleUpdatePreset}
               onRefreshProject={loadProjects}
               selectedCueId={selectedCueId}
+              onUpdateActiveProject={(patch) => {
+                setActiveProject((prev) => (prev ? { ...prev, ...patch } : null));
+                setProjects((prev) =>
+                  prev.map((p) => (p.project_id === activeProject?.project_id ? { ...p, ...patch } : p))
+                );
+              }}
             />
 
             {/* Video Canvas ở Giữa: Khung Xem Cực Kỳ Thoáng Đãng */}

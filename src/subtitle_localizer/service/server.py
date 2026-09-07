@@ -1366,11 +1366,14 @@ def create_app(
         project_output = resolved_output_root / project_id
         project_output.mkdir(parents=True, exist_ok=True)
         out_voiceover = project_output / f"voiceover_{project_id}.mp3"
+        cues_dir = project_output / "cues"
+        cues_dir.mkdir(parents=True, exist_ok=True)
 
         duration = 0.0
         try:
-            probe = probe_video(manifest.source_video_path)
-            duration = probe.duration
+            from subtitle_localizer.media.probe import probe_media
+            probe = probe_media(manifest.source_video_path)
+            duration = float(probe.duration)
         except Exception:
             pass
 
@@ -1386,6 +1389,7 @@ def create_app(
             voice_female=voice_female,
             provider=provider,
             prompt_style=prompt_style,
+            export_cues_dir=cues_dir,
         )
 
         manifest.has_voiceover = True
@@ -1443,8 +1447,9 @@ def create_app(
 
         duration = 0.0
         try:
-            probe = probe_video(manifest.source_video_path)
-            duration = probe.duration
+            from subtitle_localizer.media.probe import probe_media
+            probe = probe_media(manifest.source_video_path)
+            duration = float(probe.duration)
         except Exception:
             pass
 
@@ -1478,8 +1483,29 @@ def create_app(
 
     @app.get("/api/v1/projects/{project_id}/cues/{cue_id}/audio")
     async def get_cue_audio(project_id: str, cue_id: str) -> FileResponse:
-        """Phát âm thanh của 1 câu phụ đề đơn lẻ."""
+        """Phát âm thanh của 1 câu phụ đề đơn lẻ. Tự động trích đoạn từ file master nếu chưa có file lẻ."""
         cue_audio_path = resolved_output_root / project_id / "cues" / f"{cue_id}.mp3"
+        if not cue_audio_path.exists() or cue_audio_path.stat().st_size == 0:
+            # Tự động cắt từ file voiceover master nếu có
+            master_voiceover = resolved_output_root / project_id / f"voiceover_{project_id}.mp3"
+            if master_voiceover.exists() and master_voiceover.stat().st_size > 0:
+                cues = repository.get_cues(project_id)
+                target_cue = next((c for c in cues if c.cue_id == cue_id), None)
+                if target_cue and target_cue.end_pts > target_cue.start_pts:
+                    cue_audio_path.parent.mkdir(parents=True, exist_ok=True)
+                    seg_dur = max(0.2, target_cue.end_pts - target_cue.start_pts)
+                    import subprocess
+                    cmd = [
+                        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                        "-ss", f"{target_cue.start_pts:.3f}",
+                        "-i", str(master_voiceover),
+                        "-t", f"{seg_dur:.3f}",
+                        "-c:a", "libmp3lame",
+                        "-b:a", "128k",
+                        str(cue_audio_path)
+                    ]
+                    subprocess.run(cmd, check=False)
+
         if not cue_audio_path.exists() or cue_audio_path.stat().st_size == 0:
             raise HTTPException(status_code=404, detail="Chưa có file âm thanh cho câu phụ đề này")
         return FileResponse(path=str(cue_audio_path), media_type="audio/mpeg", filename=f"{cue_id}.mp3")

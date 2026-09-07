@@ -44,7 +44,7 @@
     "enabled": true,
     "provider": "capcut",
     "mode": "single",
-    "voice": "vi-VN-HoaiMyNeural",
+    "voice": "BV075_streaming",
     "voice_male": "BV075_streaming",
     "voice_female": "BV074_streaming",
     "auto_detect_speakers": true,
