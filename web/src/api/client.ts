@@ -142,6 +142,15 @@ export class StudioApiClient {
     return res.json();
   }
 
+  async stopPipeline(projectId: string): Promise<{ status: string; project_id: string }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/pipeline/stop`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể dừng tiến trình xử lý');
+    return res.json();
+  }
+
   async getStages(projectId: string): Promise<any[]> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/stages`, {
       headers: this.headers(),
@@ -161,6 +170,9 @@ export class StudioApiClient {
       video_y?: number;
       video_scale?: number;
       rotation?: number;
+      regions?: RegionTrackV1[];
+      subtitle_placement?: string;
+      blur_strength?: number;
     },
   ): Promise<{ status: 'completed'; output_path: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/export/mp4`, {
@@ -265,6 +277,39 @@ export class StudioApiClient {
     return res.json();
   }
 
+  async pickMultipleVideos(): Promise<{ files: Array<{ path: string; filename: string }> }> {
+    const res = await fetch(`${API_BASE}/system/pick-multiple-videos`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể mở hộp thoại chọn nhiều video');
+    return res.json();
+  }
+
+  async pickFolder(): Promise<{ files: Array<{ path: string; filename: string }> }> {
+    const res = await fetch(`${API_BASE}/system/pick-folder`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể mở hộp thoại chọn thư mục');
+    return res.json();
+  }
+
+  async batchCreateProjects(items: Array<{
+    title: string;
+    source_video_path: string;
+    source_language: string;
+    target_language: string;
+  }>, regions?: any[]): Promise<ProjectManifestV1[]> {
+    const res = await fetch(`${API_BASE}/projects/batch-create`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ items, regions }),
+    });
+    if (!res.ok) throw new Error('Không thể tạo hàng loạt dự án');
+    return res.json();
+  }
+
   getExportSrtUrl(projectId: string, useTranslated: boolean = true): string {
     return `${API_BASE}/projects/${projectId}/export/srt?use_translated=${useTranslated}`;
   }
@@ -292,12 +337,23 @@ export class StudioApiClient {
 
   async runDubbing(
     projectId: string,
-    voice: string = 'vi-VN-NamMinhNeural',
+    voiceOrOptions?: string | {
+      voice?: string;
+      rate?: string;
+      mode?: string;
+      provider?: string;
+      voice_male?: string;
+      voice_female?: string;
+      prompt_style?: string;
+    },
   ): Promise<{ status: string; project_id: string; cues_count: number; audio_url: string }> {
+    const payload = typeof voiceOrOptions === 'string'
+      ? { voice: voiceOrOptions }
+      : (voiceOrOptions || { voice: 'vi-VN-NamMinhNeural' });
     const res = await fetch(`${API_BASE}/projects/${projectId}/dubbing/run`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ voice }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const payload = await res.json().catch(() => null);
@@ -308,6 +364,27 @@ export class StudioApiClient {
 
   getVoiceoverAudioUrl(projectId: string): string {
     return `${API_BASE}/projects/${projectId}/audio/voiceover`;
+  }
+
+  async dubSingleCue(
+    projectId: string,
+    cueId: string,
+    options?: { voice?: string; rate?: string; provider?: string }
+  ): Promise<{ status: string; cue_id: string; voice: string; duration: number; cue_audio_url: string; audio_url: string }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/cues/${cueId}/dub`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(options || {}),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(payload?.detail || 'Lỗi khi lồng tiếng câu phụ đề');
+    }
+    return res.json();
+  }
+
+  getCueAudioUrl(projectId: string, cueId: string): string {
+    return `${API_BASE}/projects/${projectId}/cues/${cueId}/audio`;
   }
 
   async getGeminiPoolStatus(): Promise<GeminiPoolStatus> {
@@ -1414,6 +1491,7 @@ export interface TranslationSettings {
 
 
 export interface DubbingSettings {
+  enabled?: boolean;
   provider?: 'edge' | 'capcut' | 'gemini' | 'local';
   mode?: 'single' | 'multi';
   voice: string;
@@ -1433,11 +1511,30 @@ export interface RenderSettings {
   burn_subtitles: boolean;
 }
 
+export interface BatchPipelineSettings {
+  target_lang?: string;
+  ducking_volume?: number;
+  dubbing_enabled?: boolean;
+  dubbing_mode?: 'single' | 'gender_multi';
+  dubbing_voice?: string;
+  export_format?: 'mp4' | 'mkv';
+  export_resolution?: 'original' | '1080p' | '720p' | '2k';
+  export_aspect_ratio?: 'original' | '9:16' | '16:9';
+  stage_ocr?: boolean;
+  stage_translate?: boolean;
+  stage_dubbing?: boolean;
+  stage_export?: boolean;
+  active_preset_id?: string;
+  sort_mode?: 'ep_asc' | 'ep_desc' | 'name_asc' | 'name_desc' | 'status' | 'duration';
+  grid_cols?: 2 | 3 | 4;
+}
+
 export interface GlobalPipelineSettings {
   ocr: OcrSettings;
   translation: TranslationSettings;
   dubbing: DubbingSettings;
   render: RenderSettings;
+  batch?: BatchPipelineSettings;
 }
 
 export interface HardwareInfoResponse {

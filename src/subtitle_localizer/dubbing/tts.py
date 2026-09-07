@@ -465,6 +465,21 @@ AVAILABLE_VOICES: Dict[str, str] = {
 }
 
 
+def detect_voice_provider(voice: Optional[str]) -> str:
+    """Tự động nhận diện TTS Provider (capcut, gemini, edge) từ tên mã giọng đọc."""
+    v = (voice or "").strip()
+    if v in ("Puck", "Kore", "Fenrir", "Aoede"):
+        return "gemini"
+    if (
+        v.startswith("BV")
+        or v.startswith("vi_female_huong")
+        or "_streaming" in v
+        or "_dsp" in v
+    ):
+        return "capcut"
+    return "edge"
+
+
 def clean_subtitle_text(text: str) -> str:
     """
     Làm sạch phụ đề thoại:
@@ -600,11 +615,12 @@ async def _synthesize_edge_tts(
 
             if len(audio_chunks) > 0:
                 return bytes(audio_chunks)
+            raise RuntimeError("Edge-TTS trả về luồng âm thanh rỗng")
         except Exception as e:
             if attempt == max_retries - 1:
                 logger.warning(f"Thử lại Edge-TTS thất bại sau {max_retries} lần: {e}")
                 return b""
-            await asyncio.sleep(0.35 * (attempt + 1))
+            await asyncio.sleep(0.5 * (attempt + 1))
 
     return b""
 
@@ -626,7 +642,13 @@ async def synthesize_text(
     if not clean_text:
         return b""
 
-    prov = (provider or "edge").lower().strip()
+    # Tự động phát hiện Provider chính xác từ tên giọng đọc
+    detected_prov = detect_voice_provider(voice)
+    if detected_prov in ("capcut", "gemini"):
+        prov = detected_prov
+    else:
+        prov = (provider or "edge").lower().strip()
+
     audio_data: bytes = b""
 
     if prov == "capcut":
@@ -990,6 +1012,102 @@ def generate_voiceover_sync(
                 prompt_style=prompt_style,
             )
         )
+
+
+async def splice_cue_voiceover(
+    cues: List[SubtitleCueV1],
+    target_cue: SubtitleCueV1,
+    voice: str = "vi-VN-NamMinhNeural",
+    output_path: Path | str = "output_voiceover.mp3",
+    cue_output_path: Optional[Path | str] = None,
+    total_duration: float = 0.0,
+    sample_rate: int = 44100,
+    rate: str = "+0%",
+    max_stretch_rate: float = 1.45,
+    provider: str = "edge",
+    prompt_style: str = "dramatic",
+) -> Dict[str, Any]:
+    """
+    Sinh giọng đọc thuyết minh cho riêng 1 câu phụ đề (Single Cue TTS) và
+    vá trực tiếp (splice) vào file master voiceover MP3 của dự án.
+    Nếu file master chưa tồn tại, tự động khởi tạo master buffer và đặt câu vào đúng mốc start_pts.
+    """
+    out_path = Path(output_path).resolve()
+    raw_text = (target_cue.translated_text or target_cue.source_text).strip()
+    cleaned_text = clean_subtitle_text(raw_text)
+    if not cleaned_text:
+        raise ValueError(f"Câu phụ đề {target_cue.cue_id} không có nội dung văn bản hợp lệ để lồng tiếng.")
+
+    logger.info(f"Đang sinh giọng TTS câu đơn {target_cue.cue_id} [{voice}] qua [{provider}]...")
+    mp3_res = await synthesize_text(
+        cleaned_text,
+        voice=voice,
+        rate=rate,
+        provider=provider,
+        prompt_style=prompt_style,
+    )
+    if not mp3_res:
+        raise ValueError(f"Không nhận được dữ liệu âm thanh từ dịch vụ TTS cho câu {target_cue.cue_id}.")
+
+    if cue_output_path:
+        c_path = Path(cue_output_path).resolve()
+        c_path.parent.mkdir(parents=True, exist_ok=True)
+        c_path.write_bytes(mp3_res)
+
+    pcm_samples = _decode_mp3_to_pcm(mp3_res, sample_rate=sample_rate)
+    if len(pcm_samples) == 0:
+        raise ValueError("Không thể giải mã âm thanh câu phụ đề sang PCM.")
+
+    # Co giãn khớp slot thời gian (1.0x -> 1.45x)
+    speech_dur = len(pcm_samples) / sample_rate
+    slot_dur = max(0.0, target_cue.end_pts - target_cue.start_pts)
+    speed_factor = calculate_slot_stretch(
+        speech_dur, slot_dur, min_rate=1.0, max_rate=max_stretch_rate
+    )
+    if speed_factor > 1.02:
+        pcm_samples = time_stretch_pcm(pcm_samples, speed_factor=speed_factor, sample_rate=sample_rate)
+
+    # Nạp master buffer hiện có hoặc tạo mới
+    if out_path.exists() and out_path.stat().st_size > 1024:
+        try:
+            master_buffer = _decode_mp3_to_pcm(out_path.read_bytes(), sample_rate=sample_rate)
+        except Exception:
+            master_buffer = np.array([], dtype=np.float32)
+    else:
+        master_buffer = np.array([], dtype=np.float32)
+
+    start_sample = int(target_cue.start_pts * sample_rate)
+    needed_len = start_sample + len(pcm_samples) + int(sample_rate * 1.0)
+    if len(cues) > 0:
+        max_end = max((c.end_pts for c in cues), default=target_cue.end_pts)
+        needed_len = max(needed_len, int((max_end + 2.0) * sample_rate))
+    if total_duration > 0:
+        needed_len = max(needed_len, int(total_duration * sample_rate))
+
+    if len(master_buffer) < needed_len:
+        pad_size = needed_len - len(master_buffer)
+        master_buffer = np.pad(master_buffer, (0, pad_size), mode='constant')
+
+    # Xóa âm thanh cũ trong khoảng slot thời gian của câu này để tránh bị đè tiếng (overwrite slot)
+    slot_samples = int(max(slot_dur, len(pcm_samples) / sample_rate) * sample_rate)
+    clear_end = min(len(master_buffer), start_sample + slot_samples)
+    master_buffer[start_sample:clear_end] = 0.0
+
+    # Vá âm thanh mới vào vị trí start_sample
+    end_sample = start_sample + len(pcm_samples)
+    master_buffer[start_sample:end_sample] = pcm_samples
+
+    # Mã hóa và lưu lại file MP3 master
+    _encode_pcm_to_mp3(master_buffer, out_path, sample_rate=sample_rate)
+    logger.info(f"Đã vá thành công âm thanh câu {target_cue.cue_id} vào {out_path.name}")
+
+    return {
+        "status": "completed",
+        "cue_id": target_cue.cue_id,
+        "voice": voice,
+        "duration": len(pcm_samples) / sample_rate,
+        "file_size": out_path.stat().st_size if out_path.exists() else 0,
+    }
 
 
 def mix_voiceover_into_video(

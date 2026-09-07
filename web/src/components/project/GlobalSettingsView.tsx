@@ -44,6 +44,8 @@ import {
   Flame,
   Wand2,
   Square,
+  ListPlus,
+  Settings,
 } from 'lucide-react';
 
 const DEFAULT_TTS_CATALOG: Record<string, Array<{
@@ -115,7 +117,10 @@ interface GlobalSettingsViewProps {
   onSwitchToDashboard: () => void;
   onSwitchToStudio?: () => void;
   onOpenKeyPool?: () => void;
+  onOpenDownloader?: (tab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings') => void;
+  onOpenQueue?: () => void;
   initialTab?: 'ocr' | 'translation' | 'dubbing' | 'render';
+  onTabChange?: (tab: 'ocr' | 'translation' | 'dubbing' | 'render') => void;
 }
 
 export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
@@ -125,9 +130,22 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
   onSwitchToDashboard,
   onSwitchToStudio,
   onOpenKeyPool,
+  onOpenDownloader,
+  onOpenQueue,
   initialTab = 'ocr',
+  onTabChange,
 }) => {
   const [activeTab, setActiveTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render'>(initialTab);
+
+  useEffect(() => {
+    if (initialTab && initialTab !== activeTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  useEffect(() => {
+    onTabChange?.(activeTab);
+  }, [activeTab, onTabChange]);
 
   // Settings state
   const [settings, setSettings] = useState<GlobalPipelineSettings>({
@@ -192,6 +210,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
 
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+  const isInitialSettingsLoaded = useRef(false);
 
   // Live Test Translation State
   const [testText, setTestText] = useState('打车五分钟到，车都在来的路上了');
@@ -466,12 +485,22 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     }
   };
 
+  const lastSavedSettingsJson = useRef<string>('');
+  const isSyncingFromExternal = useRef<boolean>(false);
+
   const loadPipelineSettings = async () => {
     try {
       const res = await apiClient.getPipelineSettings();
       setSettings(res);
+      lastSavedSettingsJson.current = JSON.stringify(res);
+      setTimeout(() => {
+        isInitialSettingsLoaded.current = true;
+      }, 300);
     } catch (err: any) {
       console.warn('Could not load pipeline settings from server, using local fallback:', err);
+      setTimeout(() => {
+        isInitialSettingsLoaded.current = true;
+      }, 300);
     }
   };
 
@@ -492,6 +521,12 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     setSaveSuccessMessage(null);
     try {
       await apiClient.savePipelineSettings(settings);
+      lastSavedSettingsJson.current = JSON.stringify(settings);
+      window.dispatchEvent(
+        new CustomEvent('pipeline-settings-updated', {
+          detail: { ...settings, _source: 'GlobalSettingsView' },
+        })
+      );
       setSaveSuccessMessage('Đã lưu cấu hình Pipeline toàn cục thành công!');
       setTimeout(() => setSaveSuccessMessage(null), 3500);
     } catch (err: any) {
@@ -500,6 +535,71 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
       setIsSavingSettings(false);
     }
   };
+
+  // Tự động lưu cấu hình Pipeline khi có thay đổi từ người dùng (Debounced Auto-Save)
+  useEffect(() => {
+    const currentJson = JSON.stringify(settings);
+
+    if (!isInitialSettingsLoaded.current) {
+      lastSavedSettingsJson.current = currentJson;
+      return;
+    }
+
+    if (isSyncingFromExternal.current) {
+      isSyncingFromExternal.current = false;
+      lastSavedSettingsJson.current = currentJson;
+      return;
+    }
+
+    if (currentJson === lastSavedSettingsJson.current) {
+      return;
+    }
+
+    lastSavedSettingsJson.current = currentJson;
+    setIsSavingSettings(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        await apiClient.savePipelineSettings(settings);
+        window.dispatchEvent(
+          new CustomEvent('pipeline-settings-updated', {
+            detail: { ...settings, _source: 'GlobalSettingsView' },
+          })
+        );
+        setSaveSuccessMessage('✓ Đã tự động lưu cấu hình');
+        setTimeout(() => setSaveSuccessMessage(null), 2500);
+      } catch (err: any) {
+        console.warn('Lỗi tự động lưu pipeline settings:', err);
+      } finally {
+        setIsSavingSettings(false);
+      }
+    }, 700);
+
+    return () => clearTimeout(timer);
+  }, [settings]);
+
+  // Lắng nghe cập nhật cấu hình từ các view khác (DashboardBatchHub, Studio Inspector)
+  useEffect(() => {
+    const handleExternalUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<GlobalPipelineSettings & { _source?: string }>;
+      if (!customEvent.detail || customEvent.detail._source === 'GlobalSettingsView') return;
+
+      const newJson = JSON.stringify(customEvent.detail);
+      if (newJson === lastSavedSettingsJson.current) return;
+
+      isSyncingFromExternal.current = true;
+      lastSavedSettingsJson.current = newJson;
+
+      setSettings((prev) => ({
+        ...prev,
+        ...customEvent.detail,
+      }));
+    };
+    window.addEventListener('pipeline-settings-updated', handleExternalUpdate);
+    return () => {
+      window.removeEventListener('pipeline-settings-updated', handleExternalUpdate);
+    };
+  }, []);
 
   // Run live test translation
   const handleTestTranslation = async () => {
@@ -568,7 +668,12 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
   const handleTestDubbing = async (overrideVoice?: string, overrideProvider?: string) => {
     if (!testDubbingText.trim()) return;
     const v = overrideVoice || settings.dubbing.voice;
-    const p = overrideProvider || settings.dubbing.provider || 'edge';
+    const detectedP = (v.startsWith('BV') || v.startsWith('vi_female_huong') || v.includes('_streaming') || v.includes('_dsp'))
+      ? 'capcut'
+      : ['Puck', 'Kore', 'Fenrir', 'Aoede'].includes(v)
+      ? 'gemini'
+      : 'edge';
+    const p = overrideProvider || (detectedP !== 'edge' ? detectedP : (settings.dubbing.provider || 'edge'));
 
     // If already playing or generating this voice, clicking acts as Stop
     if (playingPreviewVoice === v || activeVoicePreviewing === v) {
@@ -762,16 +867,16 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
 
   return (
     <div className="flex-1 w-full h-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
-      {/* 1. Header Bar Chuyên Nghiệp */}
-      <header className="h-12 shrink-0 bg-slate-900/95 border-b border-slate-800 px-4 flex items-center justify-between z-40 backdrop-blur">
+      {/* 1. Header Bar Chuyên Nghiệp (Đồng bộ 100% Studio) */}
+      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between z-40 text-xs select-none shadow-md">
         {/* Cụm Trái: Nút Quay Lại Dashboard & Logo */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 min-w-0 max-w-[calc(50%-140px)] overflow-hidden">
           <button
             onClick={onSwitchToDashboard}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/60 text-indigo-300 text-xs font-semibold shadow transition active:scale-95 cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
             title="Quay lại Màn hình Dashboard Batch"
           >
-            <ChevronLeft className="w-4 h-4" />
+            <ChevronLeft className="w-3.5 h-3.5 text-indigo-400" />
             <LayoutDashboard className="w-3.5 h-3.5" />
             <span>Dashboard</span>
           </button>
@@ -779,7 +884,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
           {onSwitchToStudio && (
             <button
               onClick={onSwitchToStudio}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold shadow transition active:scale-95 cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
               title="Chuyển sang Studio biên tập"
             >
               <Layers className="w-3.5 h-3.5 text-indigo-400" />
@@ -787,23 +892,55 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
             </button>
           )}
 
-          <div className="h-4 w-px bg-slate-800 hidden sm:block" />
+          <div className="h-4 w-px bg-slate-800 hidden sm:block shrink-0" />
 
-          <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider">
+          <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider shrink-0">
             <div className="p-1 bg-indigo-600 rounded text-white shadow">
               <Sliders className="w-3.5 h-3.5" />
             </div>
-            <span>Thiết Lập Hệ Thống & Cấu Hình Pipeline</span>
+            <span className="hidden lg:inline">Thiết Lập Hệ Thống</span>
           </div>
 
-          <span className="hidden md:flex px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-600/40 text-emerald-300 text-[10px] font-semibold items-center gap-1">
+          <span className="hidden xl:flex px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-600/40 text-emerald-300 text-[10px] font-semibold items-center gap-1 shrink-0">
             <Zap className="w-3 h-3 text-emerald-400" />
-            <span>Cấu Hình Toàn Cục (Global Defaults)</span>
+            <span>Cấu Hình Toàn Cục</span>
           </span>
         </div>
 
+        {/* Ở Giữa: Cụm Nút Chuyển Màn Hình Phụ Cố Định Tâm Màn Hình Tuyệt Đối */}
+        <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1.5 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm z-20 pointer-events-auto">
+          {onOpenDownloader && (
+            <button
+              onClick={() => onOpenDownloader('direct')}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer"
+              title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Tải Video</span>
+            </button>
+          )}
+          {onOpenQueue && (
+            <button
+              onClick={onOpenQueue}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              title="Hàng đợi tải phim tự động"
+            >
+              <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Hàng Đợi</span>
+            </button>
+          )}
+          <button
+            onClick={() => setActiveTab('ocr')}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-indigo-300 bg-indigo-950/80 border border-indigo-700/60 shadow-sm transition cursor-pointer"
+            title="Thiết lập toàn cục hệ thống"
+          >
+            <Settings className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Thiết Lập</span>
+          </button>
+        </div>
+
         {/* Cụm Phải: Nút Lưu & Quản Lý Keys */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2 min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
           <button
             onClick={() => {
               if (onOpenKeyPool) {
@@ -812,7 +949,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                 setActiveTab('translation');
               }
             }}
-            className="px-3 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-amber-300 hover:border-amber-500/50 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 text-amber-300 font-semibold text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
             title="Quản lý Gemini Key Pool"
           >
             <Key className="w-3.5 h-3.5 text-amber-400" />
@@ -824,7 +961,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
           <button
             onClick={handleSaveSettings}
             disabled={isSavingSettings}
-            className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold flex items-center gap-1.5 shadow transition disabled:opacity-50 cursor-pointer"
+            className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition disabled:opacity-50 cursor-pointer"
             title="Lưu cấu hình toàn cục vào hệ thống"
           >
             <Save className="w-3.5 h-3.5" />

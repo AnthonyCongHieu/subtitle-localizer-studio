@@ -56,6 +56,7 @@ import {
   Flame,
   Activity,
   ShieldCheck,
+  Settings,
 } from 'lucide-react';
 import { appLogger, useAppLoggerCount } from '../common/GlobalActivityLogger';
 
@@ -64,7 +65,9 @@ export interface VideoDownloaderHubProps {
   onSwitchToStudio?: () => void;
   onRefreshProjects: () => void;
   onBatchProjectsCreated?: (newProjects: ProjectManifestV1[]) => void;
+  onOpenSettings?: () => void;
   initialTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings';
+  onTabChange?: (tab: 'search' | 'direct' | 'queue' | 'auth' | 'settings') => void;
 }
 
 export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
@@ -72,11 +75,23 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
   onSwitchToStudio,
   onRefreshProjects,
   onBatchProjectsCreated,
+  onOpenSettings,
   initialTab = 'search',
+  onTabChange,
 }) => {
   const loggerCount = useAppLoggerCount();
   // Tab điều hướng chính
   const [activeTab, setActiveTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>(initialTab);
+
+  useEffect(() => {
+    if (initialTab && initialTab !== activeTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  useEffect(() => {
+    onTabChange?.(activeTab);
+  }, [activeTab, onTabChange]);
 
   // =========================================================================
   // 1. STATE: DIRECT LINK / SERIES ID PLATFORMS
@@ -1051,17 +1066,19 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
   return (
     <div className="h-screen w-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden select-none">
       {/* ========================================================================= */}
-      {/* 1. TOP HEADER THỐNG NHẤT */}
+      {/* 1. TOP HEADER THỐNG NHẤT (Đồng bộ 100% Studio & Dashboard) */}
       {/* ========================================================================= */}
-      <header className="h-12 shrink-0 border-b border-slate-800 bg-slate-900/95 backdrop-blur px-4 flex items-center justify-between z-40">
+      {/* 1. HEADER ĐỈNH TRANG (ĐỒNG BỘ 100% VỚI STUDIO & DASHBOARD)               */}
+      {/* ========================================================================= */}
+      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between z-40 text-xs select-none shadow-md">
         {/* Trái: Quay lại Dashboard + Studio + Brand Hub */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0 max-w-[calc(50%-140px)] overflow-hidden">
           <button
             onClick={onSwitchToDashboard}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/60 text-indigo-300 text-xs font-semibold shadow transition active:scale-95"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
             title="Quay lại Dashboard"
           >
-            <ChevronLeft className="w-4 h-4" />
+            <ChevronLeft className="w-3.5 h-3.5 text-indigo-400" />
             <LayoutDashboard className="w-3.5 h-3.5" />
             <span>Dashboard</span>
           </button>
@@ -1069,7 +1086,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
           {onSwitchToStudio && (
             <button
               onClick={onSwitchToStudio}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold shadow transition active:scale-95"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
               title="Vào Studio"
             >
               <Film className="w-3.5 h-3.5 text-indigo-400" />
@@ -1077,14 +1094,14 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
             </button>
           )}
 
-          <div className="h-5 w-px bg-slate-800 mx-1" />
+          <div className="h-4 w-px bg-slate-800 hidden sm:block shrink-0" />
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <div className="p-1.5 bg-gradient-to-br from-emerald-600 to-teal-700 rounded-lg text-white shadow">
               <Globe className="w-3.5 h-3.5" />
             </div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xs font-bold text-white tracking-wide uppercase">
+              <h1 className="text-xs font-bold text-white tracking-wide uppercase hidden lg:inline">
                 Tải Video Đa Nền Tảng
               </h1>
               <span className="px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-500/40 text-[9px] font-bold text-emerald-400 font-mono">
@@ -1094,8 +1111,54 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
           </div>
         </div>
 
+        {/* Ở Giữa: Cụm Nút Chuyển Màn Hình Phụ Cố Định Tâm Màn Hình Tuyệt Đối */}
+        <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1.5 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm z-20 pointer-events-auto">
+          <button
+            onClick={() => setActiveTab('direct')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer ${
+              activeTab !== 'queue' && activeTab !== 'settings'
+                ? 'text-emerald-300 bg-emerald-950/80 border border-emerald-700/60 shadow-sm font-semibold'
+                : 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40'
+            }`}
+            title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Tải Video</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('queue')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer ${
+              activeTab === 'queue'
+                ? 'text-indigo-200 bg-indigo-950/80 border border-indigo-700/60 shadow-sm font-semibold'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
+            }`}
+            title="Hàng đợi tải phim tự động"
+          >
+            <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Hàng Đợi</span>
+          </button>
+          <button
+            onClick={() => {
+              if (onOpenSettings) {
+                onOpenSettings();
+              } else {
+                setActiveTab('settings');
+              }
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer ${
+              activeTab === 'settings'
+                ? 'text-indigo-200 bg-indigo-950/80 border border-indigo-700/60 shadow-sm font-semibold'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
+            }`}
+            title="Thiết lập toàn cục hệ thống"
+          >
+            <Settings className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Thiết Lập</span>
+          </button>
+        </div>
+
         {/* Phải: Nút Gạt Mạng (IP Trực Tiếp ⮂ Proxy) + Trạng thái Hàng đợi + Server + Nhật Ký */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
           {/* NÚT GẠT CHUYỂN ĐỔI: IP TRỰC TIẾP ⮂ DÙNG PROXY */}
           <div className="flex items-center p-0.5 bg-slate-950 border border-slate-800 rounded-xl text-xs select-none shadow-inner">
             <button

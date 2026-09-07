@@ -47,7 +47,33 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Khi chọn file qua hộp thoại trình duyệt
+  // Chọn file trực tiếp từ máy tính (0 giây, không tốn dung lượng nạp qua mạng)
+  const handlePickLocalVideo = async () => {
+    setError(null);
+    setLoading(true);
+    setStatusText('Đang mở hộp thoại chọn video từ máy tính...');
+    try {
+      const res = await apiClient.pickVideo();
+      if (res && res.path) {
+        setVideoPath(res.path);
+        const fileName = res.filename || res.path.replace(/\\/g, '/').split('/').pop() || '';
+        if (!title && fileName) {
+          setTitle(fileName.replace(/\.[^/.]+$/, ''));
+        }
+        setStatusText(`✓ Đã nạp đường dẫn trực tiếp (0s): ${fileName}`);
+      } else {
+        setStatusText(null);
+      }
+    } catch (err: any) {
+      console.warn('Native picker error, falling back to browser input:', err);
+      setStatusText(null);
+      fileInputRef.current?.click();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Khi chọn file qua hộp thoại trình duyệt (Fallback / Remote)
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -195,22 +221,35 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
               className="hidden"
             />
 
-            {/* Nút bấm mở hộp thoại chọn file */}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={loading}
-              className="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 mb-2 cursor-pointer active:scale-98 disabled:opacity-50"
-            >
-              {loading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <FolderOpen className="w-4 h-4" />
-              )}
-              <span className="font-semibold text-xs">
-                {loading ? 'Đang tải video...' : 'Bấm vào đây để chọn Video từ máy tính'}
-              </span>
-            </button>
+            {/* Cụm Nút Chọn File: Ưu tiên chọn trực tiếp 0s từ máy */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-2">
+              <button
+                type="button"
+                onClick={handlePickLocalVideo}
+                disabled={loading}
+                className="sm:col-span-3 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 cursor-pointer active:scale-98 disabled:opacity-50"
+                title="Mở Windows Explorer để chọn file trực tiếp (Tức thì 0s, không tốn thời gian upload)"
+              >
+                {loading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <FolderOpen className="w-4 h-4" />
+                )}
+                <span className="font-semibold text-xs">
+                  {loading ? 'Đang mở...' : '📂 Chọn Video Từ Máy Tính (Nhanh 0s)'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loading}
+                className="px-3 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-medium border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-98"
+                title="Tải video qua trình duyệt (Dành cho máy ảo hoặc kéo thả)"
+              >
+                <span>Trình duyệt</span>
+              </button>
+            </div>
 
             {/* Ô dán đường dẫn file */}
             <div className="space-y-1">

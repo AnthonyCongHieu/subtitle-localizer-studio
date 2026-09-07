@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 from subtitle_localizer.detector.boundary_refiner import FrameAccurateBoundaryRefiner
@@ -24,6 +25,20 @@ class BackgroundWorker:
         self.reconstructor = CueReconstructor(min_cue_duration=0.20, lead_in=0.06, lead_out=0.06)
         self.boundary_refiner = FrameAccurateBoundaryRefiner()
         self.sampler = AdaptiveFrameSampler(sample_fps=2.0, diff_threshold=3.5)
+        self._cancelled_projects: set[str] = set()
+        self._cancel_lock = threading.Lock()
+
+    def cancel_project(self, project_id: str) -> None:
+        with self._cancel_lock:
+            self._cancelled_projects.add(project_id)
+
+    def is_cancelled(self, project_id: str) -> bool:
+        with self._cancel_lock:
+            return project_id in self._cancelled_projects
+
+    def clear_cancel(self, project_id: str) -> None:
+        with self._cancel_lock:
+            self._cancelled_projects.discard(project_id)
 
     @staticmethod
     def _detect_language(text: str) -> str:
@@ -56,12 +71,19 @@ class BackgroundWorker:
         if not manifest:
             return False
 
+        self.clear_cancel(project_id)
+        if self.is_cancelled(project_id):
+            return False
+
         ocr_provider = None
         translator = None
         try:
             # Stage 1: Detector & Sampler
             stage1 = StageRunV1(stage_name="detector", status="running", progress=0.1)
             self.repo.save_stage_run(project_id, stage1)
+
+            if self.is_cancelled(project_id):
+                raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
 
             # Kiểm tra xem file video có tồn tại trên đĩa không
             video_path = Path(manifest.source_video_path)
@@ -92,6 +114,11 @@ class BackgroundWorker:
 
             active_roi = manifest.regions[0] if manifest.regions else None
             roi_tuple = (active_roi.x, active_roi.y, active_roi.width, active_roi.height) if active_roi else None
+            rois_tuples = [
+                (r.x, r.y, r.width, r.height)
+                for r in manifest.regions
+                if r.is_valid()
+            ] if manifest.regions else None
 
             # Hợp nhất cấu hình toàn cục với cấu hình ghi đè riêng của tập này (nếu có)
             pipeline_settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
@@ -112,6 +139,8 @@ class BackgroundWorker:
                 self.repo.save_stage_run(project_id, stage_api)
 
                 def _on_cloud_progress(pct: float, msg: str) -> None:
+                    if self.is_cancelled(project_id):
+                        raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
                     st = StageRunV1(
                         stage_name="cloud_extraction",
                         status="running",
@@ -188,12 +217,16 @@ class BackgroundWorker:
                     )
                     self.repo.save_stage_run(project_id, stage_fb)
 
+                if self.is_cancelled(project_id):
+                    raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
+
                 self.sampler.sample_fps = max(0.5, float(pipeline_settings.ocr.sample_fps))
                 self.sampler.diff_threshold = float(pipeline_settings.ocr.diff_threshold)
 
                 crops, pts_list = self.sampler.sample_video_frames(
                     video_path=video_path,
                     roi_norm=roi_tuple,
+                    roi_norms=rois_tuples,
                     max_duration_seconds=max_duration_seconds,
                     diff_threshold=pipeline_settings.ocr.diff_threshold,
                 )
@@ -214,6 +247,8 @@ class BackgroundWorker:
 
                 def _on_ocr_progress(cur: int, tot: int) -> None:
                     nonlocal last_progress_time, last_progress_pct
+                    if self.is_cancelled(project_id):
+                        raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
                     pct = round(0.2 + 0.5 * (cur / max(1, tot)), 2)
                     now = time.time()
                     if cur == 0 or cur == tot or pct != last_progress_pct or (now - last_progress_time) >= 0.4:
@@ -274,6 +309,7 @@ class BackgroundWorker:
                                     g_crops, g_pts = self.sampler.sample_video_frames(
                                         video_path=video_path,
                                         roi_norm=roi_tuple,
+                                        roi_norms=rois_tuples,
                                         max_duration_seconds=g_end,
                                         diff_threshold=1.5,
                                         start_seconds=g_start,
@@ -323,6 +359,9 @@ class BackgroundWorker:
                     manifest.source_language = effective_source_lang
                     self.repo.save_project(manifest)
 
+                if self.is_cancelled(project_id):
+                    raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
+
                 # Stage 3: Cue Reconstruction Stage
                 stage3 = StageRunV1(
                     stage_name="cue_reconstruction",
@@ -333,6 +372,9 @@ class BackgroundWorker:
                 self.repo.save_stage_run(project_id, stage3)
 
                 cues = self.reconstructor.build_cues(observations)
+
+                if self.is_cancelled(project_id):
+                    raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
 
                 # Stage 3.5: Frame-Accurate Boundary Refinement
                 # Tinh chỉnh mốc thời gian chính xác đến từng khung hình (< 33ms)
@@ -351,6 +393,9 @@ class BackgroundWorker:
                         video_path=str(video_path),
                         cues=cues,
                     )
+
+                if self.is_cancelled(project_id):
+                    raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
 
                 # Stage 3.8: Hybrid DualFusion Pass (Dung hợp âm thanh RAM-Pipe và thị giác)
                 local_engine = getattr(pipeline_settings.ocr, "local_engine", "hybrid")
@@ -384,6 +429,9 @@ class BackgroundWorker:
                     except Exception as exc:
                         logging.getLogger(__name__).warning("Hybrid fusion pass encountered error: %s", exc)
 
+
+            if self.is_cancelled(project_id):
+                raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
 
             # Stage 4: Translation Stage (Dịch sang tiếng Việt)
             if manifest.target_language and manifest.target_language != effective_source_lang and manifest.target_language != "none":
@@ -421,6 +469,27 @@ class BackgroundWorker:
             self.repo.save_stage_run(project_id, stage_done)
             return True
 
+        except InterruptedError:
+            if ocr_provider is not None:
+                try:
+                    ocr_provider.unload()
+                except Exception:
+                    pass
+            if translator is not None:
+                try:
+                    translator.unload()
+                except Exception:
+                    pass
+            cancel_stage = StageRunV1(
+                stage_name="cancelled",
+                status="cancelled",
+                progress=0.0,
+                metrics={"label": "Tiến trình quét phụ đề đã được dừng theo yêu cầu"},
+                end_time=time.time(),
+            )
+            self.repo.save_stage_run(project_id, cancel_stage)
+            return False
+
         except Exception as error:
             if ocr_provider is not None:
                 ocr_provider.unload()
@@ -435,3 +504,5 @@ class BackgroundWorker:
             )
             self.repo.save_stage_run(project_id, stage_err)
             return False
+        finally:
+            self.clear_cancel(project_id)

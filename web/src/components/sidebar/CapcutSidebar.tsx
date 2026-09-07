@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   FolderOpen,
   Crosshair,
@@ -759,8 +760,8 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
                 </div>
 
                 {/* MODAL NHẬP PHỤ ĐỀ TỪ CAPCUT DESKTOP */}
-                {showCapcutModal && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 animate-in fade-in">
+                {showCapcutModal && typeof document !== 'undefined' && createPortal(
+                  <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in">
                     <div className="bg-slate-900 border border-purple-900/60 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl space-y-3 p-5">
                       <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                         <div className="flex items-center gap-2 text-white font-bold text-sm">
@@ -846,7 +847,8 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
                         </button>
                       </div>
                     </div>
-                  </div>
+                  </div>,
+                  document.body
                 )}
 
                 {/* Danh sách câu phụ đề */}

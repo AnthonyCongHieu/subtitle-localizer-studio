@@ -6,8 +6,6 @@ import {
   Sliders,
   Sparkles,
   Tv,
-  AlignJustify,
-  Smartphone,
   Crosshair,
   RotateCw,
   FlipHorizontal,
@@ -18,7 +16,16 @@ import {
   Key,
   Loader2,
   FileVideo,
+  Square,
+  Layers,
+  Plus,
+  Trash2,
+  Droplet,
+  Scan,
+  RotateCcw,
+  Edit2,
   Save,
+  Mic,
 } from 'lucide-react';
 import { RegionTrackV1, ProjectManifestV1 } from '../../types/api';
 import {
@@ -29,6 +36,16 @@ import {
 import { apiClient } from '../../api/client';
 
 export type RightPanelTab = 'roi' | 'mask' | 'transform' | 'ai_export';
+
+export interface PositionTemplate {
+  id: string;
+  name: string;
+  y: number;
+  height: number;
+  width: number;
+  x?: number;
+  is_builtin?: boolean;
+}
 
 interface RightInspectorPanelProps {
   region: RegionTrackV1;
@@ -61,15 +78,19 @@ interface RightInspectorPanelProps {
   videoPosition: { x: number; y: number };
   onPositionChange?: (pos: { x: number; y: number }) => void;
   onResetTransform: () => void;
+  onResetAllParameters?: () => void;
   activeProject: ProjectManifestV1 | null;
   onRefreshCues?: () => void;
   isScanning?: boolean;
   onStartScan?: () => void;
+  onStopScan?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
-  onSaveGlobalConfig?: () => void;
-  isSavingConfig?: boolean;
-  hasUnsavedChanges?: boolean;
+  regions?: RegionTrackV1[];
+  activeRegionId?: string;
+  onSelectRegion?: (id: string) => void;
+  onAddRegion?: () => void;
+  onDeleteRegion?: (id: string) => void;
 }
 
 export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
@@ -103,17 +124,78 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   videoPosition,
   onPositionChange,
   onResetTransform,
+  onResetAllParameters,
   activeProject,
   onRefreshCues,
   isScanning = false,
   onStartScan,
+  onStopScan,
   isCollapsed = false,
   onToggleCollapse,
-  onSaveGlobalConfig,
-  isSavingConfig = false,
-  hasUnsavedChanges = false,
+  regions = [],
+  activeRegionId,
+  onSelectRegion,
+  onAddRegion,
+  onDeleteRegion,
 }) => {
   const [activeTab, setActiveTab] = useState<RightPanelTab>('roi');
+
+  // Mẫu vị trí gợi ý động (Position Templates CRUD)
+  const [positionTemplates, setPositionTemplates] = useState<PositionTemplate[]>(() => {
+    const DEFAULT_POSITION_TEMPLATES: PositionTemplate[] = [
+      { id: 'one_line', name: '1 Dòng Đáy', y: 0.82, height: 0.12, width: 0.84, x: 0.08, is_builtin: true },
+      { id: 'two_lines', name: '2 Dòng Đáy', y: 0.78, height: 0.18, width: 0.88, x: 0.06, is_builtin: true },
+      { id: 'tiktok_portrait', name: 'Dọc TikTok', y: 0.70, height: 0.24, width: 0.90, x: 0.05, is_builtin: true },
+      { id: 'top_header', name: 'Tiêu Đề Trên', y: 0.06, height: 0.12, width: 0.86, x: 0.07, is_builtin: true },
+    ];
+    try {
+      const raw = localStorage.getItem('sub_studio_pos_templates_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_POSITION_TEMPLATES;
+  });
+
+  const [isAddingPosTemplate, setIsAddingPosTemplate] = useState(false);
+  const [newPosTemplateName, setNewPosTemplateName] = useState('');
+  const [editingPosTemplateId, setEditingPosTemplateId] = useState<string | null>(null);
+  const [editingPosTemplateName, setEditingPosTemplateName] = useState('');
+
+  const savePosTemplates = (templates: PositionTemplate[]) => {
+    setPositionTemplates(templates);
+    try {
+      localStorage.setItem('sub_studio_pos_templates_v1', JSON.stringify(templates));
+    } catch {}
+  };
+
+  const handleCreatePosTemplate = () => {
+    if (!newPosTemplateName.trim()) return;
+    const newTpl: PositionTemplate = {
+      id: `pos-${Date.now()}`,
+      name: newPosTemplateName.trim(),
+      y: region.y,
+      height: region.height,
+      width: region.width,
+      x: region.x,
+    };
+    const updated = [...positionTemplates, newTpl];
+    savePosTemplates(updated);
+    setIsAddingPosTemplate(false);
+    setNewPosTemplateName('');
+  };
+
+  const handleDeletePosTemplate = (id: string) => {
+    const updated = positionTemplates.filter((t) => t.id !== id);
+    savePosTemplates(updated);
+  };
+
+  const handleRenamePosTemplate = (id: string, name: string) => {
+    const updated = positionTemplates.map((t) => (t.id === id ? { ...t, name } : t));
+    savePosTemplates(updated);
+    setEditingPosTemplateId(null);
+  };
 
   // AI & Export states
   const [geminiStatus, setGeminiStatus] = useState<{ configured: boolean; masked_key?: string }>({
@@ -151,12 +233,30 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
     }
   };
 
+  const [isDubbingAll, setIsDubbingAll] = useState(false);
+  const [dubMsg, setDubMsg] = useState<string | null>(null);
+
+  const handleDubAllVideo = async () => {
+    if (!activeProject) return;
+    setIsDubbingAll(true);
+    setDubMsg('Đang gọi AI lồng tiếng toàn bộ video...');
+    try {
+      await apiClient.runDubbing(activeProject.project_id);
+      setDubMsg('✓ Lồng tiếng toàn bộ video thành công!');
+      if (onRefreshCues) onRefreshCues();
+    } catch (err: any) {
+      setDubMsg(`Lỗi lồng tiếng: ${err?.message || 'Thất bại'}`);
+    } finally {
+      setIsDubbingAll(false);
+    }
+  };
+
   const handleTranslateAllWithAi = async () => {
     if (!activeProject) return;
     setIsTranslatingAll(true);
     setTranslateMsg('Đang gọi AI dịch thuật ngữ cảnh toàn bộ tập phim...');
     try {
-      await apiClient.runPipeline(activeProject.project_id);
+      await apiClient.retranslateProject(activeProject.project_id);
       setTranslateMsg('Dịch thuật và xử lý AI hoàn tất!');
       if (onRefreshCues) onRefreshCues();
     } catch (err: any) {
@@ -173,7 +273,10 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
     try {
       const res = await apiClient.exportMp4(activeProject.project_id, {
         use_translated: true,
-        mask_mode: previewMask ? 'blur' : 'none',
+        mask_mode: previewMask ? (maskStyle || 'blur') : 'none',
+        blur_strength: blurStrength,
+        subtitle_placement: subtitlePlacement,
+        regions: regions,
         flip_h: isFlippedH,
         flip_v: isFlippedV,
         video_x: videoPosition.x,
@@ -185,20 +288,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
       setExportMessage(`Lỗi xuất video: ${err?.message || 'Không thành công'}`);
     } finally {
       setIsExportingMp4(false);
-    }
-  };
-
-  const applyRoiPreset = (type: 'one_line' | 'two_lines' | 'tiktok_portrait') => {
-    switch (type) {
-      case 'one_line':
-        onUpdateRegion({ ...region, x: 0.08, y: 0.82, width: 0.84, height: 0.12 });
-        break;
-      case 'two_lines':
-        onUpdateRegion({ ...region, x: 0.08, y: 0.74, width: 0.84, height: 0.20 });
-        break;
-      case 'tiktok_portrait':
-        onUpdateRegion({ ...region, x: 0.10, y: 0.65, width: 0.80, height: 0.15 });
-        break;
     }
   };
 
@@ -265,7 +354,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   }
 
   return (
-    <aside className="w-80 md:w-88 bg-slate-950 border-l border-slate-800/80 flex flex-col shrink-0 select-none z-20 min-h-0 overflow-hidden shadow-lg transition-all duration-200">
+    <aside className="w-88 xl:w-96 bg-slate-950 border-l border-slate-800/80 flex flex-col shrink-0 select-none z-20 min-h-0 overflow-hidden shadow-lg transition-all duration-200">
       {/* 1. Header Tab Bar (4 Tab Rõ Ràng Chuẩn Inspector) */}
       <div className="h-11 bg-slate-900/60 border-b border-slate-800/80 px-2 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px] flex-1 mr-2">
@@ -337,6 +426,208 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
         {/* ================= TAB 1: QUÉT & ROI ================= */}
         {activeTab === 'roi' && (
           <div className="space-y-4 animate-in fade-in duration-150">
+            {/* Thanh Phím Tắt Tiện Lợi (Quick Action Icons Strip) */}
+            <div className="flex items-center justify-between gap-1 p-1 bg-slate-900/90 border border-slate-800 rounded-xl shadow-sm">
+              {onAutoDetectRoi && (
+                <button
+                  type="button"
+                  onClick={onAutoDetectRoi}
+                  className="flex-1 py-1.5 px-2 bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 hover:border-indigo-400 text-indigo-200 hover:text-white rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer"
+                  title="🎯 Tự động quét và bắt dính vùng chữ phụ đề"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Bắt Dính Chữ</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onUpdateRegion({ ...region, x: 0.06, y: 0.81, width: 0.88, height: 0.15 })}
+                className="p-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-indigo-300 hover:text-white rounded-lg text-[10px] flex items-center justify-center transition cursor-pointer"
+                title="⌖ Căn giữa chuẩn phụ đề đáy"
+              >
+                <Crosshair className="w-3.5 h-3.5 text-indigo-400" />
+              </button>
+              <button
+                type="button"
+                onClick={onTogglePreviewMask}
+                className={`p-1.5 border rounded-lg text-[10px] flex items-center justify-center transition cursor-pointer ${
+                  previewMask ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                }`}
+                title={previewMask ? 'Đang BẬT xem trước lớp che sub trên video' : 'Đang TẮT che (Nhấp để xem trước lớp che)'}
+              >
+                {previewMask ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              </button>
+              {onAddRegion && (
+                <button
+                  type="button"
+                  onClick={onAddRegion}
+                  className="p-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-emerald-400 hover:text-emerald-300 rounded-lg text-[10px] flex items-center justify-center transition cursor-pointer"
+                  title="+ Thêm vùng quét phụ đề mới (Multi-ROI)"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (onResetAllParameters) onResetAllParameters();
+                  else onResetTransform();
+                }}
+                className="p-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-rose-400 hover:text-rose-300 rounded-lg text-[10px] flex items-center justify-center transition cursor-pointer"
+                title="🔄 Reset toàn bộ thông số video và vùng quét về mặc định"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Quản lý Đa Vùng Quét OCR (Multi-ROI: Thêm / Xóa / Chọn vùng) */}
+            <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="text-[11px] font-semibold text-slate-200">
+                    Vùng quét OCR ({(regions && regions.length > 0 ? regions : [region]).length})
+                  </span>
+                </div>
+                {onAddRegion && (
+                  <button
+                    type="button"
+                    onClick={onAddRegion}
+                    className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition shadow-sm active:scale-95 cursor-pointer"
+                    title="Thêm một vùng quét phụ đề OCR mới"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Thêm Vùng</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Danh sách các chip vùng */}
+              <div className="flex flex-wrap gap-1.5">
+                {(regions && regions.length > 0 ? regions : [region]).map((reg, idx) => {
+                  const isSelected = reg.region_id === (activeRegionId || region.region_id);
+                  const isBottom = reg.y > 0.5;
+                  const isMasked = reg.mask_enabled !== false;
+                  return (
+                    <div
+                      key={reg.region_id}
+                      onClick={() => onSelectRegion?.(reg.region_id)}
+                      className={`group flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium cursor-pointer transition select-none ${
+                        isSelected
+                          ? 'bg-indigo-600/30 border-indigo-500 text-white font-bold shadow-sm ring-1 ring-indigo-500/50'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                      }`}
+                    >
+                      <Crosshair className={`w-3 h-3 ${isSelected ? 'text-indigo-400' : 'text-slate-500'}`} />
+                      <span>Vùng {idx + 1} {isBottom ? '(Đáy)' : '(Trên)'}</span>
+                      <span className="text-[10px] opacity-70 font-mono">
+                        {Math.round(reg.y * 100)}%
+                      </span>
+                      <span
+                        className={`text-[9px] px-1 py-0.2 rounded font-mono ${
+                          isMasked
+                            ? 'bg-indigo-950/80 text-indigo-300 border border-indigo-700/60'
+                            : 'bg-amber-950/80 text-amber-300 border border-amber-700/60'
+                        }`}
+                        title={isMasked ? 'Vùng này có làm mờ' : 'Vùng này chỉ quét phụ đề, không làm mờ'}
+                      >
+                        {isMasked ? 'Mờ' : 'Quét'}
+                      </span>
+                      {(regions && regions.length > 1) && onDeleteRegion && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteRegion(reg.region_id);
+                          }}
+                          className="ml-0.5 p-0.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 rounded transition cursor-pointer"
+                          title={`Xóa Vùng ${idx + 1}`}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Tùy chỉnh Làm Mờ / Chỉ Quét Sub cho Vùng Đang Chọn */}
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                <div className="space-y-0.5 min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-200">
+                    {region.mask_enabled !== false ? (
+                      <Droplet className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    ) : (
+                      <Scan className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    )}
+                    <span>Hiệu ứng Làm Mờ (Vùng này)</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    {region.mask_enabled !== false
+                      ? 'Đang BẬT: Che chữ gốc bằng Blur khi xuất video & xem trước'
+                      : 'Đang TẮT: Chỉ quét OCR, giữ nguyên video 100% không làm mờ'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextMask = region.mask_enabled === false;
+                    onUpdateRegion({ ...region, mask_enabled: nextMask });
+                  }}
+                  className={`shrink-0 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 shadow-sm active:scale-95 ${
+                    region.mask_enabled !== false
+                      ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                      : 'bg-amber-600 hover:bg-amber-500 text-white'
+                  }`}
+                  title="Chuyển đổi giữa Bật làm mờ và Chỉ quét Sub cho vùng này"
+                >
+                  {region.mask_enabled !== false ? (
+                    <>
+                      <Droplet className="w-3 h-3" />
+                      <span>Bật Làm Mờ</span>
+                    </>
+                  ) : (
+                    <>
+                      <Scan className="w-3 h-3" />
+                      <span>Chỉ Quét Sub</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Xem trước Lớp Che Sub Toàn Cục */}
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                <div className="space-y-0.5 min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-200">
+                    {previewMask ? (
+                      <Eye className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    ) : (
+                      <EyeOff className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    )}
+                    <span>Hiển Thị Lớp Che Trên Video</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    {previewMask
+                      ? 'Đang hiển thị vùng làm mờ che phụ đề trên màn hình xem video'
+                      : 'Đang ẩn lớp che mờ, hiển thị video nguyên bản'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onTogglePreviewMask}
+                  className={`shrink-0 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 shadow-sm active:scale-95 ${
+                    previewMask
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                  }`}
+                  title="Bật/Tắt xem trước lớp che sub gốc trên video"
+                >
+                  {previewMask ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                  <span>{previewMask ? 'Đang Bật Che' : 'Đang Tắt Che'}</span>
+                </button>
+              </div>
+            </div>
+
             {/* Tự Bắt Dính Chữ */}
             {onAutoDetectRoi && (
               <button
@@ -382,34 +673,150 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               </div>
             </div>
 
-            {/* Mẫu vị trí sẵn */}
-            <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium block text-[11px]">Mẫu vị trí gợi ý:</label>
-              <div className="grid grid-cols-3 gap-1.5">
+            {/* Mẫu vị trí gợi ý & Quản lý Thêm/Sửa/Xóa Mẫu */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-slate-400 font-medium block text-[11px]">Mẫu vị trí gợi ý:</label>
                 <button
                   type="button"
-                  onClick={() => applyRoiPreset('one_line')}
-                  className="p-2 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-indigo-500 text-slate-300 flex flex-col items-center gap-1 transition text-[10px]"
+                  onClick={() => {
+                    setIsAddingPosTemplate(true);
+                    setNewPosTemplateName(`Mẫu ${positionTemplates.length + 1}`);
+                  }}
+                  className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-600/40 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 hover:text-white transition shadow-sm cursor-pointer"
+                  title="Lưu tọa độ Y, Chiều cao, Chiều rộng hiện tại thành mẫu vị trí mới"
                 >
-                  <Tv className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>1 Dòng Đáy</span>
+                  <Plus className="w-3 h-3" />
+                  <span>+ Thêm Mẫu</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => applyRoiPreset('two_lines')}
-                  className="p-2 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-indigo-500 text-slate-300 flex flex-col items-center gap-1 transition text-[10px]"
-                >
-                  <AlignJustify className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>2 Dòng Đáy</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyRoiPreset('tiktok_portrait')}
-                  className="p-2 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-indigo-500 text-slate-300 flex flex-col items-center gap-1 transition text-[10px]"
-                >
-                  <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Dọc TikTok</span>
-                </button>
+              </div>
+
+              {/* Form tạo mới Mẫu vị trí */}
+              {isAddingPosTemplate && (
+                <div className="p-2 bg-slate-950 border border-indigo-500 rounded-xl space-y-2 animate-in fade-in">
+                  <label className="text-[10px] text-slate-300 font-semibold block">Tên Mẫu Vị Trí Mới:</label>
+                  <input
+                    type="text"
+                    value={newPosTemplateName}
+                    onChange={(e) => setNewPosTemplateName(e.target.value)}
+                    placeholder="Ví dụ: Vùng Phụ Đề Chuẩn..."
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400"
+                    autoFocus
+                  />
+                  <div className="flex justify-end gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingPosTemplate(false)}
+                      className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 text-[10px]"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCreatePosTemplate}
+                      className="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold flex items-center gap-1 shadow"
+                    >
+                      <Save className="w-3 h-3" />
+                      <span>Lưu Mẫu</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-1.5">
+                {positionTemplates.map((tpl) => {
+                  const isEditing = editingPosTemplateId === tpl.id;
+                  const isCurrent =
+                    Math.abs(region.y - tpl.y) < 0.03 &&
+                    Math.abs(region.height - tpl.height) < 0.03;
+
+                  return (
+                    <div
+                      key={tpl.id}
+                      onClick={() => {
+                        onUpdateRegion({
+                          ...region,
+                          y: tpl.y,
+                          height: tpl.height,
+                          width: tpl.width,
+                          x: tpl.x ?? region.x,
+                        });
+                      }}
+                      className={`p-2 rounded-xl border flex flex-col gap-1 transition cursor-pointer relative group/tpl ${
+                        isCurrent
+                          ? 'bg-indigo-950/80 border-indigo-500 text-white ring-1 ring-indigo-500/40'
+                          : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 text-slate-300'
+                      }`}
+                    >
+                      {isEditing ? (
+                        <div className="space-y-1" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="text"
+                            value={editingPosTemplateName}
+                            onChange={(e) => setEditingPosTemplateName(e.target.value)}
+                            className="w-full bg-slate-950 border border-indigo-400 rounded px-1.5 py-0.5 text-[10px] text-white focus:outline-none"
+                            autoFocus
+                          />
+                          <div className="flex justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setEditingPosTemplateId(null)}
+                              className="px-1.5 py-0.5 rounded bg-slate-800 text-[9px] text-slate-400"
+                            >
+                              Hủy
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRenamePosTemplate(tpl.id, editingPosTemplateName)}
+                              className="px-2 py-0.5 rounded bg-indigo-600 text-[9px] text-white font-semibold"
+                            >
+                              Lưu
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1 font-semibold text-[11px] truncate">
+                              <Tv className="w-3 h-3 text-indigo-400 shrink-0" />
+                              <span className="truncate">{tpl.name}</span>
+                            </div>
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover/tpl:opacity-100 transition">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingPosTemplateId(tpl.id);
+                                  setEditingPosTemplateName(tpl.name);
+                                }}
+                                className="p-0.5 hover:text-white text-slate-400"
+                                title="Đổi tên mẫu vị trí"
+                              >
+                                <Edit2 className="w-2.5 h-2.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeletePosTemplate(tpl.id);
+                                }}
+                                className="p-0.5 hover:text-rose-400 text-slate-400"
+                                title="Xóa mẫu vị trí này"
+                              >
+                                <Trash2 className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="text-[9px] font-mono text-slate-400 flex items-center gap-1.5">
+                            <span>Y: {Math.round(tpl.y * 100)}%</span>
+                            <span>H: {Math.round(tpl.height * 100)}%</span>
+                            <span>W: {Math.round(tpl.width * 100)}%</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -475,26 +882,36 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               <span>Căn giữa chuẩn phụ đề</span>
             </button>
 
-            {/* Nút Quét Sub Nhanh */}
+            {/* Nút Quét Sub Nhanh & Dừng / Hủy */}
             {onStartScan && (
-              <button
-                type="button"
-                onClick={onStartScan}
-                disabled={isScanning}
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-98 transition disabled:opacity-50"
-              >
-                {isScanning ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
+              isScanning ? (
+                <div className="flex items-center gap-2 w-full animate-in fade-in duration-150">
+                  <div className="flex-1 py-2.5 bg-indigo-950/70 border border-indigo-700/60 text-indigo-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-inner">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
                     <span>Đang Quét Phụ Đề...</span>
-                  </>
-                ) : (
-                  <>
-                    <Crop className="w-4 h-4" />
-                    <span>Bắt Đầu Quét Sub Theo Vùng Này</span>
-                  </>
-                )}
-              </button>
+                  </div>
+                  {onStopScan && (
+                    <button
+                      type="button"
+                      onClick={onStopScan}
+                      className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/30 active:scale-98 transition cursor-pointer"
+                      title="Dừng hoặc Hủy tiến trình quét ngay lập tức"
+                    >
+                      <Square className="w-3.5 h-3.5 fill-white" />
+                      <span>Dừng / Hủy</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onStartScan}
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-98 transition cursor-pointer"
+                >
+                  <Crop className="w-4 h-4" />
+                  <span>Bắt Đầu Quét Sub Theo Vùng Này</span>
+                </button>
+              )
             )}
           </div>
         )}
@@ -736,6 +1153,17 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 )}
               </div>
             </div>
+
+            {/* Nút Reset Toàn Bộ Thông Số Video Về Mặc Định */}
+            <button
+              type="button"
+              onClick={onResetAllParameters || onResetTransform}
+              className="w-full py-2.5 bg-slate-900 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-700/60 text-slate-300 hover:text-rose-300 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-98"
+              title="Khôi phục toàn bộ góc xoay, tỷ lệ, vị trí, zoom, lật và mask về mặc định"
+            >
+              <RotateCcw className="w-4 h-4 text-rose-400" />
+              <span>Khôi Phục Toàn Bộ Thông Số Video Về Mặc Định</span>
+            </button>
           </div>
         )}
 
@@ -822,6 +1250,40 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               )}
             </div>
 
+            {/* Lồng Tiếng AI Toàn Video */}
+            <div className="p-3 bg-amber-950/30 border border-amber-800/40 rounded-xl space-y-2">
+              <div className="flex items-center gap-1.5 font-semibold text-amber-300">
+                <Mic className="w-4 h-4 text-amber-400" />
+                <span>Lồng Tiếng AI Toàn Bộ Video</span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Tạo giọng đọc thuyết minh tiếng Việt tự nhiên và đồng bộ chuẩn thời lượng từng câu phụ đề.
+              </p>
+              <button
+                type="button"
+                onClick={handleDubAllVideo}
+                disabled={isDubbingAll || !activeProject}
+                className="w-full py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-lg flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 cursor-pointer"
+              >
+                {isDubbingAll ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                    <span>Đang Tạo Giọng Đọc...</span>
+                  </>
+                ) : (
+                  <>
+                    <Mic className="w-4 h-4 text-slate-950" />
+                    <span>Lồng Tiếng Toàn Bộ Video</span>
+                  </>
+                )}
+              </button>
+              {dubMsg && (
+                <div className="text-[11px] text-amber-300 bg-slate-950/60 p-2 rounded border border-amber-900 font-medium">
+                  {dubMsg}
+                </div>
+              )}
+            </div>
+
             {/* Xuất Bản Video & File */}
             <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2.5">
               <span className="font-semibold text-slate-200 block">Xuất Bản & Kết Xuất:</span>
@@ -855,32 +1317,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
         )}
 
       </div>
-
-      {/* Sticky Footer: Nút Lưu Cấu Hình Toàn Cục (Giữ nguyên khi F5) */}
-      {onSaveGlobalConfig && (
-        <div className="p-2.5 bg-slate-950 border-t border-slate-800/90 shrink-0 flex items-center justify-between gap-2 shadow-inner">
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-400 min-w-0">
-            <Save className={`w-3.5 h-3.5 shrink-0 ${hasUnsavedChanges ? 'text-amber-400' : 'text-slate-500'}`} />
-            <span className="truncate">
-              {hasUnsavedChanges ? 'Có thay đổi chưa lưu' : 'Cấu hình toàn cục'}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onSaveGlobalConfig}
-            disabled={isSavingConfig}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow transition disabled:opacity-50 cursor-pointer shrink-0 ${
-              hasUnsavedChanges
-                ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-950/50 animate-pulse'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
-            }`}
-            title="Lưu toàn bộ thông số (ROI, Mask, Biến đổi, Chuẩn Preset) vào hệ thống - Bền vững khi F5"
-          >
-            <Save className="w-3.5 h-3.5" />
-            <span>{isSavingConfig ? 'Đang lưu...' : hasUnsavedChanges ? 'Lưu Cấu Hình *' : 'Lưu Cấu Hình'}</span>
-          </button>
-        </div>
-      )}
     </aside>
   );
 };

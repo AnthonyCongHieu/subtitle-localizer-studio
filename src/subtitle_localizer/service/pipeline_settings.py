@@ -92,6 +92,7 @@ class TranslationSettings(BaseModel):
 
 
 class DubbingSettings(BaseModel):
+    enabled: bool = True
     provider: str = "edge"  # "edge" | "capcut" | "gemini" | "local"
     mode: str = "single"  # "single" (1 người) | "multi" (nhiều người / phân vai nam nữ)
     voice: str = "vi-VN-NamMinhNeural"  # Giọng chính khi ở mode 1 người
@@ -102,6 +103,24 @@ class DubbingSettings(BaseModel):
     rate: str = "+0%"
     pitch: str = "+0Hz"
     ducking_volume: float = 0.25
+
+
+class BatchConfigSettings(BaseModel):
+    target_lang: str = "vi"
+    ducking_volume: int = 25
+    dubbing_enabled: bool = True
+    dubbing_mode: str = "single"
+    dubbing_voice: str = "vi-VN-NamMinhNeural"
+    export_format: str = "mp4"
+    export_resolution: str = "original"
+    export_aspect_ratio: str = "original"
+    stage_ocr: bool = True
+    stage_translate: bool = True
+    stage_dubbing: bool = True
+    stage_export: bool = True
+    active_preset_id: str = ""
+    sort_mode: str = "ep_asc"
+    grid_cols: int = 3
 
 
 class RenderSettings(BaseModel):
@@ -116,6 +135,7 @@ class GlobalPipelineSettings(BaseModel):
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
     dubbing: DubbingSettings = Field(default_factory=DubbingSettings)
     render: RenderSettings = Field(default_factory=RenderSettings)
+    batch: BatchConfigSettings = Field(default_factory=BatchConfigSettings)
 
 
 _global_settings: Optional[GlobalPipelineSettings] = None

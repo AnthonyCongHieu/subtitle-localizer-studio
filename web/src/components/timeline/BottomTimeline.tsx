@@ -2,13 +2,11 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Play,
   Pause,
-  FastForward,
-  Rewind,
   ZoomIn,
   ZoomOut,
-  Film,
-  Activity,
-  Subtitles,
+  Scissors,
+  Trash2,
+  Magnet,
   Lock,
   Unlock,
   Eye,
@@ -18,6 +16,7 @@ import {
   Clock,
   ChevronDown,
   ChevronUp,
+  Mic,
 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { SubtitleCueV1 } from '../../types/api';
@@ -31,7 +30,18 @@ interface BottomTimelineProps {
   onTogglePlay: () => void;
   onSeek: (time: number) => void;
   cues?: SubtitleCueV1[];
+  selectedCueId?: string | null;
   onSelectCue?: (cue: SubtitleCueV1) => void;
+  onUpdateCueTime?: (cueId: string, startPts: number, endPts: number) => void;
+  onSplitCue?: (time: number) => void;
+  onDeleteCue?: (cueId: string) => void;
+  hasVoiceover?: boolean;
+  isAudioMuted?: boolean;
+  onToggleAudioMute?: () => void;
+  isVideoVisible?: boolean;
+  onToggleVideoVisible?: () => void;
+  isSubVisible?: boolean;
+  onToggleSubVisible?: () => void;
 }
 
 const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
@@ -43,71 +53,102 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
   onTogglePlay,
   onSeek,
   cues = [],
+  selectedCueId,
   onSelectCue,
+  onUpdateCueTime,
+  onSplitCue,
+  onDeleteCue,
+  hasVoiceover = false,
+  isAudioMuted: externalAudioMuted,
+  onToggleAudioMute,
+  isVideoVisible: externalVideoVisible,
+  onToggleVideoVisible,
+  isSubVisible: externalSubVisible,
+  onToggleSubVisible,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
+  const trackAreaRef = useRef<HTMLDivElement>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
+  const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [snapEnabled, setSnapEnabled] = useState<boolean>(true);
   const [audioPeaks, setAudioPeaks] = useState<number[]>([]);
   const [thumbnails, setThumbnails] = useState<{ time: number; dataUrl: string }[]>([]);
-  const [isGeneratingThumbs, setIsGeneratingThumbs] = useState<boolean>(false);
+  const [, setIsGeneratingThumbs] = useState<boolean>(false);
 
-  // Trạng thái khóa và ẩn track NLE
+  // Trạng thái Khóa / Ẩn / Tắt tiếng từng Track NLE
   const [isSubLocked, setIsSubLocked] = useState<boolean>(false);
-  const [isSubVisible, setIsSubVisible] = useState<boolean>(true);
+  const [internalSubVisible, setInternalSubVisible] = useState<boolean>(true);
+  const isSubVisible = externalSubVisible !== undefined ? externalSubVisible : internalSubVisible;
+
   const [isVideoLocked, setIsVideoLocked] = useState<boolean>(false);
-  const [isVideoVisible, setIsVideoVisible] = useState<boolean>(true);
+  const [internalVideoVisible, setInternalVideoVisible] = useState<boolean>(true);
+  const isVideoVisible = externalVideoVisible !== undefined ? externalVideoVisible : internalVideoVisible;
+
+  const [isVoiceoverLocked, setIsVoiceoverLocked] = useState<boolean>(false);
+  const [isVoiceoverMuted, setIsVoiceoverMuted] = useState<boolean>(false);
+
   const [isAudioLocked, setIsAudioLocked] = useState<boolean>(false);
-  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
-  const [isTracksCollapsed, setIsTracksCollapsed] = useState<boolean>(false);
+  const [internalAudioMuted, setInternalAudioMuted] = useState<boolean>(false);
+  const isAudioMuted = externalAudioMuted !== undefined ? externalAudioMuted : internalAudioMuted;
+
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
+
+  // Đồng bộ âm thanh Lồng tiếng Track A1 với Playhead
+  useEffect(() => {
+    const audio = voiceAudioRef.current;
+    if (!audio || !hasVoiceover) return;
+
+    if (isPlaying && !isVoiceoverMuted) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  }, [isPlaying, hasVoiceover, isVoiceoverMuted]);
+
+  useEffect(() => {
+    const audio = voiceAudioRef.current;
+    if (!audio || !hasVoiceover) return;
+    if (Math.abs(audio.currentTime - currentTime) > 0.25) {
+      audio.currentTime = currentTime;
+    }
+  }, [currentTime, hasVoiceover]);
+
+  useEffect(() => {
+    const audio = voiceAudioRef.current;
+    if (!audio) return;
+    audio.muted = isVoiceoverMuted;
+  }, [isVoiceoverMuted]);
+
+  // Trạng thái kéo co giãn cạnh đầu/cuối của câu phụ đề (Trim Cue Dragging)
+  const [trimmingState, setTrimmingState] = useState<{
+    cueId: string;
+    handle: 'start' | 'end' | 'move';
+    initialMouseX: number;
+    initialStart: number;
+    initialEnd: number;
+  } | null>(null);
 
   const totalDuration = Math.max(1.0, duration);
 
-  // Xác định câu phụ đề đang phát
-  const activeCueId = useMemo(() => {
+  // Xác định câu phụ đề đang phát tại currentTime
+  const activeCue = useMemo(() => {
     if (!cues || cues.length === 0) return null;
-    const found = cues.find((c) => currentTime >= c.start_pts && currentTime <= c.end_pts);
-    return found?.cue_id || null;
+    return cues.find((c) => currentTime >= c.start_pts && currentTime <= c.end_pts) || null;
   }, [cues, currentTime]);
 
-  // Bộ nhớ đệm danh sách các khối phụ đề (Blocks NLE)
-  const renderedCues = useMemo(() => {
-    if (!cues || cues.length === 0 || !isSubVisible) return null;
-    return cues.map((cue, idx) => {
-      const leftPct = (cue.start_pts / totalDuration) * 100;
-      const widthPct = Math.max(0.4, ((cue.end_pts - cue.start_pts) / totalDuration) * 100);
-      const isActive = cue.cue_id ? cue.cue_id === activeCueId : false;
-      const text = cue.translated_text || cue.source_text;
-      return (
-        <div
-          key={cue.cue_id || idx}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!isSubLocked) {
-              onSeek(cue.start_pts);
-              if (onSelectCue) onSelectCue(cue);
-            }
-          }}
-          style={{
-            left: `${leftPct}%`,
-            width: `${widthPct}%`,
-            minWidth: '20px',
-          }}
-          className={`absolute top-1 bottom-1 rounded-md px-2 flex items-center overflow-hidden cursor-pointer transition-all duration-75 text-[10px] select-none border ${
-            isActive
-              ? 'bg-amber-500 text-slate-950 font-bold border-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.9)] z-20 scale-[1.02]'
-              : 'bg-indigo-950/80 border-indigo-700/70 hover:border-amber-400 text-amber-200 hover:text-white shadow-sm'
-          } ${isSubLocked ? 'cursor-not-allowed opacity-60' : ''}`}
-          title={`[${cue.start_pts.toFixed(2)}s - ${cue.end_pts.toFixed(2)}s] ${text}`}
-        >
-          <span className="truncate whitespace-nowrap font-medium">{text}</span>
-        </div>
-      );
-    });
-  }, [cues, totalDuration, activeCueId, onSeek, onSelectCue, isSubVisible, isSubLocked]);
+  const activeCueId = selectedCueId || activeCue?.cue_id || null;
+
+  // Định dạng thời gian SMPTE Timecode: 00:00:00:00
+  const formatSmpteTimecode = (seconds: number) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    const frames = Math.floor((seconds % 1) * 25);
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
+  };
 
   // Nạp dữ liệu sóng âm thanh (Waveform Peaks) từ backend API
   useEffect(() => {
@@ -121,9 +162,7 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
           setAudioPeaks(data.peaks);
         }
       })
-      .catch((err) => {
-        console.warn('Chưa nạp được audio waveform từ máy chủ:', err);
-      });
+      .catch(() => {});
 
     return () => {
       isCancelled = true;
@@ -170,11 +209,10 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
               offscreenVideo.onerror = null;
             };
 
-            // Timeout bảo vệ chống treo vô hạn nếu trình duyệt không bắn sự kiện seeked
             timer = setTimeout(() => {
               cleanup();
               resolve();
-            }, 1000);
+            }, 800);
 
             offscreenVideo.onseeked = () => {
               cleanup();
@@ -185,9 +223,7 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
                     time: targetTime,
                     dataUrl: canvas.toDataURL('image/jpeg', 0.6),
                   });
-                } catch {
-                  // Bỏ qua lỗi context canvas
-                }
+                } catch {}
               }
               resolve();
             };
@@ -204,8 +240,7 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
         if (!isCancelled) {
           setThumbnails(result);
         }
-      } catch (err) {
-        console.warn('Không thể tự tạo thumbnails client-side:', err);
+      } catch {
       } finally {
         if (!isCancelled) setIsGeneratingThumbs(false);
       }
@@ -218,30 +253,134 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
     };
   }, [videoUrl, duration]);
 
-  // Định dạng thời gian dạng 00:00.00
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 100);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+  // Xử lý kéo Playhead Scrubber chuẩn xác tuyệt đối ở mọi mức zoom
+  const handleTimelineScrub = useCallback(
+    (e: React.MouseEvent | MouseEvent) => {
+      if (!trackAreaRef.current || totalDuration <= 0) return;
+      const rect = trackAreaRef.current.getBoundingClientRect();
+      const scrollLeft = trackAreaRef.current.scrollLeft || 0;
+      const totalWidth = trackAreaRef.current.scrollWidth || (rect.width * Math.max(1, zoomLevel));
+      const clickX = (e.clientX - rect.left) + scrollLeft;
+      const pct = Math.max(0, Math.min(1, clickX / totalWidth));
+      let targetTime = pct * totalDuration;
+
+      // Tính năng Magnet Snap: Hút dính vào đầu hoặc cuối câu phụ đề gần nhất trong phạm vi 0.25s
+      if (snapEnabled && cues && cues.length > 0) {
+        for (const c of cues) {
+          if (Math.abs(targetTime - c.start_pts) <= 0.25) {
+            targetTime = c.start_pts;
+            break;
+          }
+          if (Math.abs(targetTime - c.end_pts) <= 0.25) {
+            targetTime = c.end_pts;
+            break;
+          }
+        }
+      }
+
+      onSeek(parseFloat(targetTime.toFixed(3)));
+    },
+    [totalDuration, snapEnabled, cues, onSeek, zoomLevel]
+  );
+
+  const handleMouseDownScrub = (e: React.MouseEvent) => {
+    setIsScrubbing(true);
+    handleTimelineScrub(e);
   };
 
-  // Định dạng nhãn cho thước đo thời gian dạng 00:00
-  const formatRulerTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  useEffect(() => {
+    if (!isScrubbing) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      handleTimelineScrub(e);
+    };
+    const handleMouseUp = () => {
+      setIsScrubbing(false);
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isScrubbing, handleTimelineScrub]);
+
+  // Tự động cuộn theo Playhead khi phát video ở chế độ thu phóng (Follow Playhead Auto-Scroll)
+  useEffect(() => {
+    if (!trackAreaRef.current || !isPlaying || zoomLevel <= 1.0 || isScrubbing) return;
+    const container = trackAreaRef.current;
+    const totalWidth = container.scrollWidth;
+    const playheadX = (currentTime / totalDuration) * totalWidth;
+    const viewLeft = container.scrollLeft;
+    const viewRight = viewLeft + container.clientWidth;
+    const margin = container.clientWidth * 0.2;
+    if (playheadX > viewRight - margin || playheadX < viewLeft + margin) {
+      container.scrollLeft = Math.max(0, playheadX - container.clientWidth / 2);
+    }
+  }, [currentTime, isPlaying, zoomLevel, totalDuration, isScrubbing]);
+
+  // Xử lý kéo mép co giãn Timecode của câu phụ đề (Trim Handles)
+  const handleMouseDownTrim = (
+    e: React.MouseEvent,
+    cue: SubtitleCueV1,
+    handle: 'start' | 'end' | 'move'
+  ) => {
+    if (isSubLocked) return;
+    e.stopPropagation();
+    e.preventDefault();
+    setTrimmingState({
+      cueId: cue.cue_id,
+      handle,
+      initialMouseX: e.clientX,
+      initialStart: cue.start_pts,
+      initialEnd: cue.end_pts,
+    });
   };
 
-  // Tính toán các mốc của Thước Đo Thời Gian (Time Ruler Ticks)
+  useEffect(() => {
+    if (!trimmingState || !trackAreaRef.current || !onUpdateCueTime) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!trackAreaRef.current) return;
+      const rect = trackAreaRef.current.getBoundingClientRect();
+      const totalWidth = trackAreaRef.current.scrollWidth || (rect.width * Math.max(1, zoomLevel));
+      const deltaPixels = e.clientX - trimmingState.initialMouseX;
+      const deltaSeconds = (deltaPixels / totalWidth) * totalDuration;
+
+      let newStart = trimmingState.initialStart;
+      let newEnd = trimmingState.initialEnd;
+
+      if (trimmingState.handle === 'start') {
+        newStart = Math.max(0, Math.min(trimmingState.initialEnd - 0.2, trimmingState.initialStart + deltaSeconds));
+      } else if (trimmingState.handle === 'end') {
+        newEnd = Math.max(trimmingState.initialStart + 0.2, Math.min(totalDuration, trimmingState.initialEnd + deltaSeconds));
+      } else if (trimmingState.handle === 'move') {
+        const cueLen = trimmingState.initialEnd - trimmingState.initialStart;
+        newStart = Math.max(0, Math.min(totalDuration - cueLen, trimmingState.initialStart + deltaSeconds));
+        newEnd = newStart + cueLen;
+      }
+
+      onUpdateCueTime(trimmingState.cueId, parseFloat(newStart.toFixed(3)), parseFloat(newEnd.toFixed(3)));
+    };
+
+    const handleMouseUp = () => {
+      setTrimmingState(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [trimmingState, totalDuration, onUpdateCueTime, zoomLevel]);
+
+  // Tính toán nhãn thước đo thời gian (Time Ruler Ticks)
   const rulerTicks = useMemo(() => {
-    // Bước nhảy thời gian dựa trên tổng thời lượng và zoom
     let step = 5;
     if (totalDuration > 300) step = 30;
     else if (totalDuration > 120) step = 15;
     else if (totalDuration > 60) step = 10;
     else if (totalDuration <= 15) step = 1;
-    else step = 5;
 
     if (zoomLevel >= 2.0) {
       step = Math.max(1, Math.floor(step / 2));
@@ -249,394 +388,424 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
 
     const ticks: { time: number; label: string; pct: number }[] = [];
     for (let t = 0; t <= totalDuration; t += step) {
+      const mins = Math.floor(t / 60);
+      const secs = Math.floor(t % 60);
       ticks.push({
         time: t,
-        label: formatRulerTime(t),
+        label: `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`,
         pct: (t / totalDuration) * 100,
       });
     }
     return ticks;
   }, [totalDuration, zoomLevel]);
 
-  // Tính toán đường cong SVG sóng âm thanh từ dữ liệu biên độ thật
-  const waveformSvgPath = useMemo(() => {
-    if (!audioPeaks || audioPeaks.length === 0) {
-      return '';
-    }
-
-    const points: string[] = [];
-    const len = audioPeaks.length;
-    for (let i = 0; i < len; i++) {
-      const x = (i / (len - 1)) * 100;
-      const val = Math.max(0.02, Math.min(1.0, audioPeaks[i]));
-      const h = val * 15;
-      points.push(`M ${x} ${16 - h} L ${x} ${16 + h}`);
-    }
-    return points.join(' ');
-  }, [audioPeaks]);
-
-  // Xử lý kéo thả kim tua (Scrubbing)
-  const handleSeekFromEvent = useCallback(
-    (clientX: number) => {
-      const activeEl = trackRef.current || rulerRef.current;
-      if (!activeEl) return;
-      const rect = activeEl.getBoundingClientRect();
-      const clickX = Math.max(0, Math.min(rect.width, clientX - rect.left));
-      const percentage = clickX / rect.width;
-      const newTime = percentage * totalDuration;
-      onSeek(newTime);
-    },
-    [totalDuration, onSeek]
-  );
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    setIsScrubbing(true);
-    handleSeekFromEvent(e.clientX);
-  };
-
-  useEffect(() => {
-    if (!isScrubbing) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      handleSeekFromEvent(e.clientX);
-    };
-
-    const handleMouseUp = () => {
-      setIsScrubbing(false);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isScrubbing, handleSeekFromEvent]);
-
-  const playheadPercent = Math.min(100, Math.max(0, (currentTime / totalDuration) * 100));
+  const playheadPct = (currentTime / totalDuration) * 100;
 
   return (
-    <div className="bg-slate-900 border-t border-slate-800 flex flex-col select-none shadow-2xl z-40 shrink-0">
-      {/* 1. Thanh Transport Bar Chuẩn NLE (Play/Pause, Tua, Timecode, Slider Zoom Trực Quan) */}
-      <div className="px-4 py-2 flex flex-wrap items-center justify-between border-b border-slate-800/90 bg-slate-950/80 gap-3">
-        {/* Nút Play/Tua + Timecode */}
-        <div className="flex items-center gap-2.5">
-          {/* Nút Play/Pause chính */}
+    <div
+      ref={containerRef}
+      className={`w-full bg-slate-950 border-t border-slate-800/80 flex flex-col select-none transition-all duration-200 z-20 shrink-0 ${
+        isCollapsed ? 'h-10' : 'h-64 sm:h-72'
+      }`}
+    >
+      {/* 1. THANH CÔNG CỤ TIMELINE CHUẨN CAPCUT / PREMIERE (TOP TOOLBAR) */}
+      <div className="h-10 bg-slate-900/90 border-b border-slate-800 px-3 flex items-center justify-between shrink-0">
+        {/* Nhóm Nút Phát / Tua & Timecode SMPTE */}
+        <div className="flex items-center gap-3">
+          {/* Nút Play / Pause */}
           <button
+            type="button"
             onClick={onTogglePlay}
-            className="p-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white active:scale-95 transition shadow-md"
-            title={isPlaying ? 'Tạm dừng (Space)' : 'Phát video (Space)'}
+            className="w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center shadow-md active:scale-95 transition cursor-pointer"
+            title="Phát / Tạm dừng (Space)"
           >
-            {isPlaying ? <Pause className="w-4 h-4 fill-white" /> : <Play className="w-4 h-4 fill-white ml-0.5" />}
+            {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current ml-0.5" />}
           </button>
 
-          {/* Tua lùi 1s */}
-          <button
-            onClick={() => onSeek(Math.max(0, currentTime - 1))}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition"
-            title="Lùi lại 1 giây (←)"
-          >
-            <Rewind className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Tua tới 1s */}
-          <button
-            onClick={() => onSeek(Math.min(totalDuration, currentTime + 1))}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition"
-            title="Tua tới 1 giây (→)"
-          >
-            <FastForward className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Timecode hiện tại / Tổng thời lượng */}
-          <div className="flex items-center gap-1.5 font-mono text-xs ml-2 bg-slate-900 px-3 py-1 rounded-lg border border-slate-800 shadow-inner">
-            <span className="text-indigo-400 font-bold tracking-wide">{formatTime(currentTime)}</span>
-            <span className="text-slate-600">/</span>
-            <span className="text-slate-400">{formatTime(duration)}</span>
+          {/* Timecode Chuyên Nghiệp */}
+          <div className="flex items-center gap-1.5 font-mono text-xs">
+            <span className="text-amber-400 font-bold bg-slate-950 px-2 py-0.5 rounded border border-slate-800 shadow-inner">
+              {formatSmpteTimecode(currentTime)}
+            </span>
+            <span className="text-slate-500">/</span>
+            <span className="text-slate-400">{formatSmpteTimecode(duration)}</span>
           </div>
+
+          <div className="h-4 w-px bg-slate-800" />
+
+          {/* Công cụ Cắt Câu Phụ Đề (Split Cue Tool - Ctrl+B / C) */}
+          <button
+            type="button"
+            onClick={() => onSplitCue && onSplitCue(currentTime)}
+            className="flex items-center gap-1 px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-indigo-300 hover:text-white rounded-lg border border-slate-800 text-[11px] font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+            title="Cắt / Tách câu phụ đề tại vị trí kim Playhead (Ctrl + B hoặc C)"
+          >
+            <Scissors className="w-3 h-3 text-indigo-400" />
+            <span>Cắt Câu</span>
+          </button>
+
+          {/* Công cụ Xóa Câu (Delete Cue Tool) */}
+          {activeCueId && onDeleteCue && (
+            <button
+              type="button"
+              onClick={() => onDeleteCue(activeCueId)}
+              className="flex items-center gap-1 px-2.5 py-1 bg-rose-950/60 hover:bg-rose-900 text-rose-300 rounded-lg border border-rose-800/60 text-[11px] font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+              title="Xóa câu phụ đề đang chọn (Delete)"
+            >
+              <Trash2 className="w-3 h-3 text-rose-400" />
+              <span>Xóa Câu</span>
+            </button>
+          )}
+
+          {/* Nút Bật/Tắt Hút Dính Timecode (Magnet Snap) */}
+          <button
+            type="button"
+            onClick={() => setSnapEnabled(!snapEnabled)}
+            className={`p-1.5 rounded-lg border text-xs transition cursor-pointer ${
+              snapEnabled
+                ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300 shadow-sm'
+                : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-slate-300'
+            }`}
+            title={`Tự động hút dính mốc thời gian (Magnet Snap): ${snapEnabled ? 'Đang BẬT' : 'Đang TẮT'}`}
+          >
+            <Magnet className="w-3.5 h-3.5" />
+          </button>
         </div>
 
-        {/* Cụm Zoom Timeline Trực Quan (Slider Kéo + Nút Fit/150%/200%/300%) */}
-        <div className="flex items-center gap-2.5 text-xs">
-          <div className="flex items-center gap-1.5 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800">
-            <ZoomOut
-              className="w-3.5 h-3.5 text-slate-500 cursor-pointer hover:text-slate-300"
-              onClick={() => setZoomLevel((z) => Math.max(1.0, parseFloat((z - 0.25).toFixed(2))))}
-            />
-            {/* Slider Zoom Trực Quan */}
+        {/* Cụm Điều Khiển Phóng To / Thu Nhỏ & Thu Gọn */}
+        <div className="flex items-center gap-2.5">
+          {/* Zoom Timeline Slider */}
+          <div className="flex items-center gap-1.5 bg-slate-950 px-2 py-0.5 rounded-lg border border-slate-800">
+            <ZoomOut className="w-3 h-3 text-slate-500" />
             <input
               type="range"
               min="1.0"
-              max="3.0"
-              step="0.1"
+              max="4.0"
+              step="0.2"
               value={zoomLevel}
               onChange={(e) => setZoomLevel(parseFloat(e.target.value))}
-              className="w-20 md:w-28 h-1 bg-slate-700 rounded appearance-none cursor-pointer accent-indigo-500"
-              title="Kéo trượt để phóng to / thu nhỏ dải Timeline"
+              className="w-16 sm:w-24 h-1 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
+              title={`Phóng to timeline: ${Math.round(zoomLevel * 100)}%`}
             />
-            <ZoomIn
-              className="w-3.5 h-3.5 text-slate-500 cursor-pointer hover:text-slate-300"
-              onClick={() => setZoomLevel((z) => Math.min(3.0, parseFloat((z + 0.25).toFixed(2))))}
-            />
-            <span className="text-[11px] font-mono text-slate-300 w-10 text-right">
-              {Math.round(zoomLevel * 100)}%
-            </span>
+            <ZoomIn className="w-3 h-3 text-slate-500" />
           </div>
 
-          {/* Các nút bấm nhanh mức Zoom */}
-          <div className="hidden sm:flex items-center gap-1">
-            {[
-              { label: 'Fit', val: 1.0 },
-              { label: '150%', val: 1.5 },
-              { label: '200%', val: 2.0 },
-              { label: '300%', val: 3.0 },
-            ].map((btn) => (
-              <button
-                key={btn.label}
-                onClick={() => setZoomLevel(btn.val)}
-                className={`px-2 py-0.5 rounded text-[10px] font-mono transition ${
-                  Math.abs(zoomLevel - btn.val) < 0.05
-                    ? 'bg-indigo-600 text-white font-bold'
-                    : 'bg-slate-800 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {btn.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Nút Thu Gọn / Mở Rộng Timeline */}
+          {/* Thu gọn / Mở rộng Timeline */}
           <button
             type="button"
-            onClick={() => setIsTracksCollapsed(!isTracksCollapsed)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition text-[11px] font-medium ml-1 shadow-sm"
-            title={isTracksCollapsed ? 'Mở rộng dải Timeline đầy đủ' : 'Thu gọn dải Timeline để phóng to video'}
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+            title={isCollapsed ? 'Mở rộng Timeline đa Track' : 'Thu gọn Timeline'}
           >
-            {isTracksCollapsed ? (
-              <>
-                <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="hidden sm:inline">Mở Timeline</span>
-              </>
-            ) : (
-              <>
-                <ChevronDown className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="hidden sm:inline">Thu Gọn</span>
-              </>
-            )}
+            {isCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
         </div>
       </div>
 
-      {/* 2. Bố Cục Timeline Chuẩn NLE (Có thể thu gọn) */}
-      {!isTracksCollapsed && (
-      <div className="flex px-3 py-2 gap-2 animate-in fade-in duration-100">
-        {/* Cột Track Header bên trái: Có icon Khóa / Ẩn / Mute cho từng dải */}
-        <div className="w-24 shrink-0 flex flex-col rounded-xl overflow-hidden border border-slate-800/90 bg-slate-950 text-[10px] font-medium shadow-md">
-          {/* Ô Header Trống (Tương ứng với hàng Thước Đo Thời Gian) */}
-          <div className="h-6 border-b border-slate-800/90 px-2 flex items-center justify-between text-slate-500 bg-slate-900/50">
-            <span className="text-[9px] font-mono uppercase tracking-wider">Tracks</span>
-            <Clock className="w-3 h-3 text-slate-600" />
-          </div>
+      {/* 2. KHU VỰC ĐA TRACK CHÍNH (NLE MULTI-TRACK CANVAS) */}
+      {!isCollapsed && (
+        <div className="flex-1 min-h-0 flex flex-row overflow-hidden relative">
+          {/* A. CỘT ĐẦU TRACK BÊN TRÁI (TRACK HEADERS) */}
+          <div className="w-24 sm:w-32 bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 z-20">
+            {/* Header Thước Đo */}
+            <div className="h-6 border-b border-slate-800/80 px-2 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+              <span>TRACKS</span>
+              <Clock className="w-3 h-3" />
+            </div>
 
-          {/* Header Phụ Đề Track */}
-          <div className="h-10 border-b border-slate-800/90 px-2 flex items-center justify-between text-amber-400 bg-amber-950/20">
-            <div className="flex items-center gap-1 truncate">
-              <Subtitles className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">Phụ đề</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setIsSubLocked(!isSubLocked)}
-                className={`p-0.5 rounded hover:bg-slate-800 ${isSubLocked ? 'text-amber-400' : 'text-slate-600'}`}
-                title={isSubLocked ? 'Mở khóa track phụ đề' : 'Khóa track phụ đề'}
-              >
-                {isSubLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsSubVisible(!isSubVisible)}
-                className={`p-0.5 rounded hover:bg-slate-800 ${isSubVisible ? 'text-amber-400' : 'text-slate-600'}`}
-                title={isSubVisible ? 'Ẩn track phụ đề' : 'Hiện track phụ đề'}
-              >
-                {isSubVisible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Header Video Track */}
-          <div className="h-14 border-b border-slate-800/90 px-2 flex items-center justify-between text-slate-300 bg-slate-900/40">
-            <div className="flex items-center gap-1 truncate">
-              <Film className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span className="truncate">Video</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setIsVideoLocked(!isVideoLocked)}
-                className={`p-0.5 rounded hover:bg-slate-800 ${isVideoLocked ? 'text-indigo-400' : 'text-slate-600'}`}
-                title={isVideoLocked ? 'Mở khóa track video' : 'Khóa track video'}
-              >
-                {isVideoLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsVideoVisible(!isVideoVisible)}
-                className={`p-0.5 rounded hover:bg-slate-800 ${isVideoVisible ? 'text-indigo-400' : 'text-slate-600'}`}
-                title={isVideoVisible ? 'Ẩn track video' : 'Hiện track video'}
-              >
-                {isVideoVisible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Header Audio Track */}
-          <div className="h-10 px-2 flex items-center justify-between text-emerald-400 bg-emerald-950/20">
-            <div className="flex items-center gap-1 truncate">
-              <Activity className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">Audio</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setIsAudioLocked(!isAudioLocked)}
-                className={`p-0.5 rounded hover:bg-slate-800 ${isAudioLocked ? 'text-emerald-400' : 'text-slate-600'}`}
-                title={isAudioLocked ? 'Mở khóa track audio' : 'Khóa track audio'}
-              >
-                {isAudioLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsAudioMuted(!isAudioMuted)}
-                className={`p-0.5 rounded hover:bg-slate-800 ${isAudioMuted ? 'text-rose-400' : 'text-slate-600'}`}
-                title={isAudioMuted ? 'Bật tiếng track audio' : 'Tắt tiếng track audio'}
-              >
-                {isAudioMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Vùng Cuộn Track & Thước Đo Thời Gian (Scroll Area) */}
-        <div
-          ref={containerRef}
-          className="flex-1 overflow-x-auto overflow-y-hidden cursor-pointer scrollbar-thin scrollbar-thumb-slate-700"
-        >
-          <div
-            ref={trackRef}
-            onMouseDown={handleMouseDown}
-            className="relative rounded-xl overflow-hidden border border-slate-800/90 bg-slate-950 transition-[width] shadow-inner"
-            style={{ width: `${zoomLevel * 100}%`, minWidth: '100%' }}
-          >
-            {/* THƯỚC ĐO THỜI GIAN (TIME RULER - VẠCH CHIA GIÂY CHUẨN NLE) */}
-            <div
-              ref={rulerRef}
-              className="h-6 bg-slate-900/90 border-b border-slate-800/90 relative overflow-hidden text-[9px] font-mono text-slate-400 select-none cursor-ew-resize"
-            >
-              {rulerTicks.map((tick, i) => (
-                <div
-                  key={i}
-                  className="absolute top-0 bottom-0 flex flex-col items-center"
-                  style={{ left: `${tick.pct}%`, transform: 'translateX(-50%)' }}
+            {/* Header Track 1: Phụ Đề [T] */}
+            <div className="h-14 border-b border-slate-800/70 px-2 flex items-center justify-between bg-slate-900/40">
+              <div className="flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded bg-indigo-950 border border-indigo-700/60 text-indigo-300 font-bold text-[10px] flex items-center justify-center">
+                  T
+                </span>
+                <span className="text-[11px] font-semibold text-slate-300">Phụ Đề</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setIsSubLocked(!isSubLocked)}
+                  className="p-1 text-slate-500 hover:text-slate-200"
+                  title={isSubLocked ? 'Mở khóa track phụ đề' : 'Khóa track phụ đề'}
                 >
-                  <span className="text-[9px] leading-tight text-slate-400 select-none pt-0.5">
-                    {tick.label}
-                  </span>
-                  <div className="w-px h-2 bg-slate-700 mt-auto" />
-                </div>
-              ))}
+                  {isSubLocked ? <Lock className="w-3 h-3 text-amber-400" /> : <Unlock className="w-3 h-3" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleSubVisible ? onToggleSubVisible() : setInternalSubVisible(!internalSubVisible)}
+                  className="p-1 text-slate-500 hover:text-slate-200"
+                  title={isSubVisible ? 'Ẩn track phụ đề' : 'Hiện track phụ đề'}
+                >
+                  {isSubVisible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-slate-600" />}
+                </button>
+              </div>
             </div>
 
-            {/* Tầng 1: Dải Track Phụ Đề (Subtitle Track) */}
-            <div className="h-10 bg-slate-950 border-b border-slate-800/90 relative flex items-center overflow-hidden px-0.5">
-              {renderedCues ? (
-                renderedCues
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 gap-1.5">
-                  <Subtitles className="w-3 h-3 opacity-40" />
-                  <span>{isSubVisible ? 'Chưa có câu phụ đề nào' : 'Track phụ đề đang ẩn'}</span>
-                </div>
-              )}
+            {/* Header Track 2: Video [V] */}
+            <div className="h-14 border-b border-slate-800/70 px-2 flex items-center justify-between bg-slate-900/40">
+              <div className="flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-bold text-[10px] flex items-center justify-center">
+                  V
+                </span>
+                <span className="text-[11px] font-semibold text-slate-300">Video</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setIsVideoLocked(!isVideoLocked)}
+                  className="p-1 text-slate-500 hover:text-slate-200"
+                >
+                  {isVideoLocked ? <Lock className="w-3 h-3 text-amber-400" /> : <Unlock className="w-3 h-3" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleVideoVisible ? onToggleVideoVisible() : setInternalVideoVisible(!internalVideoVisible)}
+                  className="p-1 text-slate-500 hover:text-slate-200"
+                  title={isVideoVisible ? 'Ẩn video' : 'Hiện video'}
+                >
+                  {isVideoVisible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-slate-600" />}
+                </button>
+              </div>
             </div>
 
-            {/* Tầng 2: Dải Hình Ảnh (Filmstrip Thumbnails) */}
-            <div className="h-14 bg-slate-950 border-b border-slate-800/90 flex items-center relative overflow-hidden">
-              {isVideoVisible ? (
-                thumbnails.length > 0 ? (
-                  <div className="w-full h-full flex">
+            {/* Header Track 3: Lồng Tiếng [A1] */}
+            <div className="h-10 border-b border-slate-800/70 px-2 flex items-center justify-between bg-slate-900/40">
+              <div className="flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded bg-amber-950 border border-amber-700/60 text-amber-300 font-bold text-[10px] flex items-center justify-center">
+                  A1
+                </span>
+                <span className="text-[10px] font-semibold text-slate-300">Lồng Tiếng</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setIsVoiceoverLocked(!isVoiceoverLocked)}
+                  className="p-1 text-slate-500 hover:text-slate-200"
+                  title={isVoiceoverLocked ? 'Mở khóa track lồng tiếng' : 'Khóa track lồng tiếng'}
+                >
+                  {isVoiceoverLocked ? <Lock className="w-3 h-3 text-amber-400" /> : <Unlock className="w-3 h-3" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsVoiceoverMuted(!isVoiceoverMuted)}
+                  className="p-1 text-slate-500 hover:text-slate-200"
+                  title={isVoiceoverMuted ? 'Bật tiếng thuyết minh' : 'Tắt tiếng thuyết minh'}
+                >
+                  {isVoiceoverMuted ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Header Track 4: Audio Gốc [A2] */}
+            <div className="flex-1 min-h-0 px-2 flex items-center justify-between bg-slate-900/40">
+              <div className="flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded bg-emerald-950 border border-emerald-700/60 text-emerald-300 font-bold text-[10px] flex items-center justify-center">
+                  A2
+                </span>
+                <span className="text-[10px] font-semibold text-slate-300">Audio Gốc</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setIsAudioLocked(!isAudioLocked)}
+                  className="p-1 text-slate-500 hover:text-slate-200"
+                  title={isAudioLocked ? 'Mở khóa track audio gốc' : 'Khóa track audio gốc'}
+                >
+                  {isAudioLocked ? <Lock className="w-3 h-3 text-amber-400" /> : <Unlock className="w-3 h-3" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleAudioMute ? onToggleAudioMute() : setInternalAudioMuted(!internalAudioMuted)}
+                  className="p-1 text-slate-500 hover:text-slate-200"
+                  title={isAudioMuted ? 'Bật tiếng gốc' : 'Tắt tiếng gốc'}
+                >
+                  {isAudioMuted ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* B. THÂN DÒNG THỜI GIAN CUỘN ĐƯỢC (SCROLLABLE TIMELINE BODY) */}
+          <div
+            ref={trackAreaRef}
+            onMouseDown={handleMouseDownScrub}
+            className="flex-1 min-h-0 relative overflow-x-auto overflow-y-hidden cursor-crosshair select-none bg-slate-950"
+          >
+            <div
+              style={{ width: `${Math.max(100, zoomLevel * 100)}%` }}
+              className="h-full relative flex flex-col"
+            >
+              {/* 1. Thước Đo Thời Gian (Time Ruler) */}
+              <div ref={rulerRef} className="h-6 bg-slate-900/90 border-b border-slate-800 relative select-none">
+                {rulerTicks.map((tick, idx) => (
+                  <div
+                    key={idx}
+                    style={{ left: `${tick.pct}%` }}
+                    className="absolute top-0 bottom-0 flex flex-col justify-between pointer-events-none"
+                  >
+                    <span className="text-[9px] font-mono text-slate-400 pl-1 leading-none pt-1">
+                      {tick.label}
+                    </span>
+                    <div className="w-px h-2 bg-slate-700 self-start" />
+                  </div>
+                ))}
+              </div>
+
+              {/* 2. Track 1: Khối Phụ Đề Dịch [T] */}
+              <div className="h-14 border-b border-slate-800/70 relative bg-slate-950/80">
+                {isSubVisible &&
+                  cues.map((cue, idx) => {
+                    const leftPct = (cue.start_pts / totalDuration) * 100;
+                    const widthPct = Math.max(0.4, ((cue.end_pts - cue.start_pts) / totalDuration) * 100);
+                    const isSelected = cue.cue_id === activeCueId;
+                    const hasTranslated = Boolean((cue.translated_text || '').trim());
+                    const text = cue.translated_text || cue.source_text;
+
+                    return (
+                      <div
+                        key={cue.cue_id || idx}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!isSubLocked) {
+                            onSeek(cue.start_pts);
+                            onSelectCue?.(cue);
+                          }
+                        }}
+                        onMouseDown={(e) => handleMouseDownTrim(e, cue, 'move')}
+                        style={{
+                          left: `${leftPct}%`,
+                          width: `${widthPct}%`,
+                          minWidth: '24px',
+                        }}
+                        className={`absolute top-1.5 bottom-1.5 rounded-lg flex items-center overflow-hidden cursor-pointer transition-all duration-75 text-[11px] select-none border group ${
+                          isSelected
+                            ? 'bg-amber-500 text-slate-950 font-bold border-amber-300 shadow-[0_0_14px_rgba(245,158,11,0.95)] z-30 scale-[1.02]'
+                            : hasTranslated
+                            ? 'bg-indigo-950/85 border-indigo-600/70 hover:border-indigo-400 text-indigo-200 hover:text-white shadow-sm'
+                            : 'bg-slate-900 border-amber-600/60 text-amber-300 hover:border-amber-400'
+                        } ${isSubLocked ? 'cursor-not-allowed opacity-60' : ''}`}
+                        title={`[${cue.start_pts.toFixed(2)}s - ${cue.end_pts.toFixed(2)}s] ${text}`}
+                      >
+                        {/* Tay kéo mép trái (Trim Left) */}
+                        {!isSubLocked && (
+                          <div
+                            onMouseDown={(e) => handleMouseDownTrim(e, cue, 'start')}
+                            className="absolute left-0 top-0 bottom-0 w-2 hover:w-3 bg-white/20 hover:bg-amber-400 cursor-ew-resize opacity-0 group-hover:opacity-100 transition-all z-20"
+                            title="Kéo để chỉnh thời điểm bắt đầu (start_pts)"
+                          />
+                        )}
+
+                        <span className="truncate px-2 whitespace-nowrap font-medium pointer-events-none">
+                          {text}
+                        </span>
+
+                        {/* Tay kéo mép phải (Trim Right) */}
+                        {!isSubLocked && (
+                          <div
+                            onMouseDown={(e) => handleMouseDownTrim(e, cue, 'end')}
+                            className="absolute right-0 top-0 bottom-0 w-2 hover:w-3 bg-white/20 hover:bg-amber-400 cursor-ew-resize opacity-0 group-hover:opacity-100 transition-all z-20"
+                            title="Kéo để chỉnh thời điểm kết thúc (end_pts)"
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* 3. Track 2: Dải Thumbnails Video [V] */}
+              <div className="h-14 border-b border-slate-800/70 relative overflow-hidden bg-black/60 flex items-center">
+                {isVideoVisible && thumbnails.length > 0 && (
+                  <div className="absolute inset-0 flex">
                     {thumbnails.map((thumb, idx) => (
                       <div
                         key={idx}
-                        className="flex-1 h-full border-r border-slate-800/40 relative group overflow-hidden bg-slate-900"
+                        className="h-full flex-1 border-r border-slate-800/40 relative overflow-hidden shrink-0"
                       >
                         <img
                           src={thumb.dataUrl}
-                          alt={`Frame at ${thumb.time}s`}
-                          className="w-full h-full object-cover opacity-85 group-hover:opacity-100 transition-opacity"
+                          alt={`thumb-${idx}`}
+                          className="w-full h-full object-cover opacity-70 hover:opacity-100 transition-opacity pointer-events-none"
                         />
-                        <span className="absolute bottom-0.5 right-1 text-[8px] font-mono text-slate-300 bg-black/60 px-1 rounded pointer-events-none">
-                          {Math.floor(thumb.time)}s
-                        </span>
                       </div>
                     ))}
                   </div>
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-xs text-slate-600 gap-2">
-                    <Film className="w-4 h-4 opacity-40" />
-                    <span>
-                      {isGeneratingThumbs ? 'Đang trích xuất khung hình...' : 'Dải hình ảnh sẵn sàng'}
-                    </span>
-                  </div>
-                )
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-xs text-slate-600 gap-1.5">
-                  <EyeOff className="w-3.5 h-3.5 opacity-40" />
-                  <span>Track video đang ẩn</span>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
 
-            {/* Tầng 3: Dải Sóng Âm Thanh (Audio Waveform) */}
-            <div className={`h-10 bg-slate-900/90 relative flex items-center px-2 ${isAudioMuted ? 'opacity-30' : ''}`}>
-              {waveformSvgPath ? (
+              {/* 4. Track 3: Lồng Tiếng AI [A1] */}
+              <div className="h-10 border-b border-slate-800/70 relative bg-slate-950/90 flex items-center">
+                {cues.map((cue, idx) => {
+                  const leftPct = (cue.start_pts / totalDuration) * 100;
+                  const widthPct = Math.max(0.4, ((cue.end_pts - cue.start_pts) / totalDuration) * 100);
+                  return (
+                    <div
+                      key={idx}
+                      style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                      className="absolute top-1 bottom-1 rounded bg-amber-950/60 border border-amber-700/50 flex items-center px-1.5 overflow-hidden text-[9px] font-mono text-amber-300/80 select-none pointer-events-none"
+                    >
+                      <Mic className="w-2.5 h-2.5 mr-1 shrink-0 text-amber-400" />
+                      <span className="truncate">{cue.translated_text || cue.source_text}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 5. Track 4: Sóng Âm Thanh Gốc [A2] */}
+              <div className="flex-1 min-h-0 relative bg-slate-950 flex items-center overflow-hidden px-1">
+                {audioPeaks.length > 0 ? (
+                  <div className="w-full h-full flex items-center gap-[1px]">
+                    {audioPeaks.map((peak, idx) => {
+                      const hPct = Math.max(8, Math.min(100, peak * 100));
+                      return (
+                        <div
+                          key={idx}
+                          style={{ height: `${hPct}%` }}
+                          className={`flex-1 rounded-sm ${
+                            isAudioMuted ? 'bg-slate-700' : 'bg-gradient-to-t from-emerald-600 to-emerald-400 opacity-80'
+                          }`}
+                        />
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-600 font-mono">
+                    <span>Đang sẵn sàng phân tích sóng âm thanh...</span>
+                  </div>
+                )}
+              </div>
+
+              {/* 6. ĐẦU PHÁT PLAYHEAD VÀNG CHUẨN NLE CAPCUT / PREMIERE (PIXEL-PERFECT ALIGNED PLAYHEAD) */}
+              <div
+                style={{ left: `${playheadPct}%` }}
+                className="absolute top-0 bottom-0 pointer-events-none z-50 flex flex-col items-center -translate-x-1/2"
+              >
+                {/* Con trỏ kim tam giác màu vàng chỉ xuống trên đỉnh Thước đo (SVG Downward Pointer) */}
                 <svg
-                  className="w-full h-8"
-                  preserveAspectRatio="none"
-                  viewBox="0 0 100 32"
+                  width="14"
+                  height="12"
+                  viewBox="0 0 14 12"
+                  className="shrink-0 -mt-0.5 drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]"
                 >
-                  <path
-                    d={waveformSvgPath}
-                    className="fill-emerald-500/40 stroke-emerald-400/80"
-                    strokeWidth="0.6"
+                  <polygon
+                    points="0,0 14,0 7,12"
+                    fill="#fbbf24"
+                    stroke="#1e293b"
+                    strokeWidth="1.2"
                   />
                 </svg>
-              ) : (
-                <div className="w-full flex items-center justify-center text-[10px] text-slate-600 gap-2 font-mono select-none">
-                  <div className="flex-1 h-px bg-slate-800" />
-                  <span className="shrink-0 text-slate-500">Đang đọc sóng âm thanh thực tế...</span>
-                  <div className="flex-1 h-px bg-slate-800" />
-                </div>
-              )}
-            </div>
-
-            {/* KIM TUA THỜI GIAN (PLAYHEAD / SCRUBBER) CHUẨN NLE XUYÊN SUỐT TOÀN BỘ CÁC TRACK */}
-            <div
-              className="absolute top-0 bottom-0 pointer-events-none z-30 transition-transform duration-75"
-              style={{
-                left: `${playheadPercent}%`,
-                transform: 'translateX(-50%)',
-              }}
-            >
-              {/* Đầu kim thời gian (Tam giác chỉ giờ) */}
-              <div className="w-3.5 h-3.5 -ml-[1px] bg-amber-400 border border-slate-950 shadow-md rotate-45 transform origin-center -translate-y-1.5 cursor-ew-resize" />
-              {/* Vạch kim chỉ màu vàng amber phát sáng xuyên suốt từ đỉnh Time Ruler xuống đáy */}
-              <div className="w-0.5 h-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)]" />
+                {/* Thân kim màu vàng phát sáng chạy thẳng xuyên suốt toàn bộ các track */}
+                <div className="w-[1.5px] flex-1 bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.95)]" />
+              </div>
             </div>
           </div>
         </div>
-      </div>
       )}
+      {/* Audio element phát thuyết minh lồng tiếng A1 đồng bộ NLE */}
+      <audio
+        ref={voiceAudioRef}
+        src={projectId && hasVoiceover ? apiClient.getVoiceoverAudioUrl(projectId) : undefined}
+        preload="auto"
+      />
     </div>
   );
 };

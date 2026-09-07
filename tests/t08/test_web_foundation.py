@@ -244,6 +244,88 @@ class WebFoundationTest(unittest.TestCase):
         # 5. Nhấp vào tiêu đề / thanh trên để mở Thông số kỹ thuật & Chi tiết tập
         self.assertIn("Bấm vào tiêu đề / thanh trên để mở Thông số kỹ thuật & Chi tiết tập", content)
 
+    def test_app_viewmode_and_tab_persistence_on_f5(self) -> None:
+        """Kiểm tra App.tsx lưu và khôi phục chính xác viewMode, downloaderTab, settingsTab khi F5."""
+        app_file = REPOSITORY_ROOT / "web" / "src" / "App.tsx"
+        self.assertTrue(app_file.exists())
+        content = app_file.read_text(encoding="utf-8")
+
+        # 1. StoredStudioState mở rộng các trường điều hướng
+        self.assertIn("viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings'", content)
+        self.assertIn("downloaderTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings'", content)
+        self.assertIn("settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render'", content)
+
+        # 2. Khởi tạo lazy state từ savedState
+        self.assertIn("savedState?.viewMode || 'dashboard'", content)
+        self.assertIn("savedState?.downloaderTab || 'search'", content)
+        self.assertIn("savedState?.settingsTab || 'ocr'", content)
+
+        # 3. selectProject hỗ trợ tham số navigate và không ép chuyển viewMode khi navigate=false
+        self.assertIn("selectProject = useCallback((proj: ProjectManifestV1, navigate: boolean = true)", content)
+        self.assertIn("selectProject(found, false)", content)
+
+        # 4. Bảo toàn regions, sourceLang, targetLang khi khôi phục không navigate
+        self.assertIn("if (!navigate && savedState?.activeProjectId === proj.project_id)", content)
+        self.assertIn("savedState.regions", content)
+        self.assertIn("setRegions(savedState.regions);", content)
+
+        # 5. Hàng đợi sử dụng downloaderTab dự phòng thay vì hardcode
+        self.assertIn("initialTab={downloaderTab || 'queue'}", content)
+
+    def test_multi_roi_and_separated_toolbar_ui_contract(self) -> None:
+        """Kiểm tra hợp đồng UI: Thanh công cụ tách biệt trên cùng, Multi-ROI thêm/xóa/chọn và default roi mode."""
+        app_file = REPOSITORY_ROOT / "web" / "src" / "App.tsx"
+        player_file = REPOSITORY_ROOT / "web" / "src" / "components" / "player" / "VideoPlayer.tsx"
+        inspector_file = REPOSITORY_ROOT / "web" / "src" / "components" / "inspector" / "RightInspectorPanel.tsx"
+        roi_file = REPOSITORY_ROOT / "web" / "src" / "components" / "roi" / "RoiOverlay.tsx"
+
+        app_content = app_file.read_text(encoding="utf-8")
+        player_content = player_file.read_text(encoding="utf-8")
+        inspector_content = inspector_file.read_text(encoding="utf-8")
+        roi_content = roi_file.read_text(encoding="utf-8")
+
+        # 1. App.tsx: default interactionMode là 'roi', quản lý regions & activeRegionId
+        self.assertIn("const [interactionMode, setInteractionMode] = useState<'video' | 'roi'>('roi');", app_content)
+        self.assertIn("const [regions, setRegions] = useState<RegionTrackV1[]>", app_content)
+        self.assertIn("handleAddRegion", app_content)
+        self.assertIn("handleDeleteRegion", app_content)
+
+        # 2. VideoPlayer: Dedicated Top Toolbar không đè video
+        self.assertIn("Dedicated Top Toolbar - Tách biệt độc lập, không che hay chạm sát Video", player_content)
+        self.assertIn("interactionMode = 'roi'", player_content)
+        self.assertIn("regions={regions}", player_content)
+
+        # 3. RightInspectorPanel: Thẻ Quản lý Đa Vùng Quét OCR (Thêm / Xóa / Chọn)
+        self.assertIn("Quản lý Đa Vùng Quét OCR", inspector_content)
+        self.assertIn("Vùng quét OCR", inspector_content)
+        self.assertIn("Thêm Vùng", inspector_content)
+
+        # 4. RoiOverlay: Hỗ trợ đa vùng và vùng phụ (inactiveRegions)
+        self.assertIn("inactiveRegions", roi_content)
+        self.assertIn("onSelectRegion", roi_content)
+
+    def test_dashboard_and_tab_sync_edge_cases_on_f5(self) -> None:
+        """Kiểm tra persistence của dramaViewMode, dọn drama đã xóa, và đồng bộ tab giữa parent/child."""
+        hub_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "DashboardBatchHub.tsx"
+        downloader_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "VideoDownloaderHub.tsx"
+        settings_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "GlobalSettingsView.tsx"
+
+        hub_content = hub_file.read_text(encoding="utf-8")
+        # 1. Persist dramaViewMode (folders vs flat) vào localStorage
+        self.assertIn("localStorage.getItem('sls_drama_view_mode')", hub_content)
+        self.assertIn("localStorage.setItem('sls_drama_view_mode', dramaViewMode)", hub_content)
+
+        # 2. Tự động dọn selectedDramaTitle khi bộ phim bị xóa
+        self.assertIn("selectedDramaTitle && projects.length > 0 && !dramaGroups.has(selectedDramaTitle)", hub_content)
+
+        # 3. VideoDownloaderHub đồng bộ initialTab khi prop thay đổi
+        downloader_content = downloader_file.read_text(encoding="utf-8")
+        self.assertIn("initialTab && initialTab !== activeTab", downloader_content)
+
+        # 4. GlobalSettingsView đồng bộ initialTab khi prop thay đổi
+        settings_content = settings_file.read_text(encoding="utf-8")
+        self.assertIn("initialTab && initialTab !== activeTab", settings_content)
+
 
 if __name__ == "__main__":
     unittest.main()

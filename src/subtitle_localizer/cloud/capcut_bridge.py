@@ -187,25 +187,8 @@ class CapCutBridgeExtractor:
         draft_path: Optional[Path | str] = None,
         progress_callback: Optional[Any] = None,
     ) -> List[SubtitleCueV1]:
-        """Trích xuất phụ đề qua CapCut Cloud Direct ASR (ưu tiên) hoặc Desktop Draft."""
-        from subtitle_localizer.service.capcut_api import CapCutSubtitleClient
-        client = CapCutSubtitleClient(endpoint=self.endpoint)
-
-        # 1. Chế độ chính: CapCut Cloud Direct ASR (hoàn toàn không cần tài khoản)
-        if self.mode == "cloud_api" or (not draft_id and not draft_path):
-            try:
-                if progress_callback:
-                    progress_callback(0.2, "Đang kết nối CapCut Cloud ASR (ByteDance)...")
-                cloud_cues = client.extract_subtitles_from_video(
-                    video_path, source_lang=source_lang, progress_cb=progress_callback
-                )
-                if cloud_cues:
-                    logger.info("Bóc tách thành công %d câu phụ đề từ CapCut Cloud ASR.", len(cloud_cues))
-                    return cloud_cues
-            except Exception as exc:
-                logger.warning("CapCut Cloud ASR gặp lỗi, kiểm tra dự thảo CapCut Desktop nếu có: %s", exc)
-
-        # 2. Chế độ phụ trợ: Đọc từ dự án CapCut Desktop Draft (nếu có chỉ định cụ thể)
+        """Trích xuất phụ đề từ CapCut Desktop Draft (ưu tiên khi có draft_id/draft_path) hoặc Cloud Direct ASR."""
+        # 1. Nếu có chỉ định dự án CapCut Desktop Draft cụ thể: Ưu tiên đọc trực tiếp 100% từ file JSON cục bộ
         matched_draft: Optional[Path] = None
         if draft_path:
             p = Path(draft_path)
@@ -219,26 +202,55 @@ class CapCutBridgeExtractor:
                 matched_draft = candidate
 
         if matched_draft and matched_draft.exists():
-            logger.info("Parsing CapCut Draft: %s", matched_draft)
+            logger.info("Ưu tiên phân tích trực tiếp CapCut Desktop Draft: %s", matched_draft)
             segments = self.parse_draft_json(matched_draft)
             if segments:
+                vietnamese_chars = set(
+                    "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ"
+                    "ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ"
+                )
                 cues = []
                 for seg in segments:
+                    text = seg["text"].strip()
+                    has_vi = any(c in vietnamese_chars for c in text)
+                    has_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
+                    has_latin = bool(re.search(r"[a-zA-Z]", text))
+
+                    # Phân loại thông minh: Luôn giữ source_text, và nếu là tiếng Việt thì đồng thời gán vào translated_text
+                    src_text = text
+                    if (has_vi or (has_latin and not has_zh)) and source_lang != "vi":
+                        trans_text = text
+                        status = "reviewed"
+                    else:
+                        trans_text = ""
+                        status = "auto"
+
                     cues.append(
                         SubtitleCueV1(
                             cue_id=f"capcut-{uuid.uuid4().hex[:8]}",
                             start_pts=seg["start"],
                             end_pts=seg["end"],
-                            source_text=seg["text"],
+                            source_text=src_text,
+                            translated_text=trans_text,
+                            status=status,
                             quality_flags=["capcut_draft_extracted"],
                         )
                     )
                 return cues
 
-        # Fallback cuối cùng: Thử gọi Cloud một lần nữa nếu trước đó chưa gọi
+        # 2. Chế độ dự phòng: CapCut Cloud Direct ASR nếu không có draft cục bộ
+        from subtitle_localizer.service.capcut_api import CapCutSubtitleClient
+        client = CapCutSubtitleClient(endpoint=self.endpoint)
         try:
-            return client.extract_subtitles_from_video(
+            if progress_callback:
+                progress_callback(0.2, "Đang kết nối CapCut Cloud ASR (ByteDance)...")
+            cloud_cues = client.extract_subtitles_from_video(
                 video_path, source_lang=source_lang, progress_cb=progress_callback
             )
-        except Exception:
-            return []
+            if cloud_cues:
+                logger.info("Bóc tách thành công %d câu phụ đề từ CapCut Cloud ASR.", len(cloud_cues))
+                return cloud_cues
+        except Exception as exc:
+            logger.warning("CapCut Cloud ASR không thành công: %s", exc)
+
+        return []

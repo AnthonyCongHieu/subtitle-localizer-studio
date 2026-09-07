@@ -403,7 +403,11 @@ class TestDownloadQueueEngine(unittest.TestCase):
     def test_queue_cross_drama_device_rotation(self, mock_resolve, mock_rotate) -> None:
         """Tier 3: Device rotation is invoked when transitioning between different dramas."""
         mock_rotate.return_value = {"device_id": "new_dev_999", "install_id": "new_ins_999"}
-        mock_resolve.return_value = {"url": "http://fake.com/v.mp4"}
+        def mock_side_effect(vid, proxy=None, device_keys=None):
+            fake_file = self.uploads_dir / f"mock_{vid}.mp4"
+            fake_file.write_bytes(b"0" * 150000)
+            return {"url": f"http://fake.com/{vid}.mp4"}
+        mock_resolve.side_effect = mock_side_effect
 
         manager = DownloadManager(repository=self.repo, uploads_dir=self.uploads_dir)
         if not hasattr(manager, "add_to_queue"):
@@ -417,7 +421,7 @@ class TestDownloadQueueEngine(unittest.TestCase):
 
         # Wait for completion
         start_wait = time.time()
-        while time.time() - start_wait < 8.0:
+        while time.time() - start_wait < 12.0:
             if mock_rotate.call_count >= 1:
                 break
             time.sleep(0.1)

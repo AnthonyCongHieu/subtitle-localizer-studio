@@ -22,7 +22,9 @@ import { GlobalSettingsView } from './components/project/GlobalSettingsView';
 import { NewProjectModal } from './components/project/NewProjectModal';
 import { DownloadQueueHub } from './components/project/DownloadQueueHub';
 import { VideoDownloaderHub } from './components/project/VideoDownloaderHub';
+import { ExportModal } from './components/editor/ExportModal';
 import { GlobalActivityLogger, appLogger, useAppLoggerCount } from './components/common/GlobalActivityLogger';
+import { useTimelineShortcuts } from './hooks/useTimelineShortcuts';
 import { AlertCircle } from 'lucide-react';
 import { extractDramaInfo } from './utils/drama';
 
@@ -30,6 +32,8 @@ const STUDIO_STORAGE_KEY = 'sub_studio_active_state_v1';
 
 interface StoredStudioState {
   roiRegion?: RegionTrackV1;
+  regions?: RegionTrackV1[];
+  activeRegionId?: string;
   maskStyle?: MaskStyleType;
   blurStrength?: number;
   subtitlePlacement?: SubtitlePlacementMode;
@@ -44,6 +48,9 @@ interface StoredStudioState {
   activePresetId?: string;
   selectedDramaTitle?: string | null;
   activeProjectId?: string | null;
+  viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings';
+  downloaderTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings';
+  settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render';
 }
 
 function getStoredStudioState(): StoredStudioState | null {
@@ -67,20 +74,24 @@ function saveStudioActiveState(state: StoredStudioState) {
 export const App: React.FC = () => {
   const loggerCount = useAppLoggerCount();
   const savedState = useRef(getStoredStudioState()).current;
+  const hasRestoredProjectRef = useRef<boolean>(false);
 
   // Chế độ màn hình: Dashboard, Studio, Hàng Đợi, Trung Tâm Tải Video, hoặc Thiết Lập Hệ Thống
-  const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings'>('dashboard');
-  const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>('search');
-  const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render'>('ocr');
+  const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings'>(
+    () => savedState?.viewMode || 'dashboard'
+  );
+  const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>(
+    () => savedState?.downloaderTab || 'search'
+  );
+  const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render'>(
+    () => savedState?.settingsTab || 'ocr'
+  );
 
   // Quản lý Chuẩn Cấu Hình (Preset Profiles)
   const [presets, setPresets] = useState<PresetProfile[]>(() => getStoredPresets());
   const [activePresetId, setActivePresetId] = useState<string>(() => savedState?.activePresetId || getDefaultPreset().id);
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState<boolean>(false);
 
-  // Trạng thái lưu cấu hình toàn cục & thay đổi chưa lưu
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
-  const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
 
   // Trạng thái dự án và video hiện tại
   const [projects, setProjects] = useState<ProjectManifestV1[]>([]);
@@ -96,18 +107,73 @@ export const App: React.FC = () => {
   const [aspectRatio, setAspectRatio] = useState<AspectRatioType>(() => savedState?.aspectRatio || 'original');
   const [fitMode, setFitMode] = useState<'contain' | 'cover'>(() => savedState?.fitMode || 'contain');
 
-  // Vùng quét phụ đề (ROI)
-  const [roiRegion, setRoiRegion] = useState<RegionTrackV1>(() => savedState?.roiRegion || {
+  // Vùng quét phụ đề (ROI) & Đa Vùng Quét (Multi-ROI)
+  const [regions, setRegions] = useState<RegionTrackV1[]>(() => {
+    if (savedState?.regions && savedState.regions.length > 0) {
+      return savedState.regions;
+    }
+    if (savedState?.roiRegion) {
+      return [savedState.roiRegion];
+    }
+    return [{
+      region_id: 'roi-main',
+      x: 0.05,
+      y: 0.70,
+      width: 0.90,
+      height: 0.26,
+    }];
+  });
+  const [activeRegionId, setActiveRegionId] = useState<string>(() => savedState?.activeRegionId || 'roi-main');
+
+  const activeRoiRegion = regions.find((r) => r.region_id === activeRegionId) || regions[0] || {
     region_id: 'roi-main',
     x: 0.05,
     y: 0.70,
     width: 0.90,
     height: 0.26,
-  });
+  };
+
+  // Thao tác với Đa Vùng Quét OCR
+  const handleUpdateRegion = useCallback((updated: RegionTrackV1) => {
+    setRegions((prev) => {
+      const exists = prev.some((r) => r.region_id === updated.region_id);
+      if (exists) {
+        return prev.map((r) => (r.region_id === updated.region_id ? updated : r));
+      }
+      return [...prev, updated];
+    });
+  }, []);
+
+  const handleAddRegion = useCallback(() => {
+    const newId = `roi-${Date.now().toString(36)}`;
+    const isFirstBottom = (regions[0]?.y || 0.7) > 0.5;
+    const newReg: RegionTrackV1 = {
+      region_id: newId,
+      x: 0.08,
+      y: isFirstBottom ? 0.08 : 0.75,
+      width: 0.84,
+      height: 0.14,
+    };
+    setRegions((prev) => [...prev, newReg]);
+    setActiveRegionId(newId);
+    appLogger.info(`Đã thêm vùng quét OCR mới (${isFirstBottom ? 'Dòng Trên' : 'Dòng Đáy'})`, 'Vùng quét');
+  }, [regions]);
+
+  const handleDeleteRegion = useCallback((id: string) => {
+    setRegions((prev) => {
+      if (prev.length <= 1) return prev;
+      const filtered = prev.filter((r) => r.region_id !== id);
+      if (activeRegionId === id) {
+        setActiveRegionId(filtered[0]?.region_id || 'roi-main');
+      }
+      return filtered;
+    });
+    appLogger.info('Đã xóa vùng quét OCR', 'Vùng quét');
+  }, [activeRegionId]);
 
   // Trạng thái biến đổi video và lớp phủ hiển thị
   const [videoPosition, setVideoPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [interactionMode, setInteractionMode] = useState<'video' | 'roi'>('video');
+  const [interactionMode, setInteractionMode] = useState<'video' | 'roi'>('roi');
   const [isFlippedH, setIsFlippedH] = useState<boolean>(() => Boolean(savedState?.isFlippedH));
   const [isFlippedV, setIsFlippedV] = useState<boolean>(() => Boolean(savedState?.isFlippedV));
   const [rotation, setRotation] = useState<number>(() => (typeof savedState?.rotation === 'number' ? savedState.rotation : 0));
@@ -122,11 +188,15 @@ export const App: React.FC = () => {
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
+  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
+  const [isVideoVisible, setIsVideoVisible] = useState<boolean>(true);
 
   // Trạng thái hệ thống và pipeline
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -147,6 +217,101 @@ export const App: React.FC = () => {
     appLogger.success('Đã lưu cấu hình Preset vào bộ nhớ', 'Cấu hình');
   };
 
+  // Lưu cấu hình hiện tại thành Preset mới
+  const handleSaveCurrentAsPreset = useCallback(
+    (name: string) => {
+      const newPreset: PresetProfile = {
+        id: `preset-${Date.now()}`,
+        name: name.trim() || `Preset Tùy Chỉnh ${presets.length + 1}`,
+        source_lang: sourceLang,
+        target_lang: targetLang,
+        mask_style: maskStyle,
+        subtitle_placement: subtitlePlacement,
+        blur_strength: blurStrength,
+        is_flipped_h: isFlippedH,
+        is_flipped_v: isFlippedV,
+        show_subtitle_overlay: showSubtitleOverlay,
+        zoom_level: zoomLevel,
+        aspect_ratio: aspectRatio,
+        fit_mode: fitMode,
+        roi: {
+          x: activeRoiRegion?.x ?? 0.08,
+          y: activeRoiRegion?.y ?? 0.82,
+          width: activeRoiRegion?.width ?? 0.84,
+          height: activeRoiRegion?.height ?? 0.12,
+        },
+      };
+      const updated = [newPreset, ...presets];
+      handleSavePresets(updated);
+      setActivePresetId(newPreset.id);
+      appLogger.success(`Đã tạo preset mới: ${newPreset.name}`, 'Preset');
+    },
+    [
+      presets,
+      sourceLang,
+      targetLang,
+      maskStyle,
+      subtitlePlacement,
+      blurStrength,
+      isFlippedH,
+      isFlippedV,
+      showSubtitleOverlay,
+      zoomLevel,
+      aspectRatio,
+      fitMode,
+      activeRoiRegion,
+    ]
+  );
+
+  // Xóa Preset
+  const handleDeletePreset = useCallback(
+    (presetId: string) => {
+      const updated = presets.filter((p) => p.id !== presetId);
+      handleSavePresets(updated.length > 0 ? updated : getStoredPresets());
+      if (activePresetId === presetId) {
+        setActivePresetId(updated[0]?.id || '');
+      }
+      appLogger.info('Đã xóa preset cấu hình.', 'Preset');
+    },
+    [presets, activePresetId]
+  );
+
+  // Cập nhật Preset
+  const handleUpdatePreset = useCallback(
+    (preset: PresetProfile) => {
+      const updated = presets.map((p) => (p.id === preset.id ? preset : p));
+      handleSavePresets(updated);
+      appLogger.success(`Đã cập nhật preset: ${preset.name}`, 'Preset');
+    },
+    [presets]
+  );
+
+  // Khôi phục toàn bộ thông số video và vùng quét về mặc định
+  const handleResetAllParameters = useCallback(() => {
+    setZoomLevel(1.0);
+    setRotation(0);
+    setIsFlippedH(false);
+    setIsFlippedV(false);
+    setVideoPosition({ x: 0, y: 0 });
+    setAspectRatio('original');
+    setFitMode('contain');
+    setMaskStyle('blur');
+    setBlurStrength(15);
+    setPreviewMask(false);
+    setShowSubtitleOverlay(true);
+    const defaultRoi: RegionTrackV1 = {
+      region_id: 'roi-main',
+      x: 0.08,
+      y: 0.82,
+      width: 0.84,
+      height: 0.12,
+      mask_enabled: true,
+    };
+    setRegions([defaultRoi]);
+    setActiveRegionId('roi-main');
+    appLogger.success('Đã khôi phục toàn bộ thông số video về mặc định!', 'Studio');
+  }, []);
+
   // Áp dụng thông số của một Chuẩn (Preset Profile)
   const applyPresetProfile = (preset: PresetProfile) => {
     setActivePresetId(preset.id);
@@ -162,17 +327,31 @@ export const App: React.FC = () => {
     setAspectRatio(preset.aspect_ratio);
     if (preset.fit_mode) setFitMode(preset.fit_mode);
     if (preset.roi) {
-      setRoiRegion({
+      const newRoi: RegionTrackV1 = {
         region_id: 'roi-main',
         x: preset.roi.x,
         y: preset.roi.y,
         width: preset.roi.width,
         height: preset.roi.height,
-      });
+      };
+      setRegions([newRoi]);
+      setActiveRegionId('roi-main');
     }
     setStatusMessage(`Đã áp dụng: ${preset.name}`);
     appLogger.success(`Đã áp dụng chuẩn: ${preset.name}`, 'Preset');
   };
+
+  // Hệ thống phím tắt toàn cục chuẩn CapCut / Premiere
+  useTimelineShortcuts({
+    isPlaying,
+    onTogglePlay: () => setIsPlaying((p) => !p),
+    currentTime,
+    duration,
+    onSeek: (t) => setCurrentTime(t),
+    selectedCueId: null,
+    cues,
+    enabled: viewMode === 'studio',
+  });
 
   // Kiểm tra sức khỏe Backend
   const checkHealth = useCallback(async () => {
@@ -219,16 +398,139 @@ export const App: React.FC = () => {
     }
   };
 
+  // Chia đôi câu phụ đề tại vị trí con trỏ thời gian (Split Cue)
+  const handleSplitCue = async (splitTime: number) => {
+    if (!activeProject || cues.length === 0) return;
+    const targetCue = cues.find((c) => splitTime > c.start_pts && splitTime < c.end_pts);
+    if (!targetCue) {
+      appLogger.warn('Không có câu phụ đề nào ở vị trí con trỏ để chia tách', 'Timeline');
+      return;
+    }
+
+    const duration = targetCue.end_pts - targetCue.start_pts;
+    const ratio = duration > 0 ? (splitTime - targetCue.start_pts) / duration : 0.5;
+    const words = targetCue.source_text.trim().split(/\s+/);
+    const transWords = (targetCue.translated_text || '').trim().split(/\s+/);
+
+    const splitIdx = Math.max(1, Math.round(words.length * ratio));
+    const transSplitIdx = Math.max(1, Math.round(transWords.length * ratio));
+
+    const text1 = words.slice(0, splitIdx).join(' ');
+    const text2 = words.slice(splitIdx).join(' ') || targetCue.source_text;
+    const transText1 = transWords.length > 0 ? transWords.slice(0, transSplitIdx).join(' ') : '';
+    const transText2 = transWords.length > 0 ? transWords.slice(transSplitIdx).join(' ') : '';
+
+    const cue1: SubtitleCueV1 = {
+      ...targetCue,
+      end_pts: Number(splitTime.toFixed(3)),
+      source_text: text1,
+      translated_text: transText1,
+    };
+
+    const cue2: SubtitleCueV1 = {
+      ...targetCue,
+      cue_id: `cue_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      start_pts: Number(splitTime.toFixed(3)),
+      source_text: text2,
+      translated_text: transText2,
+    };
+
+    const nextCues = cues.flatMap((c) => (c.cue_id === targetCue.cue_id ? [cue1, cue2] : [c]));
+    setCues(nextCues);
+    setSelectedCueId(cue2.cue_id);
+
+    try {
+      await apiClient.saveCues(activeProject.project_id, nextCues);
+      appLogger.success(`Đã chia câu phụ đề tại ${splitTime.toFixed(2)}s`, 'Timeline');
+    } catch (err: any) {
+      appLogger.error(`Lỗi khi lưu phụ đề sau khi chia: ${err?.message}`, 'Timeline');
+    }
+  };
+
+  // Xóa câu phụ đề được chọn khỏi kịch bản
+  const handleDeleteCue = async (cueId: string) => {
+    if (!activeProject) return;
+    const nextCues = cues.filter((c) => c.cue_id !== cueId);
+    setCues(nextCues);
+    if (selectedCueId === cueId) setSelectedCueId(null);
+
+    try {
+      await apiClient.saveCues(activeProject.project_id, nextCues);
+      appLogger.success('Đã xóa câu phụ đề khỏi kịch bản', 'Timeline');
+    } catch (err: any) {
+      appLogger.error(`Lỗi xóa câu phụ đề: ${err?.message}`, 'Timeline');
+    }
+  };
+
+  // Kéo chỉnh điểm đầu / điểm cuối câu phụ đề trên Timeline
+  const handleUpdateCueTime = async (cueId: string, startPts: number, endPts: number) => {
+    if (!activeProject) return;
+    const nextCues = cues.map((c) =>
+      c.cue_id === cueId
+        ? {
+            ...c,
+            start_pts: Number(startPts.toFixed(3)),
+            end_pts: Number(endPts.toFixed(3)),
+          }
+        : c
+    );
+    setCues(nextCues);
+
+    try {
+      await apiClient.saveCues(activeProject.project_id, nextCues);
+    } catch (err: any) {
+      console.warn('Lỗi lưu thời gian phụ đề:', err);
+    }
+  };
+
   // Chọn dự án để xử lý video và chuyển sang giao diện Studio
-  const selectProject = useCallback((proj: ProjectManifestV1) => {
+  const selectProject = useCallback((proj: ProjectManifestV1, navigate: boolean = true) => {
     setActiveProject(proj);
     setLocalVideoFile(null);
-    setSourceLang(proj.source_language || 'zh');
-    setTargetLang(proj.target_language || 'vi');
 
-    const drama = extractDramaInfo(proj.title, proj.source_video_path).dramaTitle;
-    if (drama && drama !== 'Video đơn lẻ / Chưa phân loại') {
-      setSelectedDramaTitle(drama);
+    // Khi khôi phục sau F5 (navigate = false), bảo toàn cấu hình người dùng đã lưu trong savedState
+    if (!navigate && savedState?.activeProjectId === proj.project_id) {
+      if (savedState.sourceLang) setSourceLang(savedState.sourceLang);
+      if (savedState.targetLang) setTargetLang(savedState.targetLang);
+      if (savedState.regions && savedState.regions.length > 0) {
+        setRegions(savedState.regions);
+        setActiveRegionId(savedState.activeRegionId || savedState.regions[0].region_id);
+      } else if (savedState.roiRegion) {
+        setRegions([savedState.roiRegion]);
+        setActiveRegionId(savedState.roiRegion.region_id);
+      }
+    } else {
+      setSourceLang(proj.source_language || 'zh');
+      setTargetLang(proj.target_language || 'vi');
+
+      if (proj.regions && proj.regions.length > 0) {
+        setRegions(proj.regions);
+        setActiveRegionId(proj.regions[0].region_id);
+      } else {
+        const defPreset = getDefaultPreset(presets);
+        const initRoi: RegionTrackV1 = defPreset?.roi ? {
+          region_id: 'roi-main',
+          x: defPreset.roi.x,
+          y: defPreset.roi.y,
+          width: defPreset.roi.width,
+          height: defPreset.roi.height,
+        } : {
+          region_id: 'roi-main',
+          x: 0.05,
+          y: 0.70,
+          width: 0.90,
+          height: 0.26,
+        };
+        setRegions([initRoi]);
+        setActiveRegionId('roi-main');
+      }
+    }
+
+    if (navigate) {
+      const drama = extractDramaInfo(proj.title, proj.source_video_path).dramaTitle;
+      if (drama && drama !== 'Video đơn lẻ / Chưa phân loại') {
+        setSelectedDramaTitle(drama);
+      }
     }
 
     const streamUrl = apiClient.getVideoStreamUrl(proj.project_id);
@@ -236,24 +538,13 @@ export const App: React.FC = () => {
 
     loadCues(proj.project_id);
 
-    if (proj.regions && proj.regions.length > 0) {
-      setRoiRegion(proj.regions[0]);
-    } else {
-      const defPreset = getDefaultPreset(presets);
-      if (defPreset?.roi) {
-        setRoiRegion({
-          region_id: 'roi-main',
-          x: defPreset.roi.x,
-          y: defPreset.roi.y,
-          width: defPreset.roi.width,
-          height: defPreset.roi.height,
-        });
-      }
+    if (navigate) {
+      setStatusMessage(`Đã nạp: ${proj.title}`);
+      appLogger.info(`Đã nạp dự án: ${proj.title}`, 'Dự án');
+      setViewMode('studio');
+    } else if (savedState?.viewMode === 'studio') {
+      setStatusMessage(`Đã khôi phục: ${proj.title}`);
     }
-
-    setStatusMessage(`Đã nạp: ${proj.title}`);
-    appLogger.info(`Đã nạp dự án: ${proj.title}`, 'Dự án');
-    setViewMode('studio');
   }, [presets, loadCues]);
 
   // Nạp danh sách dự án từ Backend & tự động khôi phục dự án sau F5
@@ -263,16 +554,17 @@ export const App: React.FC = () => {
       setProjects(list);
 
       // Tự động khôi phục lại tập phim đang mở nếu người dùng F5
-      if (!activeProject && savedState?.activeProjectId) {
+      if (!hasRestoredProjectRef.current && savedState?.activeProjectId) {
+        hasRestoredProjectRef.current = true;
         const found = list.find((p) => p.project_id === savedState.activeProjectId);
         if (found) {
-          selectProject(found);
+          selectProject(found, false);
         }
       }
     } catch (err: any) {
       console.error('Lỗi khi tải danh sách dự án:', err);
     }
-  }, [activeProject, selectProject]);
+  }, [selectProject]);
 
   // Xóa dự án
   const handleDeleteProject = async (projectId: string) => {
@@ -311,7 +603,9 @@ export const App: React.FC = () => {
   // Tự động lưu snapshot trạng thái làm việc vào localStorage để giữ nguyên khi F5
   useEffect(() => {
     saveStudioActiveState({
-      roiRegion,
+      roiRegion: activeRoiRegion,
+      regions,
+      activeRegionId,
       maskStyle,
       blurStrength,
       subtitlePlacement,
@@ -326,9 +620,37 @@ export const App: React.FC = () => {
       activePresetId,
       selectedDramaTitle,
       activeProjectId: activeProject?.project_id || null,
+      viewMode,
+      downloaderTab,
+      settingsTab,
     });
+
+    // Tự động đồng bộ ROI và danh sách vùng xuống backend (debounce 500ms)
+    if (activeProject?.project_id) {
+      const timer = setTimeout(() => {
+        apiClient.saveProjectSettings(activeProject.project_id, {
+          roi: activeRoiRegion,
+          regions,
+          aspect_ratio: aspectRatio,
+          mask_style: maskStyle,
+          blur_strength: blurStrength,
+          subtitle_placement: subtitlePlacement,
+          preview_mask: previewMask,
+          source_lang: sourceLang,
+          target_lang: targetLang,
+          rotation,
+          flip_h: isFlippedH,
+          flip_v: isFlippedV,
+          fit_mode: fitMode,
+        } as any).catch(() => {});
+        apiClient.saveRegions(activeProject.project_id, regions).catch(() => {});
+      }, 500);
+      return () => clearTimeout(timer);
+    }
   }, [
-    roiRegion,
+    activeRoiRegion,
+    regions,
+    activeRegionId,
     maskStyle,
     blurStrength,
     subtitlePlacement,
@@ -343,101 +665,10 @@ export const App: React.FC = () => {
     activePresetId,
     selectedDramaTitle,
     activeProject,
+    viewMode,
+    downloaderTab,
+    settingsTab,
   ]);
-
-  // Lưu cấu hình toàn cục (Preset, LocalStorage & Pipeline Settings backend)
-  const handleSaveGlobalConfig = async () => {
-    setIsSavingConfig(true);
-    try {
-      // 1. Cập nhật và lưu Preset Profile hiện tại vào localStorage
-      const currentPreset = presets.find((p) => p.id === activePresetId) || getDefaultPreset(presets);
-      const updatedPreset: PresetProfile = {
-        ...currentPreset,
-        roi: {
-          x: roiRegion.x,
-          y: roiRegion.y,
-          width: roiRegion.width,
-          height: roiRegion.height,
-        },
-        mask_style: maskStyle,
-        blur_strength: blurStrength,
-        subtitle_placement: subtitlePlacement,
-        aspect_ratio: aspectRatio,
-        fit_mode: fitMode,
-        zoom_level: zoomLevel,
-        is_flipped_h: isFlippedH,
-        is_flipped_v: isFlippedV,
-        show_subtitle_overlay: showSubtitleOverlay,
-        source_lang: sourceLang,
-        target_lang: targetLang,
-      };
-
-      const nextPresets = presets.map((p) => (p.id === updatedPreset.id ? updatedPreset : p));
-      handleSavePresets(nextPresets);
-
-      // 2. Lưu trạng thái snapshot tức thì vào localStorage
-      saveStudioActiveState({
-        roiRegion,
-        maskStyle,
-        blurStrength,
-        subtitlePlacement,
-        aspectRatio,
-        fitMode,
-        zoomLevel,
-        isFlippedH,
-        isFlippedV,
-        rotation,
-        sourceLang,
-        targetLang,
-        activePresetId,
-        selectedDramaTitle,
-        activeProjectId: activeProject?.project_id || null,
-      });
-
-      // 3. Đồng bộ xuống backend pipeline settings
-      try {
-        const currentPipe = await apiClient.getPipelineSettings();
-        if (currentPipe) {
-          const updatedPipe = {
-            ...currentPipe,
-            render: {
-              ...currentPipe.render,
-              default_mask_style: maskStyle,
-              default_blur_strength: blurStrength,
-            },
-            translation: {
-              ...currentPipe.translation,
-              target_language: (['zh', 'en', 'vi', 'none'].includes(targetLang) ? (targetLang as any) : 'vi'),
-            },
-          };
-          await apiClient.savePipelineSettings(updatedPipe);
-        }
-      } catch (pipeErr) {
-        console.warn('Không thể đồng bộ pipeline settings xuống backend:', pipeErr);
-      }
-
-      // 4. Nếu có activeProject, lưu ROI vào project settings trên backend
-      if (activeProject) {
-        try {
-          await apiClient.saveProjectSettings(activeProject.project_id, {
-            roi: roiRegion,
-            aspect_ratio: aspectRatio,
-          } as any);
-        } catch {
-          // Ignore
-        }
-      }
-
-      setStatusMessage('✓ Đã lưu cấu hình toàn cục thành công! (Không mất khi F5)');
-      appLogger.success('Đã lưu cấu hình toàn cục thành công (giữ nguyên khi F5)', 'Cấu hình');
-      setHasUnsavedChanges(false);
-    } catch (err: any) {
-      console.error('Lỗi khi lưu cấu hình:', err);
-      appLogger.error(`Lỗi lưu cấu hình: ${err?.message || 'Thất bại'}`, 'Cấu hình');
-    } finally {
-      setIsSavingConfig(false);
-    }
-  };
 
   // Khởi tạo và lắng nghe WebSocket
   useEffect(() => {
@@ -463,6 +694,11 @@ export const App: React.FC = () => {
         setIsScanning(false);
         setErrorMessage(`Lỗi quét: ${evt.payload?.error || 'Không xác định'}`);
         appLogger.error(`Lỗi quét: ${evt.payload?.error || 'Không xác định'}`, 'Quét phụ đề');
+      } else if (evt.event_type === 'pipeline_cancelled') {
+        setIsScanning(false);
+        setStatusMessage('Đã dừng tiến trình quét phụ đề');
+        appLogger.warn('Đã dừng tiến trình quét phụ đề', 'Quét phụ đề');
+        loadCues();
       }
     });
 
@@ -493,6 +729,11 @@ export const App: React.FC = () => {
           } else if (latest.status === 'failed') {
             setIsScanning(false);
             setErrorMessage(`Lỗi: ${latest.errors?.[0] || 'Quét phụ đề thất bại'}`);
+          } else if (latest.status === 'cancelled') {
+            setIsScanning(false);
+            setStatusMessage('Đã dừng tiến trình quét phụ đề');
+            appLogger.warn('Đã dừng tiến trình quét phụ đề', 'Quét phụ đề');
+            loadCues(activeProject.project_id);
           }
         }
       } catch (err) {
@@ -515,7 +756,7 @@ export const App: React.FC = () => {
       appLogger.info('Đang phân tích khung hình để bắt dính vị trí chữ...', 'ROI');
       const res = await apiClient.autoDetectRoi(activeProject.project_id, currentTime);
       if (res.region) {
-        setRoiRegion(res.region);
+        handleUpdateRegion(res.region);
         setStatusMessage(`Đã bắt dính vùng chữ thành công! (${res.detected_count} vùng)`);
         appLogger.success(`Đã bắt dính vùng chữ thành công! (${res.detected_count} vùng)`, 'ROI');
       } else {
@@ -541,7 +782,7 @@ export const App: React.FC = () => {
 
       if (activeProject) {
         setStatusMessage('Đang lưu vùng quét phụ đề vào dự án...');
-        await apiClient.saveRegions(activeProject.project_id, [roiRegion]);
+        await apiClient.saveRegions(activeProject.project_id, regions);
 
         setStatusMessage('Đang khởi chạy tiến trình quét phụ đề trên máy chủ...');
         appLogger.info('Đang khởi chạy tiến trình quét phụ đề trên máy chủ...', 'Quét');
@@ -559,7 +800,7 @@ export const App: React.FC = () => {
           target_language: targetLang,
         });
 
-        await apiClient.saveRegions(newProj.project_id, [roiRegion]);
+        await apiClient.saveRegions(newProj.project_id, regions);
         await apiClient.runPipeline(newProj.project_id);
 
         setActiveProject(newProj);
@@ -572,6 +813,26 @@ export const App: React.FC = () => {
       setIsScanning(false);
       setErrorMessage(err?.message || 'Có lỗi xảy ra khi bắt đầu quét phụ đề');
       appLogger.error(err?.message || 'Có lỗi xảy ra khi bắt đầu quét phụ đề', 'Quét');
+    }
+  };
+
+  // Dừng / Hủy tiến trình quét phụ đề
+  const handleStopScan = async () => {
+    if (!activeProject) {
+      setIsScanning(false);
+      return;
+    }
+    try {
+      setStatusMessage('Đang gửi yêu cầu dừng quét phụ đề...');
+      appLogger.info('Đang gửi yêu cầu dừng quét phụ đề...', 'Quét');
+      await apiClient.stopPipeline(activeProject.project_id);
+      setIsScanning(false);
+      setStatusMessage('Đã dừng tiến trình quét phụ đề theo yêu cầu');
+      appLogger.warn('Đã dừng tiến trình quét phụ đề theo yêu cầu', 'Quét');
+      loadCues(activeProject.project_id);
+    } catch (err: any) {
+      setIsScanning(false);
+      appLogger.error(`Không thể dừng tiến trình: ${err?.message || 'Lỗi kết nối'}`, 'Quét');
     }
   };
 
@@ -593,8 +854,13 @@ export const App: React.FC = () => {
       {viewMode === 'downloader' ? (
         <VideoDownloaderHub
           initialTab={downloaderTab}
+          onTabChange={setDownloaderTab}
           onSwitchToDashboard={() => setViewMode('dashboard')}
           onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
+          onOpenSettings={() => {
+            setSettingsTab('ocr');
+            setViewMode('settings');
+          }}
           onRefreshProjects={loadProjects}
           onBatchProjectsCreated={(newProjs) => {
             setProjects((prev) => [...prev, ...newProjs]);
@@ -606,9 +872,14 @@ export const App: React.FC = () => {
           <DownloadQueueHub onSwitchToDashboard={() => setViewMode('dashboard')} />
         ) : (
           <VideoDownloaderHub
-            initialTab="queue"
+            initialTab={downloaderTab || 'queue'}
+            onTabChange={setDownloaderTab}
             onSwitchToDashboard={() => setViewMode('dashboard')}
             onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
+            onOpenSettings={() => {
+              setSettingsTab('ocr');
+              setViewMode('settings');
+            }}
             onRefreshProjects={loadProjects}
             onBatchProjectsCreated={(newProjs) => {
               setProjects((prev) => [...prev, ...newProjs]);
@@ -618,11 +889,20 @@ export const App: React.FC = () => {
       ) : viewMode === 'settings' ? (
         <GlobalSettingsView
           initialTab={settingsTab}
+          onTabChange={setSettingsTab}
           presets={presets}
           onSavePresets={handleSavePresets}
           onSelectPreset={(p) => applyPresetProfile(p)}
           onSwitchToDashboard={() => setViewMode('dashboard')}
           onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
+          onOpenDownloader={(tab) => {
+            setDownloaderTab(tab || 'direct');
+            setViewMode('downloader');
+          }}
+          onOpenQueue={() => {
+            setDownloaderTab('queue');
+            setViewMode('downloader');
+          }}
         />
       ) : viewMode === 'dashboard' ? (
         <DashboardBatchHub
@@ -675,9 +955,6 @@ export const App: React.FC = () => {
             presets={presets}
             activePresetId={activePresetId}
             onSelectPreset={applyPresetProfile}
-            onSaveGlobalConfig={handleSaveGlobalConfig}
-            isSavingConfig={isSavingConfig}
-            hasUnsavedChanges={hasUnsavedChanges}
             statusMessage={statusMessage}
             backendOnline={backendOnline}
             wsConnected={wsConnected}
@@ -686,6 +963,7 @@ export const App: React.FC = () => {
             isScanning={isScanning}
             hasVideo={Boolean(videoUrl)}
             onStartScan={handleStartScan}
+            onStopScan={handleStopScan}
             onOpenDownloader={() => {
               setDownloaderTab('direct');
               setViewMode('downloader');
@@ -698,12 +976,13 @@ export const App: React.FC = () => {
               setSettingsTab('ocr');
               setViewMode('settings');
             }}
+            onExportVideo={() => setIsExportModalOpen(true)}
             cuesCount={cues.length}
           />
 
           {/* 2. Vùng Làm Việc 3-Panel: Hộp Trái + Video ở Giữa + Hộp Phải Inspector */}
           <main className="flex-1 min-h-0 min-w-0 flex flex-row relative overflow-hidden">
-            {/* Hộp Trái: Danh Sách Phụ Đề & Quản Lý Tập Phim */}
+            {/* Hộp Trái: Danh Sách Phụ Đề & Quản Lý Tập Phim & Presets */}
             <LeftMediaSidebar
               projects={projects}
               activeProject={activeProject}
@@ -715,18 +994,29 @@ export const App: React.FC = () => {
               onSeekToCue={(pts) => setCurrentTime(pts)}
               onUpdateCue={handleUpdateCue}
               onDeleteProject={handleDeleteProject}
+              presets={presets}
+              activePresetId={activePresetId}
+              onSelectPreset={applyPresetProfile}
+              onSaveCurrentAsPreset={handleSaveCurrentAsPreset}
+              onDeletePreset={handleDeletePreset}
+              onUpdatePreset={handleUpdatePreset}
+              onRefreshProject={loadProjects}
+              selectedCueId={selectedCueId}
             />
 
             {/* Video Canvas ở Giữa: Khung Xem Cực Kỳ Thoáng Đãng */}
             <VideoPlayer
               videoUrl={videoUrl}
-              region={roiRegion}
+              regions={regions}
+              activeRegionId={activeRegionId}
+              onSelectRegion={setActiveRegionId}
+              region={activeRoiRegion}
+              onUpdateRegion={handleUpdateRegion}
               currentTime={currentTime}
               isPlaying={isPlaying}
               onTimeUpdate={(t) => setCurrentTime(t)}
               onDurationChange={(d) => setDuration(d)}
               onTogglePlay={() => setIsPlaying(!isPlaying)}
-              onUpdateRegion={(r) => setRoiRegion(r)}
               onPickLocalVideo={handlePickLocalVideo}
               cues={cues}
               aspectRatio={aspectRatio}
@@ -741,9 +1031,11 @@ export const App: React.FC = () => {
               zoomLevel={zoomLevel}
               onZoomChange={(z) => {
                 setZoomLevel(z);
-                appLogger.info(`Zoom: ${z === 'fit' ? 'Fit (Vừa vặn)' : `${Math.round(z * 100)}%`}`, 'Hiển thị');
               }}
               previewMask={previewMask}
+              onTogglePreviewMask={() => {
+                setPreviewMask((prev) => !prev);
+              }}
               maskStyle={maskStyle}
               blurStrength={blurStrength}
               showSubtitleOverlay={showSubtitleOverlay}
@@ -752,12 +1044,24 @@ export const App: React.FC = () => {
               onPositionChange={setVideoPosition}
               interactionMode={interactionMode}
               onInteractionModeChange={setInteractionMode}
+              onAutoDetectRoi={handleAutoDetectRoi}
+              onResetAllParameters={handleResetAllParameters}
+              onToggleFlipH={() => setIsFlippedH((p) => !p)}
+              onToggleFlipV={() => setIsFlippedV((p) => !p)}
+              onRotate={() => setRotation((r) => normalizeRotation(r + 90))}
+              isAudioMuted={isAudioMuted}
+              isVideoVisible={isVideoVisible}
             />
 
             {/* Hộp Phải: Bảng Thuộc Tính & Inspector Chuẩn Premiere/CapCut */}
             <RightInspectorPanel
-              region={roiRegion}
-              onUpdateRegion={(r) => setRoiRegion(r)}
+              regions={regions}
+              activeRegionId={activeRegionId}
+              onSelectRegion={setActiveRegionId}
+              onAddRegion={handleAddRegion}
+              onDeleteRegion={handleDeleteRegion}
+              region={activeRoiRegion}
+              onUpdateRegion={handleUpdateRegion}
               onAutoDetectRoi={handleAutoDetectRoi}
               sourceLang={sourceLang}
               targetLang={targetLang}
@@ -767,66 +1071,42 @@ export const App: React.FC = () => {
               }}
               previewMask={previewMask}
               onTogglePreviewMask={() => {
-                setPreviewMask((prev) => {
-                  const next = !prev;
-                  appLogger.info(next ? 'Bật chế độ che phụ đề gốc' : 'Tắt chế độ che phụ đề gốc', 'Che sub');
-                  return next;
-                });
+                setPreviewMask((prev) => !prev);
               }}
               maskStyle={maskStyle}
               onMaskStyleChange={(st) => {
                 setMaskStyle(st);
-                appLogger.info(`Kiểu che phụ đề: ${st}`, 'Che sub');
               }}
               blurStrength={blurStrength}
               onBlurStrengthChange={setBlurStrength}
               showSubtitleOverlay={showSubtitleOverlay}
               onToggleSubtitleOverlay={() => {
-                setShowSubtitleOverlay((prev) => {
-                  const next = !prev;
-                  appLogger.info(next ? 'Bật hiển thị phụ đề dịch' : 'Tắt hiển thị phụ đề dịch', 'Phụ đề');
-                  return next;
-                });
+                setShowSubtitleOverlay((prev) => !prev);
               }}
               subtitlePlacement={subtitlePlacement}
               onSubtitlePlacementChange={(p) => {
                 setSubtitlePlacement(p);
-                appLogger.info(`Vị trí phụ đề: ${p === 'bottom' ? 'Đáy video (chuẩn điện ảnh)' : 'Vùng quét (đè chữ gốc)'}`, 'Phụ đề');
               }}
               aspectRatio={aspectRatio}
               onAspectRatioChange={(r) => {
                 setAspectRatio(r);
-                appLogger.info(`Đổi tỉ lệ khung hình: ${r}`, 'Canvas');
               }}
               fitMode={fitMode}
               onToggleFitMode={() => {
-                setFitMode((m) => {
-                  const next = m === 'contain' ? 'cover' : 'contain';
-                  appLogger.info(`Chế độ khung hình: ${next === 'cover' ? 'Fill (Tràn viền)' : 'Fit (Đệm chuẩn)'}`, 'Canvas');
-                  return next;
-                });
+                setFitMode((m) => (m === 'contain' ? 'cover' : 'contain'));
               }}
               isFlippedH={isFlippedH}
               onToggleFlipH={() => {
-                setIsFlippedH((prev) => {
-                  const next = !prev;
-                  appLogger.info(next ? 'Lật ngang video: BẬT' : 'Lật ngang video: TẮT', 'Hiển thị');
-                  return next;
-                });
+                setIsFlippedH((prev) => !prev);
               }}
               isFlippedV={isFlippedV}
               onToggleFlipV={() => {
-                setIsFlippedV((prev) => {
-                  const next = !prev;
-                  appLogger.info(next ? 'Lật dọc video: BẬT' : 'Lật dọc video: TẮT', 'Hiển thị');
-                  return next;
-                });
+                setIsFlippedV((prev) => !prev);
               }}
               rotation={rotation}
               onRotate={() => {
                 const next = normalizeRotation(rotation + 90);
                 setRotation(next);
-                appLogger.info(`Xoay nhanh video: ${next}°`, 'Hiển thị');
               }}
               onRotationChange={(deg) => {
                 const next = normalizeRotation(deg);
@@ -835,13 +1115,12 @@ export const App: React.FC = () => {
               videoPosition={videoPosition}
               onPositionChange={setVideoPosition}
               onResetTransform={handleResetTransform}
+              onResetAllParameters={handleResetAllParameters}
               activeProject={activeProject}
               onRefreshCues={loadCues}
               isScanning={isScanning}
               onStartScan={handleStartScan}
-              onSaveGlobalConfig={handleSaveGlobalConfig}
-              isSavingConfig={isSavingConfig}
-              hasUnsavedChanges={hasUnsavedChanges}
+              onStopScan={handleStopScan}
             />
           </main>
 
@@ -857,11 +1136,38 @@ export const App: React.FC = () => {
               setCurrentTime(time);
             }}
             cues={cues}
-            onSelectCue={(cue) => setCurrentTime(cue.start_pts)}
+            selectedCueId={selectedCueId}
+            onSelectCue={(cue) => {
+              setSelectedCueId(cue.cue_id);
+              setCurrentTime(cue.start_pts);
+            }}
+            onUpdateCueTime={handleUpdateCueTime}
+            onSplitCue={handleSplitCue}
+            onDeleteCue={handleDeleteCue}
+            hasVoiceover={Boolean(
+              activeProject?.has_voiceover ||
+              (activeProject as any)?.voiceover_path ||
+              (activeProject as any)?.status === 'completed'
+            )}
+            isAudioMuted={isAudioMuted}
+            onToggleAudioMute={() => setIsAudioMuted((p) => !p)}
+            isVideoVisible={isVideoVisible}
+            onToggleVideoVisible={() => setIsVideoVisible((p) => !p)}
+            isSubVisible={showSubtitleOverlay}
+            onToggleSubVisible={() => setShowSubtitleOverlay((p) => !p)}
           />
         </>
       )}
 
+
+      {/* Modal Xuất Phụ Đề & Video Thành Phẩm */}
+      {activeProject && (
+        <ExportModal
+          isOpen={isExportModalOpen}
+          project={activeProject}
+          onClose={() => setIsExportModalOpen(false)}
+        />
+      )}
 
       {/* Modal Tạo Dự Án Mới */}
       <NewProjectModal

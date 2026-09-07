@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  Sparkles,
   Layers,
   FolderOpen,
   Sliders,
@@ -13,7 +12,7 @@ import {
   ListPlus,
   Settings,
   ChevronLeft,
-  Save,
+  Square,
 } from 'lucide-react';
 import { ProjectManifestV1 } from '../../types/api';
 import { PresetProfile } from '../../types/presets';
@@ -28,10 +27,7 @@ interface StudioHeaderProps {
   presets: PresetProfile[];
   activePresetId: string;
   onSelectPreset: (preset: PresetProfile) => void;
-  onSaveGlobalConfig?: () => void;
-  isSavingConfig?: boolean;
-  hasUnsavedChanges?: boolean;
-  statusMessage: string | null;
+  statusMessage?: string | null;
   backendOnline: boolean | null;
   wsConnected: boolean;
   loggerCount: number;
@@ -39,9 +35,11 @@ interface StudioHeaderProps {
   isScanning: boolean;
   hasVideo: boolean;
   onStartScan: () => void;
+  onStopScan?: () => void;
   onOpenDownloader: () => void;
   onOpenQueue: () => void;
   onOpenSettings: () => void;
+  onExportVideo?: () => void;
   cuesCount?: number;
 }
 
@@ -55,10 +53,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
   presets,
   activePresetId,
   onSelectPreset,
-  onSaveGlobalConfig,
-  isSavingConfig = false,
-  hasUnsavedChanges = false,
-  statusMessage,
+  statusMessage: _statusMessage,
   backendOnline,
   wsConnected,
   loggerCount,
@@ -66,25 +61,27 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
   isScanning,
   hasVideo,
   onStartScan,
+  onStopScan,
   onOpenDownloader,
   onOpenQueue,
   onOpenSettings,
+  onExportVideo,
   cuesCount = 0,
 }) => {
   return (
-    <header className="h-12 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between text-xs select-none shrink-0 z-30 shadow-md">
-      {/* Bên Trái: Nút Quay Lại Breadcrumb + Logo + Bộ Chọn Tập Drama + Preset Nhanh */}
-      <div className="flex items-center gap-2 min-w-0">
+    <header className="relative h-12 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between text-xs select-none shrink-0 z-30 shadow-md">
+      {/* Bên Trái: Nút Quay Lại Breadcrumb + Logo + Bộ Chọn Tập Drama */}
+      <div className="flex items-center gap-1.5 min-w-0 max-w-[calc(50%-140px)] overflow-hidden">
         {dramaTitle ? (
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 shrink-0 min-w-0">
             {/* 1. Nút về Dashboard gốc */}
             <button
               onClick={onBackToDashboard}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-400 hover:text-white transition shadow-sm"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-400 hover:text-white transition shadow-sm cursor-pointer shrink-0"
               title="Quay về Dashboard Tổng (Tất cả bộ phim)"
             >
               <ChevronLeft className="w-3.5 h-3.5 text-slate-400" />
-              <span className="font-medium hidden md:inline text-[11px]">Dashboard</span>
+              <span className="font-medium hidden sm:inline text-[11px]">Dashboard</span>
             </button>
 
             <span className="text-slate-600 hidden sm:inline">/</span>
@@ -92,19 +89,18 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
             {/* 2. Nút về Dự Án / Bộ Phim đang mở */}
             <button
               onClick={onBackToDrama || onBackToDashboard}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/60 text-indigo-200 hover:text-white transition shadow-sm font-semibold group"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/60 text-indigo-200 hover:text-white transition shadow-sm font-semibold group cursor-pointer max-w-[120px] sm:max-w-[160px] truncate shrink-0"
               title={`Quay lại danh sách tập của bộ phim: ${dramaTitle}`}
             >
-              <ChevronLeft className="w-3.5 h-3.5 text-indigo-400 group-hover:-translate-x-0.5 transition-transform" />
-              <span className="max-w-[120px] sm:max-w-[180px] truncate text-[11px]">
-                Dự án: {dramaTitle}
+              <span className="truncate text-[11px]">
+                {dramaTitle}
               </span>
             </button>
           </div>
         ) : (
           <button
             onClick={onBackToDashboard}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition shadow-sm"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition shadow-sm cursor-pointer shrink-0"
             title="Quay lại Màn hình Quản lý Dự án (Dashboard)"
           >
             <ChevronLeft className="w-4 h-4 text-indigo-400" />
@@ -112,17 +108,17 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
           </button>
         )}
 
-        <div className="h-4 w-px bg-slate-800 hidden sm:block" />
+        <div className="h-4 w-px bg-slate-800 hidden sm:block shrink-0" />
 
         {/* Studio Badge */}
-        <div className="flex items-center gap-1.5 bg-indigo-950/60 border border-indigo-700/50 px-2 py-0.5 rounded-md text-indigo-300">
-          <Layers className="w-3.5 h-3.5 text-indigo-400" />
-          <span className="font-bold text-[11px] tracking-wide uppercase hidden md:inline">Studio</span>
+        <div className="hidden lg:flex items-center gap-1 bg-indigo-950/60 border border-indigo-700/50 px-2 py-0.5 rounded-md text-indigo-300 shrink-0">
+          <Layers className="w-3 h-3 text-indigo-400" />
+          <span className="font-bold text-[10px] tracking-wide uppercase">Studio</span>
         </div>
 
         {/* Bộ Chọn Tập Drama Dạng Pill */}
         {projects.length > 0 && (
-          <div className="flex items-center gap-1.5 bg-slate-900/90 hover:bg-slate-850 border border-slate-800 px-2.5 py-1 rounded-lg text-xs transition">
+          <div className="flex items-center gap-1 bg-slate-900/90 hover:bg-slate-850 border border-slate-800 px-2 py-1 rounded-lg text-xs transition min-w-0 max-w-[130px] sm:max-w-[160px] shrink-0">
             <FolderOpen className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
             <select
               value={activeProject?.project_id || ''}
@@ -130,7 +126,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
                 const found = projects.find((p) => p.project_id === e.target.value);
                 if (found) onSelectProject(found);
               }}
-              className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer max-w-[150px] sm:max-w-[220px] truncate text-[11px]"
+              className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer w-full truncate text-[11px]"
               title="Chọn tập phim để biên tập"
             >
               {projects.map((p) => (
@@ -144,7 +140,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
 
         {/* Bộ Chọn Chuẩn Preset Dạng Pill */}
         {presets.length > 0 && (
-          <div className="hidden lg:flex items-center gap-1.5 bg-slate-900/90 border border-slate-800 px-2 py-1 rounded-lg text-xs">
+          <div className="hidden 2xl:flex items-center gap-1 bg-slate-900/90 border border-slate-800 px-2 py-1 rounded-lg text-xs shrink-0 max-w-[140px]">
             <Sliders className="w-3 h-3 text-amber-400 shrink-0" />
             <select
               value={activePresetId}
@@ -152,7 +148,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
                 const chosen = presets.find((x) => x.id === e.target.value);
                 if (chosen) onSelectPreset(chosen);
               }}
-              className="bg-transparent text-amber-300 font-medium focus:outline-none cursor-pointer max-w-[150px] truncate text-[11px]"
+              className="bg-transparent text-amber-300 font-medium focus:outline-none cursor-pointer w-full truncate text-[11px]"
               title="Chuẩn cấu hình áp dụng cho video"
             >
               {presets.map((p) => (
@@ -163,41 +159,13 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
             </select>
           </div>
         )}
-
-        {/* Nút Lưu Cấu Hình Toàn Cục / Chuẩn Preset */}
-        {onSaveGlobalConfig && (
-          <button
-            type="button"
-            onClick={onSaveGlobalConfig}
-            disabled={isSavingConfig}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-semibold transition shadow-sm cursor-pointer ${
-              hasUnsavedChanges
-                ? 'bg-amber-600 hover:bg-amber-500 text-white border-amber-500 shadow-amber-900/40'
-                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800'
-            }`}
-            title="Lưu toàn bộ cấu hình hiện tại (ROI, Mask, Tỉ lệ, Pipeline) - Bền vững khi F5"
-          >
-            <Save className={`w-3.5 h-3.5 ${hasUnsavedChanges ? 'text-white animate-bounce' : 'text-amber-400'}`} />
-            <span className="text-[11px] font-bold">
-              {isSavingConfig ? 'Đang lưu...' : hasUnsavedChanges ? 'Lưu Cấu Hình *' : 'Lưu Toàn Cục'}
-            </span>
-          </button>
-        )}
-
-        {/* Trạng thái hệ thống nhỏ gọn */}
-        {statusMessage && (
-          <div className="hidden xl:flex items-center gap-1 text-[11px] text-indigo-300 bg-indigo-950/40 border border-indigo-800/40 px-2 py-0.5 rounded-full animate-in fade-in">
-            <Sparkles className="w-3 h-3 text-indigo-400 shrink-0" />
-            <span className="max-w-[180px] truncate">{statusMessage}</span>
-          </div>
-        )}
       </div>
 
-      {/* Ở Giữa: Nút Chuyển Màn Hình Phụ (Tải Video, Hàng Đợi, Thiết Lập) */}
-      <div className="hidden md:flex items-center gap-1.5 bg-slate-900/60 p-0.5 rounded-lg border border-slate-800">
+      {/* Ở Giữa: Nút Chuyển Màn Hình Phụ Cố Định Tâm Màn Hình Tuyệt Đối */}
+      <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1.5 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm z-20 pointer-events-auto">
         <button
           onClick={onOpenDownloader}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition"
+          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer"
           title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
         >
           <Download className="w-3.5 h-3.5" />
@@ -205,7 +173,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
         </button>
         <button
           onClick={onOpenQueue}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition"
+          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
           title="Hàng đợi tải phim tự động"
         >
           <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
@@ -213,7 +181,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
         </button>
         <button
           onClick={onOpenSettings}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition"
+          className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
           title="Thiết lập toàn cục hệ thống"
         >
           <Settings className="w-3.5 h-3.5 text-indigo-400" />
@@ -222,7 +190,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
       </div>
 
       {/* Bên Phải: Trạng thái Server + Nhật ký + Nút Hành Động Chính */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
         {/* Trạng thái Server */}
         <div className="hidden sm:flex items-center gap-1.5 text-[11px] bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
           {backendOnline ? (
@@ -251,25 +219,50 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
           )}
         </button>
 
-        {/* Nút Hành Động Chính: Bắt Đầu Quét Sub */}
-        <button
-          onClick={onStartScan}
-          disabled={isScanning || !hasVideo}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          title="Quét phụ đề tự động theo vùng nhận diện"
-        >
-          {isScanning ? (
-            <>
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        {/* Nút Hành Động Chính 1: Bắt Đầu Quét Sub HOẶC Dừng / Hủy Quét */}
+        {isScanning ? (
+          <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 text-xs font-medium shadow-inner">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
               <span>Đang Quét...</span>
-            </>
-          ) : (
-            <>
-              <Play className="w-3.5 h-3.5 fill-white" />
-              <span>{cuesCount > 0 ? 'Quét Lại Sub' : 'Quét Phụ Đề'}</span>
-            </>
-          )}
-        </button>
+            </div>
+            {onStopScan && (
+              <button
+                type="button"
+                onClick={onStopScan}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs font-bold shadow-md shadow-rose-600/40 transition cursor-pointer"
+                title="Dừng hoặc Hủy tiến trình quét phụ đề ngay lập tức"
+              >
+                <Square className="w-3 h-3 fill-white" />
+                <span>Dừng / Hủy</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={onStartScan}
+            disabled={!hasVideo}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            title="Quét phụ đề tự động theo vùng nhận diện"
+          >
+            <Play className="w-3.5 h-3.5 fill-white" />
+            <span>{cuesCount > 0 ? 'Quét Lại Sub' : 'Quét Phụ Đề'}</span>
+          </button>
+        )}
+
+        {/* Nút Hành Động 2: Xuất Bản Video MP4 (Export Video) */}
+        {onExportVideo && (
+          <button
+            type="button"
+            onClick={onExportVideo}
+            disabled={!hasVideo}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-bold shadow-md shadow-emerald-600/30 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            title="Xuất bản & kết xuất video MP4 hoàn thiện (che sub gốc + đè phụ đề dịch)"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Xuất Video</span>
+          </button>
+        )}
       </div>
     </header>
   );

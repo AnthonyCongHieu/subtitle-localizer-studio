@@ -42,6 +42,7 @@ import {
   CheckCircle2,
   FolderOpen,
   Download,
+  ListPlus,
   Crosshair,
   SlidersHorizontal,
   RotateCcw,
@@ -49,6 +50,12 @@ import {
 } from 'lucide-react';
 import { RoiOverlay } from '../roi/RoiOverlay';
 import { GlobalPipelineSettings } from '../../api/client';
+import {
+  loadBatchExportConfig,
+  saveBatchExportConfig,
+  reconcileBatchConfigWithBackend,
+  BatchExportConfig,
+} from '../../utils/batchSettingsStorage';
 
 interface DashboardBatchHubProps {
   projects: ProjectManifestV1[];
@@ -357,6 +364,73 @@ const BatchVideoCard: React.FC<{
         </button>
       </div>
 
+      {/* 4b. Lưới 4 Huy Hiệu Trạng Thái Chi Tiết (OCR, Dịch, Lồng Tiếng, Xuất MP4) */}
+      <div className="px-2.5 py-1.5 bg-slate-900/90 border-t border-slate-800/80 grid grid-cols-4 gap-1 text-[10px] font-mono select-none">
+        {/* Badge 1: OCR */}
+        <div
+          className={`px-1 py-1 rounded border flex flex-col items-center justify-center text-center ${
+            (project.cues_count || 0) > 0
+              ? 'bg-amber-950/40 border-amber-800/50 text-amber-300'
+              : 'bg-slate-950/60 border-slate-800 text-slate-500'
+          }`}
+          title={(project.cues_count || 0) > 0 ? `Đã quét được ${project.cues_count} câu phụ đề OCR` : 'Chưa quét OCR'}
+        >
+          <span className="font-bold flex items-center gap-0.5 leading-none">
+            <FileText className="w-2.5 h-2.5 shrink-0" />
+            <span className="truncate">{(project.cues_count || 0) > 0 ? `${project.cues_count}` : '0'}</span>
+          </span>
+          <span className="text-[8px] opacity-75 mt-0.5">OCR</span>
+        </div>
+
+        {/* Badge 2: Dịch */}
+        <div
+          className={`px-1 py-1 rounded border flex flex-col items-center justify-center text-center ${
+            (project.translated_count || 0) > 0
+              ? 'bg-cyan-950/40 border-cyan-800/50 text-cyan-300'
+              : 'bg-slate-950/60 border-slate-800 text-slate-500'
+          }`}
+          title={(project.translated_count || 0) > 0 ? `Đã dịch ${project.translated_count}/${project.cues_count || 0} câu` : 'Chưa dịch phụ đề'}
+        >
+          <span className="font-bold flex items-center gap-0.5 leading-none">
+            <Languages className="w-2.5 h-2.5 shrink-0" />
+            <span className="truncate">{(project.translated_count || 0) > 0 ? `${project.translated_count}` : '0'}</span>
+          </span>
+          <span className="text-[8px] opacity-75 mt-0.5">Dịch</span>
+        </div>
+
+        {/* Badge 3: Lồng tiếng */}
+        <div
+          className={`px-1 py-1 rounded border flex flex-col items-center justify-center text-center ${
+            project.has_voiceover
+              ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300'
+              : 'bg-slate-950/60 border-slate-800 text-slate-500'
+          }`}
+          title={project.has_voiceover ? 'Đã tạo âm thanh lồng tiếng AI' : 'Chưa tạo giọng lồng tiếng'}
+        >
+          <span className="font-bold flex items-center gap-0.5 leading-none">
+            <Mic className="w-2.5 h-2.5 shrink-0" />
+            <span>{project.has_voiceover ? '✓' : '—'}</span>
+          </span>
+          <span className="text-[8px] opacity-75 mt-0.5">Voice</span>
+        </div>
+
+        {/* Badge 4: Xuất MP4 */}
+        <div
+          className={`px-1 py-1 rounded border flex flex-col items-center justify-center text-center ${
+            project.has_export
+              ? 'bg-purple-950/40 border-purple-800/50 text-purple-300'
+              : 'bg-slate-950/60 border-slate-800 text-slate-500'
+          }`}
+          title={project.has_export ? 'Đã render và xuất file video MP4 hoàn chỉnh' : 'Chưa xuất video MP4'}
+        >
+          <span className="font-bold flex items-center gap-0.5 leading-none">
+            <Film className="w-2.5 h-2.5 shrink-0" />
+            <span>{project.has_export ? '✓' : '—'}</span>
+          </span>
+          <span className="text-[8px] opacity-75 mt-0.5">Xuất</span>
+        </div>
+      </div>
+
       {/* 5. Thanh Tiến Trình Từng Bước Khi Đang Chạy Hàng Đợi (Step Progress Bar) */}
       {queueItem && (
         <div className="px-2.5 py-1.5 bg-slate-950 border-t border-slate-800 text-[10px] space-y-1 select-none">
@@ -473,26 +547,27 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   onOpenSettingsTab,
   onRefreshProjects,
   onBatchProjectsCreated,
-  onOpenQueue: _onOpenQueue,
+  onOpenQueue,
   onOpenDownloader,
   selectedDramaTitle: propSelectedDramaTitle,
   onSelectDramaTitle,
 }) => {
   const loggerCount = useAppLoggerCount();
+  // Khởi tạo Cấu Hình Xuất Hàng Loạt từ localStorage để giữ nguyên khi F5 / chuyển tab
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
-  const [activeBatchPresetId, setActiveBatchPresetId] = useState<string>('');
-  const [gridCols, setGridCols] = useState<2 | 3 | 4>(3);
+  const [activeBatchPresetId, setActiveBatchPresetId] = useState<string>(() => loadBatchExportConfig().activeBatchPresetId || '');
+  const [gridCols, setGridCols] = useState<2 | 3 | 4>(() => loadBatchExportConfig().gridCols || 3);
 
   // 8 Yêu Cầu Cấu Hình Toàn Cục & Sắp Xếp:
-  const [batchTargetLang, setBatchTargetLang] = useState<string>('vi');
-  const [batchDuckingVolume, setBatchDuckingVolume] = useState<number>(25);
-  const [batchDubbingEnabled, setBatchDubbingEnabled] = useState<boolean>(true);
-  const [batchDubbingMode, setBatchDubbingMode] = useState<'single' | 'gender_multi'>('single');
-  const [batchDubbingVoice, setBatchDubbingVoice] = useState<string>('vi-VN-NamMinhNeural');
-  const [batchExportFormat, setBatchExportFormat] = useState<'mp4' | 'mkv'>('mp4');
-  const [batchExportResolution, setBatchExportResolution] = useState<'original' | '1080p' | '720p' | '2k'>('original');
-  const [batchExportAspectRatio, setBatchExportAspectRatio] = useState<'original' | '9:16' | '16:9'>('original');
-  const [sortMode, setSortMode] = useState<'ep_asc' | 'ep_desc' | 'name_asc' | 'name_desc' | 'status' | 'duration'>('ep_asc');
+  const [batchTargetLang, setBatchTargetLang] = useState<string>(() => loadBatchExportConfig().batchTargetLang);
+  const [batchDuckingVolume, setBatchDuckingVolume] = useState<number>(() => loadBatchExportConfig().batchDuckingVolume);
+  const [batchDubbingEnabled, setBatchDubbingEnabled] = useState<boolean>(() => loadBatchExportConfig().batchDubbingEnabled);
+  const [batchDubbingMode, setBatchDubbingMode] = useState<'single' | 'gender_multi'>(() => loadBatchExportConfig().batchDubbingMode);
+  const [batchDubbingVoice, setBatchDubbingVoice] = useState<string>(() => loadBatchExportConfig().batchDubbingVoice);
+  const [batchExportFormat, setBatchExportFormat] = useState<'mp4' | 'mkv'>(() => loadBatchExportConfig().batchExportFormat);
+  const [batchExportResolution, setBatchExportResolution] = useState<'original' | '1080p' | '720p' | '2k'>(() => loadBatchExportConfig().batchExportResolution);
+  const [batchExportAspectRatio, setBatchExportAspectRatio] = useState<'original' | '9:16' | '16:9'>(() => loadBatchExportConfig().batchExportAspectRatio);
+  const [sortMode, setSortMode] = useState<'ep_asc' | 'ep_desc' | 'name_asc' | 'name_desc' | 'status' | 'duration'>(() => loadBatchExportConfig().sortMode || 'ep_asc');
 
   // Các công đoạn thực hiện hàng loạt (Batch Stages Selector)
   const [batchStages, setBatchStages] = useState<{
@@ -500,12 +575,196 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     translate: boolean;
     dubbing: boolean;
     export: boolean;
-  }>({
-    ocr: true,
-    translate: true,
-    dubbing: true,
-    export: true,
-  });
+  }>(() => loadBatchExportConfig().batchStages);
+
+  // Trạng thái tự lưu cấu hình
+  const [batchAutoSaveStatus, setBatchAutoSaveStatus] = useState<'saved' | 'saving'>('saved');
+  const isBatchInitialLoaded = useRef<boolean>(false);
+  const lastSavedConfigJson = useRef<string>('');
+  const isSyncingFromExternal = useRef<boolean>(false);
+
+  // 1. Nạp và đồng bộ cấu hình từ Backend Pipeline Settings (pipeline_settings.json trên đĩa)
+  useEffect(() => {
+    let isMounted = true;
+    apiClient
+      .getPipelineSettings()
+      .then((pipe) => {
+        if (!isMounted || !pipe) {
+          isBatchInitialLoaded.current = true;
+          return;
+        }
+        const reconciled = reconcileBatchConfigWithBackend(loadBatchExportConfig(), pipe);
+        setBatchTargetLang(reconciled.batchTargetLang);
+        setBatchDuckingVolume(reconciled.batchDuckingVolume);
+        setBatchDubbingEnabled(reconciled.batchDubbingEnabled);
+        setBatchDubbingMode(reconciled.batchDubbingMode);
+        setBatchDubbingVoice(reconciled.batchDubbingVoice);
+        setBatchExportFormat(reconciled.batchExportFormat);
+        setBatchExportResolution(reconciled.batchExportResolution);
+        setBatchExportAspectRatio(reconciled.batchExportAspectRatio);
+        setBatchStages(reconciled.batchStages);
+        if (reconciled.activeBatchPresetId) setActiveBatchPresetId(reconciled.activeBatchPresetId);
+        if (reconciled.sortMode) setSortMode(reconciled.sortMode);
+        if (reconciled.gridCols) setGridCols(reconciled.gridCols);
+
+        saveBatchExportConfig(reconciled);
+        lastSavedConfigJson.current = JSON.stringify(reconciled);
+        isBatchInitialLoaded.current = true;
+      })
+      .catch((err) => {
+        console.warn('Không thể nạp pipeline settings trên DashboardBatchHub:', err);
+        isBatchInitialLoaded.current = true;
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Lắng nghe sự kiện đồng bộ cấu hình từ GlobalSettingsView / Inspector Panel trong thời gian thực (loại trừ self-event)
+  useEffect(() => {
+    const handleGlobalSettingsUpdated = (e: Event) => {
+      const customEvent = e as CustomEvent<GlobalPipelineSettings & { _source?: string }>;
+      const pipe = customEvent.detail;
+      if (!pipe || pipe._source === 'DashboardBatchHub') return;
+
+      const reconciled = reconcileBatchConfigWithBackend(loadBatchExportConfig(), pipe);
+      const newConfigJson = JSON.stringify(reconciled);
+      if (newConfigJson === lastSavedConfigJson.current) return;
+
+      isSyncingFromExternal.current = true;
+      lastSavedConfigJson.current = newConfigJson;
+
+      setBatchTargetLang(reconciled.batchTargetLang);
+      setBatchDuckingVolume(reconciled.batchDuckingVolume);
+      setBatchDubbingEnabled(reconciled.batchDubbingEnabled);
+      setBatchDubbingMode(reconciled.batchDubbingMode);
+      setBatchDubbingVoice(reconciled.batchDubbingVoice);
+      setBatchExportFormat(reconciled.batchExportFormat);
+      setBatchExportResolution(reconciled.batchExportResolution);
+      setBatchExportAspectRatio(reconciled.batchExportAspectRatio);
+      setBatchStages(reconciled.batchStages);
+      if (reconciled.activeBatchPresetId) setActiveBatchPresetId(reconciled.activeBatchPresetId);
+      if (reconciled.sortMode) setSortMode(reconciled.sortMode);
+      if (reconciled.gridCols) setGridCols(reconciled.gridCols);
+      saveBatchExportConfig(reconciled);
+    };
+
+    window.addEventListener('pipeline-settings-updated', handleGlobalSettingsUpdated);
+    return () => {
+      window.removeEventListener('pipeline-settings-updated', handleGlobalSettingsUpdated);
+    };
+  }, []);
+
+  // 2. Tự động lưu cấu hình mỗi khi có bất kỳ thay đổi nào từ phía người dùng
+  useEffect(() => {
+    // Luôn lưu snapshot vào localStorage ngay lập tức
+    const currentConfig: BatchExportConfig = {
+      batchTargetLang,
+      batchDuckingVolume,
+      batchDubbingEnabled,
+      batchDubbingMode,
+      batchDubbingVoice,
+      batchExportFormat,
+      batchExportResolution,
+      batchExportAspectRatio,
+      batchStages,
+      activeBatchPresetId,
+      sortMode,
+      gridCols,
+    };
+    saveBatchExportConfig(currentConfig);
+
+    const currentConfigJson = JSON.stringify(currentConfig);
+
+    if (!isBatchInitialLoaded.current) {
+      lastSavedConfigJson.current = currentConfigJson;
+      return;
+    }
+
+    if (isSyncingFromExternal.current) {
+      isSyncingFromExternal.current = false;
+      lastSavedConfigJson.current = currentConfigJson;
+      return;
+    }
+
+    // Nếu cấu hình không hề thay đổi so với bản đã lưu, không trigger lại tiến trình lưu
+    if (currentConfigJson === lastSavedConfigJson.current) {
+      return;
+    }
+
+    lastSavedConfigJson.current = currentConfigJson;
+    setBatchAutoSaveStatus('saving');
+
+    // Debounce đồng bộ xuống backend pipeline settings (lưu vào pipeline_settings.json trên đĩa)
+    const syncTimer = setTimeout(async () => {
+      try {
+        const currentPipe = await apiClient.getPipelineSettings();
+        if (currentPipe) {
+          const updatedPipe: GlobalPipelineSettings = {
+            ...currentPipe,
+            translation: {
+              ...currentPipe.translation,
+              target_language: (['zh', 'en', 'vi', 'none'].includes(batchTargetLang)
+                ? (batchTargetLang as any)
+                : currentPipe.translation.target_language),
+            },
+            dubbing: {
+              ...currentPipe.dubbing,
+              enabled: batchDubbingEnabled,
+              ducking_volume: batchDuckingVolume / 100,
+              voice: batchDubbingVoice || currentPipe.dubbing.voice,
+              mode: batchDubbingMode === 'gender_multi' ? 'multi' : 'single',
+            },
+            batch: {
+              target_lang: batchTargetLang,
+              ducking_volume: batchDuckingVolume,
+              dubbing_enabled: batchDubbingEnabled,
+              dubbing_mode: batchDubbingMode,
+              dubbing_voice: batchDubbingVoice,
+              export_format: batchExportFormat,
+              export_resolution: batchExportResolution,
+              export_aspect_ratio: batchExportAspectRatio,
+              stage_ocr: batchStages.ocr,
+              stage_translate: batchStages.translate,
+              stage_dubbing: batchStages.dubbing,
+              stage_export: batchStages.export,
+              active_preset_id: activeBatchPresetId,
+              sort_mode: sortMode,
+              grid_cols: gridCols,
+            },
+          };
+          await apiClient.savePipelineSettings(updatedPipe);
+          window.dispatchEvent(
+            new CustomEvent('pipeline-settings-updated', {
+              detail: { ...updatedPipe, _source: 'DashboardBatchHub' },
+            })
+          );
+        }
+      } catch (err) {
+        console.warn('Lỗi đồng bộ cấu hình sang backend pipeline_settings:', err);
+      } finally {
+        setBatchAutoSaveStatus('saved');
+      }
+    }, 400);
+
+    return () => {
+      clearTimeout(syncTimer);
+    };
+  }, [
+    batchTargetLang,
+    batchDuckingVolume,
+    batchDubbingEnabled,
+    batchDubbingMode,
+    batchDubbingVoice,
+    batchExportFormat,
+    batchExportResolution,
+    batchExportAspectRatio,
+    batchStages,
+    activeBatchPresetId,
+    sortMode,
+    gridCols,
+  ]);
 
   // Trạng thái chạy lẻ cho từng video trong Episode Inspector
   const [singleActionStatus, setSingleActionStatus] = useState<Record<string, string>>({});
@@ -615,6 +874,22 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
       console.warn('Error loading pipeline settings:', err);
     }
 
+    // Tải thông tin tươi mới nhất của dự án từ backend để đảm bảo số liệu câu/thời lượng/trạng thái luôn chuẩn 100%
+    apiClient
+      .getProject(proj.project_id)
+      .then((freshProj) => {
+        if (freshProj) {
+          setInspectingProject(freshProj);
+          if (freshProj.regions && freshProj.regions.length > 0) {
+            setCurrentRoi({ ...freshProj.regions[0] });
+          }
+          if (freshProj.media_metadata?.duration) {
+            setInspectorDuration(freshProj.media_metadata.duration);
+          }
+        }
+      })
+      .catch((err) => console.warn('Không thể refresh inspecting project:', err));
+
     // Tải danh mục giọng đọc TTS
     try {
       const cat = await apiClient.getTTSCatalog();
@@ -683,7 +958,9 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     setRoiStatusMessage('Đang lưu khung ROI và quét lại OCR...');
     const pid = inspectingProject.project_id;
     try {
-      await apiClient.saveRegions(pid, [{ ...currentRoi, region_id: 'roi-custom' }]);
+      const otherRegions = (inspectingProject.regions || []).filter((r) => r.region_id !== (currentRoi.region_id || 'roi-custom'));
+      const updatedRegions = [{ ...currentRoi, region_id: currentRoi.region_id || 'roi-custom' }, ...otherRegions];
+      await apiClient.saveRegions(pid, updatedRegions);
       await apiClient.runPipeline(pid, { sync: true });
       const updated = await apiClient.getProject(pid);
       if (updated) {
@@ -765,7 +1042,23 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   };
 
   // Chế độ xem: Theo Bộ phim (Folder Level) hay Tất cả tập (Flat Level)
-  const [dramaViewMode, setDramaViewMode] = useState<'folders' | 'flat'>('folders');
+  const [dramaViewMode, setDramaViewMode] = useState<'folders' | 'flat'>(() => {
+    try {
+      const saved = localStorage.getItem('sls_drama_view_mode');
+      return saved === 'flat' ? 'flat' : 'folders';
+    } catch {
+      return 'folders';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sls_drama_view_mode', dramaViewMode);
+    } catch {
+      // ignore
+    }
+  }, [dramaViewMode]);
+
   // Bộ phim đang được mở để xem danh sách tập (null nghĩa là đang ở Cấp 1: Danh sách các Bộ phim)
   const [internalSelectedDramaTitle, setInternalSelectedDramaTitle] = useState<string | null>(null);
   const selectedDramaTitle = propSelectedDramaTitle !== undefined ? propSelectedDramaTitle : internalSelectedDramaTitle;
@@ -773,6 +1066,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     if (onSelectDramaTitle) onSelectDramaTitle(t);
     setInternalSelectedDramaTitle(t);
   };
+
   // Tìm kiếm theo tên bộ phim / tên video
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -798,6 +1092,13 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
 
     return map;
   }, [projects]);
+
+  // Tự động dọn selectedDramaTitle nếu bộ phim đó không còn tồn tại trong danh sách dự án
+  useEffect(() => {
+    if (selectedDramaTitle && projects.length > 0 && !dramaGroups.has(selectedDramaTitle)) {
+      setSelectedDramaTitle(null);
+    }
+  }, [selectedDramaTitle, projects, dramaGroups]);
 
   // Danh sách các bộ phim đã lọc theo tìm kiếm
   const filteredDramaEntries = useMemo(() => {
@@ -1044,6 +1345,84 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     }
   };
 
+  // Chọn nhiều video từ máy tính (0 giây, không tốn upload qua mạng)
+  const handlePickMultipleLocalVideos = async () => {
+    setIsBatchUploading(true);
+    setBatchUploadStatus('Đang mở hộp thoại chọn nhiều video từ máy tính...');
+    try {
+      const res = await apiClient.pickMultipleVideos();
+      if (res && res.files && res.files.length > 0) {
+        setBatchUploadStatus(`Đang tạo ${res.files.length} dự án từ file cục bộ (0s)...`);
+        const chosenPreset = presets.find((p) => p.id === activeBatchPresetId) || defaultPreset;
+        const items = res.files.map((f) => ({
+          title: f.filename ? f.filename.replace(/\.[^/.]+$/, '') : f.path.replace(/\\/g, '/').split('/').pop()?.replace(/\.[^/.]+$/, '') || 'Video',
+          source_video_path: f.path,
+          source_language: chosenPreset.source_lang || 'zh',
+          target_language: chosenPreset.target_lang || 'vi',
+        }));
+        const regions = chosenPreset.roi ? [{
+          region_id: 'roi-main',
+          x: chosenPreset.roi.x,
+          y: chosenPreset.roi.y,
+          width: chosenPreset.roi.width,
+          height: chosenPreset.roi.height,
+        }] : undefined;
+        const created = await apiClient.batchCreateProjects(items, regions);
+        setBatchUploadStatus(`✓ Nạp thành công ${created.length} video tức thì (0s)!`);
+        setTimeout(() => setBatchUploadStatus(null), 3500);
+        onRefreshProjects();
+        if (onBatchProjectsCreated) onBatchProjectsCreated(created);
+      } else {
+        setBatchUploadStatus(null);
+      }
+    } catch (err: any) {
+      console.warn('Native picker error, fallback to browser input:', err);
+      setBatchUploadStatus(null);
+      batchFileInputRef.current?.click();
+    } finally {
+      setIsBatchUploading(false);
+    }
+  };
+
+  // Chọn cả thư mục chứa video từ máy tính (0 giây, tự động quét tất cả video)
+  const handlePickLocalFolder = async () => {
+    setIsBatchUploading(true);
+    setBatchUploadStatus('Đang mở hộp thoại chọn thư mục video...');
+    try {
+      const res = await apiClient.pickFolder();
+      if (res && res.files && res.files.length > 0) {
+        setBatchUploadStatus(`Đang tạo ${res.files.length} tập video từ thư mục (0s)...`);
+        const chosenPreset = presets.find((p) => p.id === activeBatchPresetId) || defaultPreset;
+        const items = res.files.map((f) => ({
+          title: f.filename ? f.filename.replace(/\.[^/.]+$/, '') : f.path.replace(/\\/g, '/').split('/').pop()?.replace(/\.[^/.]+$/, '') || 'Video',
+          source_video_path: f.path,
+          source_language: chosenPreset.source_lang || 'zh',
+          target_language: chosenPreset.target_lang || 'vi',
+        }));
+        const regions = chosenPreset.roi ? [{
+          region_id: 'roi-main',
+          x: chosenPreset.roi.x,
+          y: chosenPreset.roi.y,
+          width: chosenPreset.roi.width,
+          height: chosenPreset.roi.height,
+        }] : undefined;
+        const created = await apiClient.batchCreateProjects(items, regions);
+        setBatchUploadStatus(`✓ Nạp thành công ${created.length} tập video từ thư mục (0s)!`);
+        setTimeout(() => setBatchUploadStatus(null), 3500);
+        onRefreshProjects();
+        if (onBatchProjectsCreated) onBatchProjectsCreated(created);
+      } else {
+        setBatchUploadStatus(null);
+      }
+    } catch (err: any) {
+      console.warn('Folder picker error:', err);
+      setBatchUploadStatus(`Không thể mở thư mục: ${err?.message || err}`);
+      setTimeout(() => setBatchUploadStatus(null), 4000);
+    } finally {
+      setIsBatchUploading(false);
+    }
+  };
+
   // Vận hành thao tác cá nhân cho riêng 1 video cụ thể (Single Episode Runner)
   const handleRunSingleStage = async (
     project: ProjectManifestV1,
@@ -1072,6 +1451,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
         await apiClient.exportMp4(pid, {
           use_translated: batchTargetLang !== 'none',
           mask_mode: customMask,
+          flip_h: chosenPreset?.is_flipped_h ?? false,
+          flip_v: chosenPreset?.is_flipped_v ?? false,
         });
         setSingleActionStatus((prev) => ({ ...prev, [pid]: '✓ Xuất video hoàn tất!' }));
       }
@@ -1207,6 +1588,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
           await apiClient.exportMp4(targetProj.project_id, {
             use_translated: batchTargetLang !== 'none',
             mask_mode: targetMaskMode,
+            flip_h: chosenPreset?.is_flipped_h ?? false,
+            flip_v: chosenPreset?.is_flipped_v ?? false,
           });
         }
 
@@ -1247,46 +1630,90 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
 
   return (
     <div className="flex-1 w-full h-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
-      {/* 1. Header Đỉnh Chuẩn Mẫu (Header Bar) */}
-      <header className="h-12 shrink-0 bg-slate-900/95 border-b border-slate-800 px-4 flex items-center justify-between z-40 backdrop-blur">
+      {/* 1. Header Đỉnh Chuẩn Mẫu (Header Bar - Đồng bộ 100% với Studio) */}
+      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between z-40 text-xs select-none shadow-md">
         {/* Trái: Logo & Các Tab Điều Hướng */}
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider">
+        <div className="flex items-center gap-3 min-w-0 max-w-[calc(50%-140px)] overflow-hidden">
+          <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider shrink-0">
             <div className="p-1 bg-indigo-600 rounded text-white shadow">
               <Film className="w-3.5 h-3.5" />
             </div>
-            <span>Subtitle Localizer Studio</span>
+            <span className="hidden sm:inline">Subtitle Localizer Studio</span>
           </div>
 
-          <div className="flex items-center gap-1 text-xs">
+          <div className="flex items-center gap-1.5 text-xs shrink-0">
             <button
               onClick={onNewProject}
-              className="px-2.5 py-1 rounded bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/40 border border-indigo-500/30 transition flex items-center gap-1.5 font-semibold"
+              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow-sm transition flex items-center gap-1.5 active:scale-95 cursor-pointer"
               title="Tạo dự án mới"
             >
-              <FolderPlus className="w-3.5 h-3.5 text-indigo-400" />
+              <FolderPlus className="w-3.5 h-3.5 text-white" />
               <span>Tạo Dự Án</span>
             </button>
 
             <button
-              onClick={() => {
-                if (onOpenSettingsTab) {
-                  onOpenSettingsTab('ocr');
-                } else {
-                  onOpenPresetManager();
-                }
-              }}
-              className="px-2.5 py-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition flex items-center gap-1.5 font-medium cursor-pointer"
+              onClick={handlePickMultipleLocalVideos}
+              disabled={isBatchUploading}
+              className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-indigo-300 hover:text-white font-semibold shadow-sm transition flex items-center gap-1.5 active:scale-95 cursor-pointer hidden lg:flex"
+              title="Chọn nhiều video cùng lúc từ máy tính (Nhanh 0s)"
             >
-              <Settings className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Thiết Lập</span>
+              <FolderOpen className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Chọn Nhiều Video (0s)</span>
+            </button>
+
+            <button
+              onClick={handlePickLocalFolder}
+              disabled={isBatchUploading}
+              className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 hover:text-white font-semibold shadow-sm transition flex items-center gap-1.5 active:scale-95 cursor-pointer hidden xl:flex"
+              title="Chọn 1 thư mục chứa video (Tự động nạp tất cả video trong thư mục)"
+            >
+              <Folder className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Chọn Cả Thư Mục</span>
             </button>
           </div>
         </div>
 
+        {/* Ở Giữa: Cụm Nút Chuyển Màn Hình Phụ Cố Định Tâm Màn Hình Tuyệt Đối */}
+        <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1.5 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm z-20 pointer-events-auto">
+          {onOpenDownloader && (
+            <button
+              onClick={() => onOpenDownloader('direct')}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer"
+              title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Tải Video</span>
+            </button>
+          )}
+          {onOpenQueue && (
+            <button
+              onClick={onOpenQueue}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              title="Hàng đợi tải phim tự động"
+            >
+              <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Hàng Đợi</span>
+            </button>
+          )}
+          <button
+            onClick={() => {
+              if (onOpenSettingsTab) {
+                onOpenSettingsTab('ocr');
+              } else {
+                onOpenPresetManager();
+              }
+            }}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+            title="Thiết lập toàn cục hệ thống"
+          >
+            <Settings className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Thiết Lập</span>
+          </button>
+        </div>
+
         {/* Phải: Ngôn ngữ, Keys Pool, Nhật Ký, Trạng thái Engine & Nút Vào Studio */}
-        <div className="flex items-center gap-2.5 text-xs">
-          <div className="flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 text-[10px] font-mono">
+        <div className="flex items-center gap-2 text-xs min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
+          <div className="flex items-center gap-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 text-[10px] font-mono">
             <span className="text-cyan-400 font-bold">VI</span>
             <span className="text-slate-600">|</span>
             <span className="text-slate-400">ZH</span>
@@ -1297,7 +1724,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               setShowGeminiPoolModal(true);
               fetchGeminiPoolStatus();
             }}
-            className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-amber-500/50 text-amber-300 font-semibold text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 text-amber-300 font-semibold text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
             title="Quản lý danh sách API keys và xem trạng thái xoay tua"
           >
             <Key className="w-3.5 h-3.5 text-amber-400" />
@@ -1313,11 +1740,11 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
 
           <button
             onClick={() => appLogger.toggle()}
-            className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-cyan-500/50 text-slate-300 hover:text-white font-medium text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 text-slate-300 hover:text-white font-medium text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
             title="Nhật ký hoạt động hệ thống"
           >
             <Activity className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Nhật ký</span>
+            <span className="hidden sm:inline">Nhật ký</span>
             {loggerCount > 0 && (
               <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold">
                 {loggerCount}
@@ -1325,17 +1752,17 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             )}
           </button>
 
-          <span className="px-2.5 py-1 rounded bg-emerald-950/80 border border-emerald-600/50 text-emerald-400 font-bold text-[10px] tracking-wide flex items-center gap-1.5">
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-[11px] text-emerald-400">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Engine Sẵn Sàng</span>
-          </span>
+            <span className="font-semibold">Engine Sẵn Sàng</span>
+          </div>
 
           <button
             onClick={() => {
               if (projects.length > 0) onSelectProject(projects[0]);
             }}
             disabled={projects.length === 0}
-            className="px-3.5 py-1 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold rounded-lg text-xs transition shadow disabled:opacity-40"
+            className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold rounded-lg text-xs transition shadow-md shadow-indigo-600/30 disabled:opacity-40 cursor-pointer"
           >
             Vào Studio
           </button>
@@ -1418,20 +1845,37 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
 
               {/* Lưới các Bộ phim (DramaFolderCard) */}
               {projects.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center p-12 space-y-3 border-2 border-dashed border-slate-800 rounded-2xl bg-slate-900/20">
-                  <Film className="w-12 h-12 text-slate-600" />
+                <div className="h-full flex flex-col items-center justify-center text-center p-12 space-y-4 border-2 border-dashed border-slate-800 rounded-2xl bg-slate-900/20">
+                  <Film className="w-12 h-12 text-indigo-400/80" />
                   <div className="space-y-1">
-                    <h3 className="text-white font-semibold text-sm">Chưa có video nào trong dự án</h3>
-                    <p className="text-slate-400 text-xs">
-                      Bấm &quot;Thêm video&quot; ở thanh bên dưới hoặc nạp link từ Hồng Quả để bắt đầu.
+                    <h3 className="text-white font-semibold text-sm">Chưa có video nào trong danh mục</h3>
+                    <p className="text-slate-400 text-xs max-w-md">
+                      Chọn video trực tiếp từ máy tính để bắt đầu biên tập ngay lập tức (nhanh 0 giây, không tốn thời gian upload).
                     </p>
                   </div>
-                  <button
-                    onClick={() => batchFileInputRef.current?.click()}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow transition"
-                  >
-                    + Thêm video ngay
-                  </button>
+                  <div className="flex items-center gap-2.5 flex-wrap justify-center pt-2">
+                    <button
+                      onClick={onNewProject}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow transition cursor-pointer flex items-center gap-1.5 active:scale-95"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5" />
+                      <span>+ Tạo dự án mới</span>
+                    </button>
+                    <button
+                      onClick={handlePickMultipleLocalVideos}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-indigo-300 hover:text-white text-xs font-bold rounded-xl shadow transition cursor-pointer flex items-center gap-1.5 active:scale-95"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      <span>📂 Chọn nhiều video (0s)</span>
+                    </button>
+                    <button
+                      onClick={handlePickLocalFolder}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 hover:text-white text-xs font-bold rounded-xl shadow transition cursor-pointer flex items-center gap-1.5 active:scale-95"
+                    >
+                      <Folder className="w-3.5 h-3.5" />
+                      <span>📁 Chọn cả thư mục</span>
+                    </button>
+                  </div>
                 </div>
               ) : filteredDramaEntries.length === 0 ? (
                 <div className="p-8 text-center text-slate-400 text-xs bg-slate-900/30 rounded-xl border border-slate-800">
@@ -1560,6 +2004,16 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                       <Trash2 className="w-3.5 h-3.5 text-slate-500 hover:text-rose-400" />
                       <span>Xóa tất cả</span>
                     </button>
+
+                    <button
+                      onClick={handlePickMultipleLocalVideos}
+                      disabled={isBatchUploading}
+                      className="flex items-center gap-1 text-xs text-emerald-300 hover:text-white bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/60 px-2.5 py-1 rounded-lg transition shadow-sm active:scale-95 cursor-pointer font-semibold"
+                      title="Chọn thêm video từ máy tính (0s)"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>+ Thêm Tập (0s)</span>
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -1676,9 +2130,28 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               <Sliders className="w-3.5 h-3.5 text-cyan-400" />
               Cấu Hình Xuất Hàng Loạt
             </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-900/60 border border-indigo-700/50 text-indigo-300 font-mono">
-              Toàn cục
-            </span>
+            <div className="flex items-center gap-1.5">
+              {batchAutoSaveStatus === 'saving' ? (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-700/50 text-cyan-300 font-mono flex items-center gap-1 animate-pulse"
+                  title="Đang tự động lưu cấu hình..."
+                >
+                  <RefreshCw className="w-2.5 h-2.5 text-cyan-400 animate-spin" />
+                  Đang lưu
+                </span>
+              ) : (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/50 text-emerald-300 font-mono flex items-center gap-1 transition-all"
+                  title="Tất cả thay đổi đều được tự động lưu vĩnh viễn"
+                >
+                  <Check className="w-2.5 h-2.5 text-emerald-400" />
+                  Đã tự lưu
+                </span>
+              )}
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-900/60 border border-indigo-700/50 text-indigo-300 font-mono">
+                Toàn cục
+              </span>
+            </div>
           </div>
 
           {/* Form Cấu Hình 5 Khối */}
@@ -1741,7 +2214,24 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                   <input
                     type="checkbox"
                     checked={batchDubbingEnabled}
-                    onChange={(e) => setBatchDubbingEnabled(e.target.checked)}
+                    onChange={(e) => {
+                      const val = e.target.checked;
+                      setBatchDubbingEnabled(val);
+                      saveBatchExportConfig({
+                        batchTargetLang,
+                        batchDuckingVolume,
+                        batchDubbingEnabled: val,
+                        batchDubbingMode,
+                        batchDubbingVoice,
+                        batchExportFormat,
+                        batchExportResolution,
+                        batchExportAspectRatio,
+                        batchStages,
+                        activeBatchPresetId,
+                        sortMode,
+                        gridCols,
+                      });
+                    }}
                     className="sr-only peer"
                   />
                   <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
@@ -2817,6 +3307,24 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                         </div>
                       </div>
 
+                      {/* Trình phát Master Voiceover Audio nếu có */}
+                      {inspectingProject.has_voiceover && (
+                        <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/60 space-y-2 animate-in fade-in">
+                          <div className="flex items-center justify-between text-amber-300 font-semibold text-xs">
+                            <span className="flex items-center gap-1.5">
+                              <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Bản Thu Thuyết Minh Lồng Tiếng AI (Master)</span>
+                            </span>
+                            <span className="text-[10px] font-mono text-amber-400/80">voiceover.mp3</span>
+                          </div>
+                          <audio
+                            controls
+                            src={apiClient.getVoiceoverAudioUrl(inspectingProject.project_id)}
+                            className="w-full h-8 rounded-lg"
+                          />
+                        </div>
+                      )}
+
                       {/* Thao tác cá nhân cho tập này */}
                       <div className="space-y-2.5 pt-2 border-t border-slate-800">
                         <div className="flex items-center justify-between">
@@ -3414,6 +3922,75 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                         >
                           <Download className="w-3.5 h-3.5" />
                           <span>Tải MP4</span>
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ô Đường Dẫn Tuyệt Đối Tệp Âm Thanh Lồng Tiếng AI (MP3 Voiceover) */}
+                <div className="space-y-1.5 pt-2 border-t border-slate-900">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <label className="text-slate-400 font-semibold text-xs flex items-center gap-1.5">
+                      <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Đường dẫn tệp âm thanh lồng tiếng AI (MP3):</span>
+                    </label>
+                    {inspectingProject.has_voiceover ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 flex items-center gap-1 shadow-sm">
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span>
+                          ✓ ĐÃ TẠO FILE MP3 ({((inspectingProject.voiceover_file_size_bytes || 0) / (1024 * 1024)).toFixed(2)} MB)
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        ⏳ Chưa tạo giọng (Bấm &quot;Tạo giọng&quot; ở trên để tạo)
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                    <input
+                      type="text"
+                      readOnly
+                      value={inspectingProject.voiceover_path || (inspectingProject.has_voiceover ? `outputs/${inspectingProject.project_id}/voiceover_${inspectingProject.project_id}.mp3` : 'Chưa tạo file âm thanh MP3')}
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                      className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-emerald-300 focus:outline-none focus:border-emerald-500 select-all cursor-text min-w-0"
+                    />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() =>
+                          handleCopyPath(
+                            inspectingProject.voiceover_path || `outputs/${inspectingProject.project_id}/voiceover_${inspectingProject.project_id}.mp3`,
+                            'đường dẫn file MP3'
+                          )
+                        }
+                        disabled={!inspectingProject.has_voiceover}
+                        className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Sao chép đường dẫn file MP3"
+                      >
+                        <Copy className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Sao chép</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleRevealExport(inspectingProject.project_id)}
+                        disabled={isRevealingFolder}
+                        className="px-3 py-2 rounded-xl bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/80 text-indigo-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-sm disabled:opacity-50"
+                        title="Mở thư mục chứa file MP3 trên Windows Explorer"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Mở trong Thư Mục</span>
+                      </button>
+
+                      {inspectingProject.has_voiceover && (
+                        <a
+                          href={apiClient.getVoiceoverAudioUrl(inspectingProject.project_id)}
+                          download={`voiceover_${inspectingProject.title || inspectingProject.project_id}.mp3`}
+                          className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow"
+                          title="Tải tệp âm thanh MP3 về máy"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Tải MP3</span>
                         </a>
                       )}
                     </div>

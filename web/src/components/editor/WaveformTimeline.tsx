@@ -451,10 +451,23 @@ export const WaveformTimeline: React.FC<WaveformTimelineProps> = ({
             {/* 5. Full-Height Premiere Pro Style Playhead Needle */}
             <div
               style={{ left: `${playheadPercent}%` }}
-              className="absolute top-0 bottom-0 w-0.5 bg-sky-400 z-30 pointer-events-none shadow-[0_0_10px_rgba(56,189,248,1)] transition-[left] duration-75"
+              className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col items-center -translate-x-1/2"
             >
-              {/* Blue Playhead Top Needle (Premiere style) */}
-              <div className="w-3 h-3 bg-sky-400 rotate-45 -mt-1.5 -ml-[5px] shadow-md border border-white" />
+              {/* Blue Playhead Top Needle (Premiere style SVG) */}
+              <svg
+                width="14"
+                height="12"
+                viewBox="0 0 14 12"
+                className="shrink-0 -mt-0.5 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]"
+              >
+                <polygon
+                  points="0,0 14,0 7,12"
+                  fill="#38bdf8"
+                  stroke="#0f172a"
+                  strokeWidth="1.2"
+                />
+              </svg>
+              <div className="w-[1.5px] flex-1 bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,1)]" />
             </div>
           </div>
         </div>

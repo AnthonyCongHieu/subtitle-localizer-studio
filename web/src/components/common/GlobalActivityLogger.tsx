@@ -123,7 +123,7 @@ class AppLoggerService {
     this.log(message, 'success', category, showToast);
   }
 
-  info(message: string, category = 'Thông tin', showToast = true) {
+  info(message: string, category = 'Thông tin', showToast = false) {
     this.log(message, 'info', category, showToast);
   }
 
@@ -174,9 +174,16 @@ export const GlobalActivityLogger: React.FC = () => {
 
       if (showToast) {
         const toastId = 'toast_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-        const duration = newItem.level === 'error' ? 5500 : 3500;
+        const duration = newItem.level === 'error' ? 4000 : 2500;
 
-        setToasts((prev) => [...prev.slice(-3), { id: toastId, type: newItem.level, message: newItem.message }]);
+        setToasts((prev) => {
+          // Bỏ qua nếu thông báo giống hệt đang hiển thị (chống spam trùng lặp)
+          if (prev.some((t) => t.message === newItem.message)) {
+            return prev;
+          }
+          // Giữ tối đa 2 thông báo nổi trên màn hình cùng lúc
+          return [...prev.slice(-1), { id: toastId, type: newItem.level, message: newItem.message }];
+        });
 
         setTimeout(() => {
           setToasts((prev) => prev.filter((t) => t.id !== toastId));
@@ -231,13 +238,13 @@ export const GlobalActivityLogger: React.FC = () => {
 
   return (
     <>
-      {/* 1. Toasts positioned at top-14 right-4 so they NEVER cover bottom toolbar/timeline */}
-      <div className='fixed top-14 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full'>
+      {/* 1. Toasts positioned at bottom-20 left-6 so they NEVER cover Right Inspector panel or action controls */}
+      <div className='fixed bottom-20 left-6 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full'>
         {toasts.map((toast) => (
           <div
             key={toast.id}
             className={
-              'pointer-events-auto px-3.5 py-2.5 rounded-xl border text-xs shadow-2xl backdrop-blur-md flex items-start gap-2.5 animate-in slide-in-from-right-3 duration-200 ' +
+              'pointer-events-auto px-3.5 py-2.5 rounded-xl border text-xs shadow-2xl backdrop-blur-md flex items-start gap-2.5 animate-in slide-in-from-left-3 duration-200 ' +
               (toast.type === 'success'
                 ? 'bg-emerald-950/90 border-emerald-700/60 text-emerald-100 shadow-emerald-950/40'
                 : toast.type === 'error'

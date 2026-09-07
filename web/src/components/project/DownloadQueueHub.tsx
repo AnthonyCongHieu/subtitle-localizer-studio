@@ -175,7 +175,7 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
   return (
     <div className="flex-1 w-full h-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
       {/* 1. Header Đỉnh Trang Hàng Đợi */}
-      <header className="h-12 shrink-0 bg-slate-900 border-b border-slate-800 px-5 flex items-center justify-between z-40">
+      <header className="h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between z-40 shadow-md">
         <div className="flex items-center gap-3">
           <button
             onClick={onSwitchToDashboard}

@@ -21,6 +21,7 @@ export interface RegionTrackV1 {
   y: number;
   width: number;
   height: number;
+  mask_enabled?: boolean;
   valid_start_pts?: number;
   valid_end_pts?: number;
   keyframe_overrides?: Record<number, Record<string, number>>;
@@ -45,6 +46,8 @@ export interface ProjectManifestV1 {
   first_cue_text?: string;
   first_cue_original?: string;
   has_voiceover?: boolean;
+  voiceover_path?: string | null;
+  voiceover_file_size_bytes?: number;
   has_export?: boolean;
   export_path?: string | null;
   export_file_size_bytes?: number;

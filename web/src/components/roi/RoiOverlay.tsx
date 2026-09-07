@@ -1,10 +1,13 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { RegionTrackV1 } from '../../types/api';
-import { Crosshair } from 'lucide-react';
+import { Crosshair, Droplet, Scan } from 'lucide-react';
 
 interface RoiOverlayProps {
   region: RegionTrackV1;
   onChange: (region: RegionTrackV1) => void;
+  regions?: RegionTrackV1[];
+  activeRegionId?: string;
+  onSelectRegion?: (id: string) => void;
   containerWidth: number;
   containerHeight: number;
   disabled?: boolean;
@@ -17,6 +20,9 @@ type DragMode = 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | nul
 export const RoiOverlay: React.FC<RoiOverlayProps> = ({
   region,
   onChange,
+  regions,
+  activeRegionId,
+  onSelectRegion,
   containerWidth,
   containerHeight,
   disabled = false,
@@ -30,11 +36,15 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
     origRegion: RegionTrackV1;
   } | null>(null);
 
+  // Vùng đang hoạt động (Active Region)
+  const currentRegion = (regions && regions.find((r) => r.region_id === (activeRegionId || region.region_id))) || region;
+  const inactiveRegions = (regions || []).filter((r) => r.region_id !== currentRegion.region_id);
+
   // Tính toán tọa độ pixel từ tỷ lệ phần trăm chuẩn hóa [0.0, 1.0]
-  const boxLeft = Math.round(region.x * containerWidth);
-  const boxTop = Math.round(region.y * containerHeight);
-  const boxWidth = Math.round(region.width * containerWidth);
-  const boxHeight = Math.round(region.height * containerHeight);
+  const boxLeft = Math.round(currentRegion.x * containerWidth);
+  const boxTop = Math.round(currentRegion.y * containerHeight);
+  const boxWidth = Math.round(currentRegion.width * containerWidth);
+  const boxHeight = Math.round(currentRegion.height * containerHeight);
 
   // Bắt đầu sự kiện kéo thả hoặc co giãn kích thước
   const handleMouseDown = useCallback(
@@ -47,10 +57,10 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
       dragStartRef.current = {
         startX: e.clientX,
         startY: e.clientY,
-        origRegion: { ...region },
+        origRegion: { ...currentRegion },
       };
     },
-    [disabled, region]
+    [disabled, currentRegion]
   );
 
   // Xử lý di chuyển chuột khi đang kéo
@@ -130,98 +140,140 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragMode, containerWidth, containerHeight, region, onChange, scale, rotation]);
+  }, [dragMode, containerWidth, containerHeight, currentRegion, onChange, scale, rotation]);
 
   if (containerWidth === 0 || containerHeight === 0) return null;
 
   return (
     <div className="absolute inset-0 pointer-events-none z-50 overflow-visible select-none">
-      {/* 1. Vùng tối bên ngoài (Mặt nạ lấy nét - Focus Mask) */}
-      <svg className="absolute inset-0 w-full h-full pointer-events-none">
-        <defs>
-          <mask id="roi-spotlight-mask">
-            <rect width="100%" height="100%" fill="white" />
-            <rect
-              x={boxLeft}
-              y={boxTop}
-              width={boxWidth}
-              height={boxHeight}
-              fill="black"
-              rx="4"
-            />
-          </mask>
-        </defs>
-        <rect
-          width="100%"
-          height="100%"
-          fill="rgba(0, 0, 0, 0.45)"
-          mask="url(#roi-spotlight-mask)"
-        />
-      </svg>
+      {/* 1. Các vùng phụ (Inactive Regions) */}
+      {inactiveRegions.map((inact, inactIdx) => {
+        const iLeft = Math.round(inact.x * containerWidth);
+        const iTop = Math.round(inact.y * containerHeight);
+        const iWidth = Math.round(inact.width * containerWidth);
+        const iHeight = Math.round(inact.height * containerHeight);
+        return (
+          <div
+            key={inact.region_id}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelectRegion?.(inact.region_id);
+            }}
+            className="absolute pointer-events-auto border-2 border-dashed border-emerald-400/85 bg-emerald-500/5 hover:border-emerald-300 hover:bg-emerald-500/15 rounded cursor-pointer transition-all z-30 group shadow-sm"
+            style={{
+              left: `${iLeft}px`,
+              top: `${iTop}px`,
+              width: `${iWidth}px`,
+              height: `${iHeight}px`,
+            }}
+            title="Nhấp để chọn và điều chỉnh vùng này"
+          >
+            <span className="sr-only">Vùng {inactIdx + 2}</span>
+          </div>
+        );
+      })}
 
-      {/* 2. Khung viền chữ nhật ROI tương tác - Cấp cao nhất (z-50) */}
-      <div
-        className="absolute pointer-events-auto border-2 border-indigo-400 bg-indigo-500/20 rounded cursor-move shadow-[0_0_20px_rgba(99,102,241,0.5)] transition-shadow hover:shadow-[0_0_30px_rgba(99,102,241,0.8)] z-50"
-        style={{
-          left: `${boxLeft}px`,
-          top: `${boxTop}px`,
-          width: `${boxWidth}px`,
-          height: `${boxHeight}px`,
-        }}
-        onMouseDown={(e) => handleMouseDown('move', e)}
-      >
-        {/* Nhãn thông tin tọa độ tinh tế */}
-        <div className="absolute -top-6 left-0 bg-slate-900/90 text-indigo-300 border border-slate-700/80 px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 shadow pointer-events-none whitespace-nowrap">
-          <Crosshair className="w-2.5 h-2.5 text-indigo-400" />
-          <span>Vùng Quét</span>
-          <span className="text-slate-500">|</span>
-          <span>Y: {Math.round(region.y * 100)}%</span>
-          <span>H: {Math.round(region.height * 100)}%</span>
-          <span>W: {Math.round(region.width * 100)}%</span>
+      {/* 2. Khung viền chữ nhật Vùng Đang Chọn (Active ROI) */}
+      {disabled ? (
+        /* Chế độ dẫn hướng bị động: Vẫn hiển thị rõ ràng và cho phép nhấp chọn để kích hoạt */
+        <div
+          className="absolute pointer-events-auto cursor-pointer border border-dashed border-indigo-400/80 bg-indigo-500/5 hover:border-indigo-400 rounded z-20"
+          style={{
+            left: `${boxLeft}px`,
+            top: `${boxTop}px`,
+            width: `${boxWidth}px`,
+            height: `${boxHeight}px`,
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelectRegion?.(currentRegion.region_id);
+          }}
+          title="Nhấp để chuyển sang chế độ Quét Sub và điều chỉnh vùng này"
+        />
+      ) : (
+        /* Chế độ tương tác đầy đủ: 8 mấu kéo, mặt nạ và tọa độ chi tiết */
+        <div
+          className="absolute pointer-events-auto border-2 border-indigo-400 bg-indigo-500/5 rounded cursor-move shadow-[0_0_15px_rgba(99,102,241,0.4)] transition-shadow hover:shadow-[0_0_25px_rgba(99,102,241,0.7)] z-50"
+          style={{
+            left: `${boxLeft}px`,
+            top: `${boxTop}px`,
+            width: `${boxWidth}px`,
+            height: `${boxHeight}px`,
+          }}
+          onMouseDown={(e) => handleMouseDown('move', e)}
+        >
+          {/* Lưới định vị hỗ trợ căn chỉnh (Rule of thirds guide) */}
+          <div className="absolute inset-0 grid grid-cols-3 grid-rows-1 pointer-events-none opacity-20 border-indigo-300">
+            <div className="border-r border-indigo-300" />
+            <div className="border-r border-indigo-300" />
+          </div>
+
+          {/* 4 Tay cầm ở 4 góc - Thiết kế nhỏ gọn, tinh tế, không che phụ đề */}
+          <div
+            className="absolute -top-1 -left-1 w-2.5 h-2.5 bg-white border border-indigo-600 rounded-[2px] cursor-nwse-resize shadow-sm hover:scale-125 transition-transform z-50 pointer-events-auto"
+            onMouseDown={(e) => handleMouseDown('nw', e)}
+            title="Kéo chỉnh kích thước góc Tây Bắc"
+          />
+          <div
+            className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-white border border-indigo-600 rounded-[2px] cursor-nesw-resize shadow-sm hover:scale-125 transition-transform z-50 pointer-events-auto"
+            onMouseDown={(e) => handleMouseDown('ne', e)}
+            title="Kéo chỉnh kích thước góc Đông Bắc"
+          />
+          <div
+            className="absolute -bottom-1 -left-1 w-2.5 h-2.5 bg-white border border-indigo-600 rounded-[2px] cursor-nesw-resize shadow-sm hover:scale-125 transition-transform z-50 pointer-events-auto"
+            onMouseDown={(e) => handleMouseDown('sw', e)}
+            title="Kéo chỉnh kích thước góc Tây Nam"
+          />
+          <div
+            className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-white border border-indigo-600 rounded-[2px] cursor-nwse-resize shadow-sm hover:scale-125 transition-transform z-50 pointer-events-auto"
+            onMouseDown={(e) => handleMouseDown('se', e)}
+            title="Kéo chỉnh kích thước góc Đông Nam"
+          />
+
+          {/* 4 Tay cầm ở 4 cạnh - Kích thước thanh mảnh */}
+          <div
+            className="absolute -top-1 left-1/2 -translate-x-1/2 w-3.5 h-1.5 bg-white border border-indigo-600 rounded-[1px] cursor-ns-resize shadow-sm hover:scale-125 transition-transform z-50 pointer-events-auto"
+            onMouseDown={(e) => handleMouseDown('n', e)}
+            title="Kéo chỉnh mép trên"
+          />
+          <div
+            className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1.5 bg-white border border-indigo-600 rounded-[1px] cursor-ns-resize shadow-sm hover:scale-125 transition-transform z-50 pointer-events-auto"
+            onMouseDown={(e) => handleMouseDown('s', e)}
+            title="Kéo chỉnh mép dưới"
+          />
+          <div
+            className="absolute -left-1 top-1/2 -translate-y-1/2 h-3.5 w-1.5 bg-white border border-indigo-600 rounded-[1px] cursor-ew-resize shadow-sm hover:scale-125 transition-transform z-50 pointer-events-auto"
+            onMouseDown={(e) => handleMouseDown('w', e)}
+            title="Kéo chỉnh mép trái"
+          />
+          <div
+            className="absolute -right-1 top-1/2 -translate-y-1/2 h-3.5 w-1.5 bg-white border border-indigo-600 rounded-[1px] cursor-ew-resize shadow-sm hover:scale-125 transition-transform z-50 pointer-events-auto"
+            onMouseDown={(e) => handleMouseDown('e', e)}
+            title="Kéo chỉnh mép phải"
+          />
         </div>
+      )}
 
-        {/* Lưới định vị hỗ trợ căn chỉnh (Rule of thirds guide) */}
-        <div className="absolute inset-0 grid grid-cols-3 grid-rows-1 pointer-events-none opacity-20 border-indigo-300">
-          <div className="border-r border-indigo-300" />
-          <div className="border-r border-indigo-300" />
+      {/* Nhãn thông số ROI tinh tế - Đặt ở góc dưới đáy bên phải, không che nội dung video */}
+      {!disabled && (
+        <div className="absolute bottom-2 right-2 bg-slate-950/90 backdrop-blur-md text-indigo-300 border border-slate-800 px-2.5 py-1 rounded-lg text-[10px] font-mono flex items-center gap-1.5 shadow-xl pointer-events-none z-50">
+          <Crosshair className="w-3 h-3 text-indigo-400" />
+          <span className="font-semibold text-slate-200">ROI:</span>
+          {currentRegion.mask_enabled !== false ? (
+            <span className="text-emerald-400 font-semibold flex items-center gap-0.5">
+              <Droplet className="w-2.5 h-2.5" /> Làm mờ
+            </span>
+          ) : (
+            <span className="text-amber-400 font-semibold flex items-center gap-0.5">
+              <Scan className="w-2.5 h-2.5" /> Chỉ quét
+            </span>
+          )}
+          <span className="text-slate-600">|</span>
+          <span>Y: {Math.round(currentRegion.y * 100)}%</span>
+          <span>H: {Math.round(currentRegion.height * 100)}%</span>
+          <span>W: {Math.round(currentRegion.width * 100)}%</span>
         </div>
-
-        {/* 4 Tay cầm ở 4 góc */}
-        <div
-          className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nwse-resize shadow hover:scale-125 transition-transform z-50 pointer-events-auto"
-          onMouseDown={(e) => handleMouseDown('nw', e)}
-        />
-        <div
-          className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nesw-resize shadow hover:scale-125 transition-transform z-50 pointer-events-auto"
-          onMouseDown={(e) => handleMouseDown('ne', e)}
-        />
-        <div
-          className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nesw-resize shadow hover:scale-125 transition-transform z-50 pointer-events-auto"
-          onMouseDown={(e) => handleMouseDown('sw', e)}
-        />
-        <div
-          className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nwse-resize shadow hover:scale-125 transition-transform z-50 pointer-events-auto"
-          onMouseDown={(e) => handleMouseDown('se', e)}
-        />
-
-        {/* 4 Tay cầm ở 4 cạnh */}
-        <div
-          className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-6 h-2.5 bg-white border border-indigo-600 rounded-sm cursor-ns-resize shadow hover:scale-110 transition-transform z-50 pointer-events-auto"
-          onMouseDown={(e) => handleMouseDown('n', e)}
-        />
-        <div
-          className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-6 h-2.5 bg-white border border-indigo-600 rounded-sm cursor-ns-resize shadow hover:scale-110 transition-transform z-50 pointer-events-auto"
-          onMouseDown={(e) => handleMouseDown('s', e)}
-        />
-        <div
-          className="absolute -left-1.5 top-1/2 -translate-y-1/2 h-6 w-2.5 bg-white border border-indigo-600 rounded-sm cursor-ew-resize shadow hover:scale-110 transition-transform z-50 pointer-events-auto"
-          onMouseDown={(e) => handleMouseDown('w', e)}
-        />
-        <div
-          className="absolute -right-1.5 top-1/2 -translate-y-1/2 h-6 w-2.5 bg-white border border-indigo-600 rounded-sm cursor-ew-resize shadow hover:scale-110 transition-transform z-50 pointer-events-auto"
-          onMouseDown={(e) => handleMouseDown('e', e)}
-        />
-      </div>
+      )}
     </div>
   );
 };

@@ -181,29 +181,29 @@ export const VideoTransformOverlay: React.FC<VideoTransformOverlayProps> = ({
         {/* Lớp phủ mờ khi hover để người dùng nhận biết có thể kéo */}
         <div className="absolute inset-0 bg-white/5 hover:bg-white/10 transition-colors rounded-none" />
 
-        {/* 2. Bốn mấu tay cầm ở 4 góc (Resize Corners) */}
+        {/* 2. Bốn mấu tay cầm ở 4 góc (Resize Corners) - Nhỏ gọn, tinh tế */}
         {/* Góc Tây Bắc (NW) */}
         <div
           onMouseDown={(e) => handleStartDrag('scale_nw', e)}
-          className="absolute -top-2 -left-2 w-4 h-4 bg-white border border-slate-900 rounded-full shadow-md cursor-nwse-resize hover:scale-125 transition-transform z-10"
+          className="absolute -top-1 -left-1 w-2.5 h-2.5 bg-white border border-slate-900 rounded-full shadow-sm cursor-nwse-resize hover:scale-125 transition-transform z-10"
           title="Kéo để phóng to / thu nhỏ video"
         />
         {/* Góc Đông Bắc (NE) */}
         <div
           onMouseDown={(e) => handleStartDrag('scale_ne', e)}
-          className="absolute -top-2 -right-2 w-4 h-4 bg-white border border-slate-900 rounded-full shadow-md cursor-nesw-resize hover:scale-125 transition-transform z-10"
+          className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-white border border-slate-900 rounded-full shadow-sm cursor-nesw-resize hover:scale-125 transition-transform z-10"
           title="Kéo để phóng to / thu nhỏ video"
         />
         {/* Góc Đông Nam (SE) */}
         <div
           onMouseDown={(e) => handleStartDrag('scale_se', e)}
-          className="absolute -bottom-2 -right-2 w-4 h-4 bg-white border border-slate-900 rounded-full shadow-md cursor-nwse-resize hover:scale-125 transition-transform z-10"
+          className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-white border border-slate-900 rounded-full shadow-sm cursor-nwse-resize hover:scale-125 transition-transform z-10"
           title="Kéo để phóng to / thu nhỏ video"
         />
         {/* Góc Tây Nam (SW) */}
         <div
           onMouseDown={(e) => handleStartDrag('scale_sw', e)}
-          className="absolute -bottom-2 -left-2 w-4 h-4 bg-white border border-slate-900 rounded-full shadow-md cursor-nesw-resize hover:scale-125 transition-transform z-10"
+          className="absolute -bottom-1 -left-1 w-2.5 h-2.5 bg-white border border-slate-900 rounded-full shadow-sm cursor-nesw-resize hover:scale-125 transition-transform z-10"
           title="Kéo để phóng to / thu nhỏ video"
         />
 
@@ -211,22 +211,22 @@ export const VideoTransformOverlay: React.FC<VideoTransformOverlayProps> = ({
         {/* Cạnh Trên (N) */}
         <div
           onMouseDown={(e) => handleStartDrag('scale_n', e)}
-          className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-4 h-3 bg-white border border-slate-900 rounded-sm shadow-md cursor-ns-resize hover:scale-125 transition-transform z-10"
+          className="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-1.5 bg-white border border-slate-900 rounded-[1px] shadow-sm cursor-ns-resize hover:scale-125 transition-transform z-10"
         />
         {/* Cạnh Dưới (S) */}
         <div
           onMouseDown={(e) => handleStartDrag('scale_s', e)}
-          className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-4 h-3 bg-white border border-slate-900 rounded-sm shadow-md cursor-ns-resize hover:scale-125 transition-transform z-10"
+          className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1.5 bg-white border border-slate-900 rounded-[1px] shadow-sm cursor-ns-resize hover:scale-125 transition-transform z-10"
         />
         {/* Cạnh Trái (W) */}
         <div
           onMouseDown={(e) => handleStartDrag('scale_w', e)}
-          className="absolute top-1/2 -translate-y-1/2 -left-1.5 w-3 h-4 bg-white border border-slate-900 rounded-sm shadow-md cursor-ew-resize hover:scale-125 transition-transform z-10"
+          className="absolute top-1/2 -translate-y-1/2 -left-1 w-1.5 h-3 bg-white border border-slate-900 rounded-[1px] shadow-sm cursor-ew-resize hover:scale-125 transition-transform z-10"
         />
         {/* Cạnh Phải (E) */}
         <div
           onMouseDown={(e) => handleStartDrag('scale_e', e)}
-          className="absolute top-1/2 -translate-y-1/2 -right-1.5 w-3 h-4 bg-white border border-slate-900 rounded-sm shadow-md cursor-ew-resize hover:scale-125 transition-transform z-10"
+          className="absolute top-1/2 -translate-y-1/2 -right-1 w-1.5 h-3 bg-white border border-slate-900 rounded-[1px] shadow-sm cursor-ew-resize hover:scale-125 transition-transform z-10"
         />
 
         {/* 4. Mấu xoay tròn dưới đáy video (CapCut Rotate Handle) */}

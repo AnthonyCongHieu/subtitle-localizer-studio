@@ -8,20 +8,33 @@ dich thuat va long tieng phu de video tu dong thong minh.
 1. YEU CAU HE THONG:
 -------------------------------------------------------------------------------
 - He dieu hanh: Windows 10 / 11 (64-bit)
-- Python: Phien ban 3.11 hoac 3.12 (Tai tai: https://www.python.org/downloads/)
+- Python: Phien ban 3.10, 3.11 hoac 3.12 (Tai tai: https://www.python.org/downloads/)
   * QUAN TRONG: Khi cai dat Python, nho tich chon vao o "[v] Add python.exe to PATH".
-- Node.js (Khuyen nghi): Ban LTS (Tai tai: https://nodejs.org/)
-  * Neu may chua cai Node.js, phan mem van co the chay giao dien Web 100% qua ban build san.
-- FFmpeg (Tuy chon): Danh cho chuc nang xuat video MP4 va tao song am waveform.
+- Node.js (Khong bat buoc): Studio da build san toan bo giao dien Web UI (web/dist).
+- FFmpeg (Tuy chon): Ho tro xuat video MP4 va tao song am waveform.
 
-2. CACH KHOI DONG (RAT DON GIAN):
+2. CACH KHOI DONG (1-CLICK UNIFIED LAUNCHER):
 -------------------------------------------------------------------------------
-- Buoc 1: Giai nen toan bo thu muc ZIP nay vao o dia cua ban (vi du: D:\ hoac E:\ hoac Desktop).
-- Buoc 2: Nhap dup chuot vao file:
+- Nhap dup chuot vao file:
           >>> KHOI_DONG_STUDIO.bat <<<
-  * Trong lan dau tien chay: Script se tu dong kiem tra va tai cac thu vien can thiet.
-  * Khi hoan tat, trinh duyet se tu dong mo giao dien Studio:
-    http://localhost:5199  (hoac http://localhost:8899)
+  (hoac start_studio.bat)
+
+* DAC DIEM NOI BAT CUA LAUNCHER MOI:
+  1. Chay chung 1 CMD duy nhat: Toan bo giao dien Web UI, Backend API va WebSocket
+     duoc tich hop trong mot cua so console duy nhat. Khong mo nhieu cua so con roi rac.
+  2. Tu dong kiem tra on dinh (Pre-flight Checks):
+     - Kiem tra Python runtime va thu vien.
+     - Kiem tra va tu giai phong port 8899 neu bi tien trinh cu chiem dung.
+     - Kiem tra va cap nhat co so du lieu SQLite.
+     - Kiem tra va tu dong khoi phuc file cau hinh / API Key Pool neu bi thieu.
+  3. Tu dong fix thieu sot:
+     - Tu dong chay `pip install` neu phat hien may con thieu thu vien.
+     - Tu dong tao file cau hinh mau va pool key Gemini/Groq neu chua co.
+  4. Tu dong mo trinh duyet: Khi he thong khoi dong xong va dat trang thai healthy,
+     trinh duyet se tu dong mo giao dien Studio tai:
+     http://127.0.0.1:8899
+  5. Tat sach se: Khi muon dung, chi can nhan to hop phim [Ctrl+C] trong cua so CMD
+     hoac dong cua so, he thong se dung toan bo, khong de lai tien trinh an.
 
 3. TICH HOP SAN CAC KEY GEMINI DICH THUAT:
 -------------------------------------------------------------------------------
@@ -32,15 +45,15 @@ dich thuat va long tieng phu de video tu dong thong minh.
 
 4. CAU TRUC THU MUC:
 -------------------------------------------------------------------------------
-- KHOI_DONG_STUDIO.bat    : File khoi dong chinh tu dong cai dat va chay toan bo Studio.
+- KHOI_DONG_STUDIO.bat    : File khoi dong chinh (Unified 1-CMD Launcher).
 - start_studio.bat         : File khoi dong bo tro (chuc nang tuong duong).
 - CAI_DAT_THU_VIEN.bat     : File cai dat thu cong tat ca thu vien (dung khi can).
 - gemini_keys_pool.json    : File chua danh sach cac Gemini API Key da tich hop san.
 - subtitle_localizer.env   : File cau hinh moi truong da thiet lap san.
-- src/                     : Toan bo ma nguon logic Backend, thuat toan OCR, dich thuat, fake phone.
+- src/                     : Toan bo ma nguon logic Backend, thuat toan OCR, dich thuat.
 - web/                     : Giao dien Web Studio (React + Vite + TailwindCSS).
-- scripts/                 : Cac script dieu khien may chu server.
-- requirements.txt         : Danh sach 14 thu vien Python can thiet.
+- scripts/run_studio.py    : Core launcher dieu phoi, tu kiem tra va tu sua loi.
+- requirements.txt         : Danh sach thu vien Python can thiet.
 
 Chuc ban co nhung trai nghiem tuyet voi voi Subtitle Localizer Studio!
 ===============================================================================

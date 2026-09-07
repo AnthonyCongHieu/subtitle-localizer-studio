@@ -16,6 +16,14 @@ import {
   Crop,
   Maximize2,
   Minimize2,
+  Eye,
+  EyeOff,
+  Sparkles,
+  Crosshair,
+  FlipHorizontal,
+  FlipVertical,
+  RotateCw,
+  RotateCcw,
 } from 'lucide-react';
 
 interface VideoPlayerProps {
@@ -40,6 +48,7 @@ interface VideoPlayerProps {
   zoomLevel: ZoomMode;
   onZoomChange: (zoom: ZoomMode) => void;
   previewMask: boolean;
+  onTogglePreviewMask?: () => void;
   maskStyle?: MaskStyleType;
   blurStrength?: number;
   showSubtitleOverlay: boolean;
@@ -48,6 +57,16 @@ interface VideoPlayerProps {
   onPositionChange?: (pos: { x: number; y: number }) => void;
   interactionMode?: 'video' | 'roi';
   onInteractionModeChange?: (mode: 'video' | 'roi') => void;
+  regions?: RegionTrackV1[];
+  activeRegionId?: string;
+  onSelectRegion?: (id: string) => void;
+  onAutoDetectRoi?: () => void;
+  onResetAllParameters?: () => void;
+  onToggleFlipH?: () => void;
+  onToggleFlipV?: () => void;
+  onRotate?: () => void;
+  isAudioMuted?: boolean;
+  isVideoVisible?: boolean;
 }
 
 export type { MaskStyleType, SubtitlePlacementMode };
@@ -143,14 +162,25 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   zoomLevel,
   onZoomChange,
   previewMask,
+  onTogglePreviewMask,
   maskStyle = 'feather_tight',
   blurStrength = 20,
   showSubtitleOverlay,
   subtitlePlacement = 'roi',
   videoPosition = { x: 0, y: 0 },
   onPositionChange,
-  interactionMode = 'video',
+  interactionMode = 'roi',
   onInteractionModeChange,
+  regions,
+  activeRegionId,
+  onSelectRegion,
+  onAutoDetectRoi,
+  onResetAllParameters,
+  onToggleFlipH,
+  onToggleFlipV,
+  onRotate,
+  isAudioMuted = false,
+  isVideoVisible = true,
 }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const videoBoxRef = useRef<HTMLDivElement>(null);
@@ -219,6 +249,15 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
     );
   }, [cues, currentTime]);
 
+  // Xác định DUY NHẤT 1 vùng hiển thị phụ đề dịch (Single Subtitle Display Area)
+  // Bất kể người dùng bật hay tắt làm mờ, vùng hiển thị sub chỉ có 1,
+  // luôn cố định tại vùng phụ đề chính sát đáy màn hình (không bị nhảy loạn xạ khi chọn các vùng OCR khác)
+  const subDisplayRegion = useMemo(() => {
+    const list = regions && regions.length > 0 ? regions : [region];
+    const sortedByY = [...list].sort((a, b) => b.y - a.y);
+    return sortedByY[0] || region;
+  }, [regions, region]);
+
   const canvasRatio = useMemo(() => {
     return getCanvasAspectRatio(aspectRatio, videoDimensions.width, videoDimensions.height);
   }, [aspectRatio, videoDimensions.width, videoDimensions.height]);
@@ -226,39 +265,56 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   // Đo kích thước thực tế của khung Viewport để tính toán pixel chính xác cho Canvas
   // Giải quyết triệt để lỗi co rút về 300px do Flexbox intrinsic sizing cycle
   useEffect(() => {
-    if (!viewportRef.current) return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const measure = (rect: { width: number; height: number }) => {
+      if (rect.width > 0 && rect.height > 0) {
+        // Tối ưu hóa padding đệm cực gọn để video hiển thị to rõ nhất trong không gian giữa
+        const availW = Math.max(160, rect.width - 16);
+        const availH = Math.max(90, rect.height - 16);
+        const targetRatio = canvasRatio.ratioNum;
+
+        let w: number;
+        let h: number;
+        if (availW / availH > targetRatio) {
+          h = availH;
+          w = Math.round(availH * targetRatio);
+        } else {
+          w = availW;
+          h = Math.round(availW / targetRatio);
+        }
+
+        setCanvasFitSize({ width: w, height: h });
+      }
+    };
+
+    const initialRect = vp.getBoundingClientRect();
+    measure(initialRect);
+
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const rect = entry.contentRect;
-        if (rect.width > 0 && rect.height > 0) {
-          // Trừ đi padding đệm an toàn (24px)
-          const availW = Math.max(160, rect.width - 24);
-          const availH = Math.max(90, rect.height - 24);
-          const targetRatio = canvasRatio.ratioNum;
-
-          let w: number;
-          let h: number;
-          if (availW / availH > targetRatio) {
-            h = availH;
-            w = Math.round(availH * targetRatio);
-          } else {
-            w = availW;
-            h = Math.round(availW / targetRatio);
-          }
-
-          setCanvasFitSize({ width: w, height: h });
-        }
+        measure(entry.contentRect);
       }
     });
-    observer.observe(viewportRef.current);
+    observer.observe(vp);
     return () => observer.disconnect();
-  }, [canvasRatio.ratioNum]);
+  }, [canvasRatio.ratioNum, videoUrl]);
 
   // Quan sát trực tiếp videoBoxRef để cập nhật boxDimensions chính xác từng pixel,
   // bao gồm cả chế độ Cửa Sổ thường lẫn Toàn Màn Hình (Fullscreen 100vw/100vh)
   useEffect(() => {
     const box = videoBoxRef.current;
     if (!box) return;
+
+    const initialRect = box.getBoundingClientRect();
+    if (initialRect.width > 0 && initialRect.height > 0) {
+      setBoxDimensions({
+        width: Math.round(initialRect.width),
+        height: Math.round(initialRect.height),
+      });
+    }
+
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const rect = entry.contentRect;
@@ -272,7 +328,7 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
     });
     observer.observe(box);
     return () => observer.disconnect();
-  }, [isFullscreen]);
+  }, [isFullscreen, videoUrl, canvasFitSize.width, canvasFitSize.height]);
 
   // Đồng bộ Play/Pause
   useEffect(() => {
@@ -342,6 +398,9 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
 
   // Style biến đổi video (Vị trí X, Y, Lật ngang, Lật dọc, Xoay, Zoom)
   const scaleZoom = zoomLevel === 'fit' ? 1.0 : zoomLevel;
+  const effectiveBoxWidth = boxDimensions.width > 0 ? boxDimensions.width : (!isFullscreen ? canvasFitSize.width : 0);
+  const effectiveBoxHeight = boxDimensions.height > 0 ? boxDimensions.height : (!isFullscreen ? canvasFitSize.height : 0);
+
   const contentTransformStyle: React.CSSProperties = {
     transform: `translate(${videoPosition.x}px, ${videoPosition.y}px) scale(${scaleZoom}) rotate(${rotation}deg) scaleX(${isFlippedH ? -1 : 1}) scaleY(${isFlippedV ? -1 : 1})`,
     transformOrigin: 'center center',
@@ -350,105 +409,249 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
 
   return (
     <div className="w-full h-full flex-1 min-h-0 min-w-0 bg-slate-950 flex flex-col select-none overflow-hidden relative">
-      {/* 1. Mini Floating Canvas HUD: Kéo Video / Quét Sub + Zoom + Toàn Màn Hình */}
+      {/* 1. Thanh Công Cụ Canvas Chuẩn (Dedicated Top Toolbar - Tách biệt độc lập, không che hay chạm sát Video) */}
       {videoUrl && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-slate-900/85 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-slate-800 text-xs shadow-xl">
-          {/* Chuyển chế độ: Kéo Video vs Quét Sub */}
-          <div className="flex items-center bg-slate-950 p-0.5 rounded-full border border-slate-800">
-            <button
-              type="button"
-              onClick={() => onInteractionModeChange?.('video')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium transition ${
-                interactionMode === 'video'
-                  ? 'bg-indigo-600 text-white font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Chế độ Kéo di chuyển / Co giãn / Xoay Video (Chuẩn CapCut)"
-            >
-              <Move className="w-3 h-3" />
-              <span>Kéo Video</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onInteractionModeChange?.('roi')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium transition ${
-                interactionMode === 'roi'
-                  ? 'bg-indigo-600 text-white font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Chế độ Quét Sub: Điều chỉnh khung nhận diện phụ đề (ROI)"
-            >
-              <Crop className="w-3 h-3" />
-              <span>Quét Sub</span>
-            </button>
+        <div className="w-full shrink-0 py-2 px-3 bg-slate-950/95 border-b border-slate-800/80 flex items-center justify-between z-30 shadow-md backdrop-blur-md">
+          {/* Nhóm Nút Chuyển Đổi Chế Độ Thao Tác & Ẩn Hiện Che Sub */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-full border border-slate-800 shadow-inner">
+              <button
+                type="button"
+                onClick={() => onInteractionModeChange?.('roi')}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium transition cursor-pointer ${
+                  interactionMode === 'roi'
+                    ? 'bg-indigo-600 text-white font-semibold shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Chế độ Quét Phụ Đề OCR (Hiện khung chữ nhật xanh định vị vùng quét)"
+              >
+                <Crop className="w-3 h-3" />
+                <span>Quét Sub</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onInteractionModeChange?.('video')}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium transition cursor-pointer ${
+                  interactionMode === 'video'
+                    ? 'bg-indigo-600 text-white font-semibold shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Chế độ Kéo di chuyển / Co giãn / Xoay Video (Chuẩn CapCut)"
+              >
+                <Move className="w-3 h-3" />
+                <span>Kéo Video</span>
+              </button>
+            </div>
+
+            {/* Nút Ẩn / Hiện Lớp Che Sub Gốc (Filter Preview) */}
+            {onTogglePreviewMask && (
+              <button
+                type="button"
+                onClick={onTogglePreviewMask}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium transition cursor-pointer shadow-sm active:scale-95 ${
+                  previewMask
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white font-semibold ring-1 ring-emerald-400/40'
+                    : 'bg-slate-900/90 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+                title={
+                  previewMask
+                    ? 'Đang BẬT hiệu ứng che sub gốc / làm mờ (Nhấp để tắt làm mờ)'
+                    : 'Đang TẮT hiệu ứng che sub gốc (Nhấp để bật làm mờ)'
+                }
+              >
+                {previewMask ? (
+                  <Eye className="w-3.5 h-3.5 text-emerald-200" />
+                ) : (
+                  <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                )}
+                <span>{previewMask ? 'Đang Che Sub Gốc' : 'Hiện Sub Gốc (Tắt Che)'}</span>
+              </button>
+            )}
+
+            {/* Huy hiệu Vị trí X, Y (Nhấp để reset về 0, 0) */}
+            {(videoPosition.x !== 0 || videoPosition.y !== 0) && (
+              <button
+                type="button"
+                onClick={() => onPositionChange?.({ x: 0, y: 0 })}
+                className="hidden sm:flex items-center gap-1 bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 px-2 py-0.5 rounded-full text-[10px] font-mono hover:bg-indigo-900 transition"
+                title="Nhấp để đặt lại video về tâm (0, 0)"
+              >
+                <span>X: {videoPosition.x}</span>
+                <span>Y: {videoPosition.y}</span>
+              </button>
+            )}
+
+            <div className="h-3.5 w-px bg-slate-700" />
+
+            {/* Zoom Canvas */}
+            <div className="flex items-center gap-1 text-[11px] font-mono">
+              <button
+                type="button"
+                onClick={() => onZoomChange('fit')}
+                className={`px-2 py-0.5 rounded-md transition ${
+                  zoomLevel === 'fit'
+                    ? 'bg-indigo-600 text-white font-bold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Vừa vặn màn hình"
+              >
+                Fit
+              </button>
+              <button
+                type="button"
+                onClick={() => onZoomChange(1.0)}
+                className={`px-1.5 py-0.5 rounded-md transition ${
+                  zoomLevel === 1.0
+                    ? 'bg-indigo-600 text-white font-bold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Tỉ lệ 100%"
+              >
+                100%
+              </button>
+              <button
+                type="button"
+                onClick={() => onZoomChange(1.5)}
+                className={`px-1.5 py-0.5 rounded-md transition hidden sm:inline ${
+                  zoomLevel === 1.5
+                    ? 'bg-indigo-600 text-white font-bold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Phóng to 150%"
+              >
+                150%
+              </button>
+            </div>
+
+            <div className="h-3.5 w-px bg-slate-700" />
+
+            {/* Quick Action Icons Strip trên đỉnh Video Player */}
+            <div className="flex items-center gap-1">
+              {onAutoDetectRoi && (
+                <button
+                  type="button"
+                  onClick={onAutoDetectRoi}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 hover:text-white text-[10px] font-semibold transition cursor-pointer"
+                  title="🎯 Tự động quét và bắt dính vùng chữ phụ đề"
+                >
+                  <Sparkles className="w-3 h-3 text-amber-300" />
+                  <span className="hidden lg:inline">Bắt Dính</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => onUpdateRegion({ ...region, x: 0.06, y: 0.81, width: 0.88, height: 0.15 })}
+                className="p-1 rounded-md bg-slate-900 hover:bg-slate-850 text-indigo-300 hover:text-white border border-slate-800 transition cursor-pointer"
+                title="⌖ Căn giữa chuẩn phụ đề đáy"
+              >
+                <Crosshair className="w-3.5 h-3.5" />
+              </button>
+
+              {onToggleFlipH && (
+                <button
+                  type="button"
+                  onClick={onToggleFlipH}
+                  className={`p-1 rounded-md border transition cursor-pointer ${
+                    isFlippedH
+                      ? 'bg-indigo-600 text-white border-indigo-500'
+                      : 'bg-slate-900 text-slate-400 hover:text-white border-slate-800'
+                  }`}
+                  title="↔ Lật ngang video"
+                >
+                  <FlipHorizontal className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {onToggleFlipV && (
+                <button
+                  type="button"
+                  onClick={onToggleFlipV}
+                  className={`p-1 rounded-md border transition cursor-pointer ${
+                    isFlippedV
+                      ? 'bg-indigo-600 text-white border-indigo-500'
+                      : 'bg-slate-900 text-slate-400 hover:text-white border-slate-800'
+                  }`}
+                  title="↕ Lật dọc video"
+                >
+                  <FlipVertical className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {onRotate && (
+                <button
+                  type="button"
+                  onClick={onRotate}
+                  className="p-1 rounded-md bg-slate-900 hover:bg-slate-850 text-cyan-400 hover:text-cyan-300 border border-slate-800 transition cursor-pointer"
+                  title="🔄 Xoay video +90°"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {onResetAllParameters && (
+                <button
+                  type="button"
+                  onClick={onResetAllParameters}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 text-rose-300 hover:text-white text-[10px] font-semibold transition cursor-pointer active:scale-95"
+                  title="🔄 Khôi phục toàn bộ thông số video và vùng quét về mặc định"
+                >
+                  <RotateCcw className="w-3 h-3 text-rose-400" />
+                  <span className="hidden xl:inline">Reset</span>
+                </button>
+              )}
+            </div>
+
+            <div className="h-3.5 w-px bg-slate-700" />
+
+            {/* Điều khiển Âm Lượng Video (Đặt ở HUD để không che phụ đề và mấu kéo) */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setIsMuted(!isMuted)}
+                className="p-1 rounded text-slate-400 hover:text-white transition"
+                title={isMuted ? 'Bật âm thanh' : 'Tắt tiếng'}
+              >
+                {isMuted || volume === 0 ? (
+                  <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+                ) : (
+                  <Volume2 className="w-3.5 h-3.5 text-slate-300" />
+                )}
+              </button>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={isMuted ? 0 : volume}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  setVolume(v);
+                  if (v > 0 && isMuted) setIsMuted(false);
+                }}
+                className="w-16 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                title={`Âm lượng: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+              />
+            </div>
           </div>
 
-          {/* Huy hiệu Vị trí X, Y (Nhấp để reset về 0, 0) */}
-          {(videoPosition.x !== 0 || videoPosition.y !== 0) && (
-            <button
-              type="button"
-              onClick={() => onPositionChange?.({ x: 0, y: 0 })}
-              className="hidden sm:flex items-center gap-1 bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 px-2 py-0.5 rounded-full text-[10px] font-mono hover:bg-indigo-900 transition"
-              title="Nhấp để đặt lại video về tâm (0, 0)"
-            >
-              <span>X: {videoPosition.x}</span>
-              <span>Y: {videoPosition.y}</span>
-            </button>
-          )}
+          {/* Cụm Điều Khiển Bên Phải */}
+          <div className="flex items-center gap-2">
+            {/* Tỷ lệ khung hình hiện tại */}
+            <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
+              Khung: {canvasRatio.label}
+            </span>
 
-          <div className="h-3.5 w-px bg-slate-700" />
-
-          {/* Zoom Canvas */}
-          <div className="flex items-center gap-1 text-[11px] font-mono">
+            {/* Toàn màn hình */}
             <button
               type="button"
-              onClick={() => onZoomChange('fit')}
-              className={`px-2 py-0.5 rounded-md transition ${
-                zoomLevel === 'fit'
-                  ? 'bg-indigo-600 text-white font-bold'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="Vừa vặn màn hình"
+              onClick={handleToggleFullscreen}
+              className="p-1 rounded text-slate-400 hover:text-white transition cursor-pointer"
+              title={isFullscreen ? 'Thoát toàn màn hình (F)' : 'Toàn màn hình (F)'}
             >
-              Fit
-            </button>
-            <button
-              type="button"
-              onClick={() => onZoomChange(1.0)}
-              className={`px-1.5 py-0.5 rounded-md transition ${
-                zoomLevel === 1.0
-                  ? 'bg-indigo-600 text-white font-bold'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="Tỉ lệ 100%"
-            >
-              100%
-            </button>
-            <button
-              type="button"
-              onClick={() => onZoomChange(1.5)}
-              className={`px-1.5 py-0.5 rounded-md transition hidden sm:inline ${
-                zoomLevel === 1.5
-                  ? 'bg-indigo-600 text-white font-bold'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="Phóng to 150%"
-            >
-              150%
+              {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
             </button>
           </div>
-
-          <div className="h-3.5 w-px bg-slate-700" />
-
-          {/* Toàn màn hình */}
-          <button
-            type="button"
-            onClick={handleToggleFullscreen}
-            className="p-1 rounded text-slate-400 hover:text-white transition"
-            title={isFullscreen ? 'Thoát toàn màn hình (F)' : 'Toàn màn hình (F)'}
-          >
-            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-          </button>
         </div>
       )}
 
@@ -456,7 +659,7 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
       {videoUrl ? (
         <div
           ref={viewportRef}
-          className="flex-1 min-h-0 min-w-0 w-full flex items-center justify-center relative overflow-hidden p-5 bg-slate-950"
+          className="flex-1 min-h-0 min-w-0 w-full flex items-center justify-center relative overflow-hidden p-2 sm:p-3 bg-slate-950"
         >
           {/* Khung Canvas chuẩn CapCut với pixel cố định tính toán qua ResizeObserver (chống co rút 300px) */}
           <div
@@ -493,8 +696,12 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
                   src={videoUrl}
                   crossOrigin="anonymous"
                   playsInline
-                  style={{ objectFit: fitMode === 'cover' ? 'cover' : 'contain' }}
-                  className="w-full h-full block cursor-pointer"
+                  muted={isAudioMuted}
+                  style={{
+                    objectFit: fitMode === 'cover' ? 'cover' : 'contain',
+                    opacity: isVideoVisible !== false ? 1 : 0,
+                  }}
+                  className="w-full h-full block cursor-pointer transition-opacity duration-150"
                   onLoadedMetadata={(e) => {
                     const target = e.currentTarget;
                     setVideoDimensions({ width: target.videoWidth, height: target.videoHeight });
@@ -509,10 +716,10 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
             </div>
 
             {/* === 2. Lớp Phủ Biến Đổi Video Chuẩn CapCut (Kéo di chuyển, 8 mấu co giãn, 1 mấu xoay) === */}
-            {boxDimensions.width > 0 && boxDimensions.height > 0 && (
+            {effectiveBoxWidth > 0 && effectiveBoxHeight > 0 && (
               <VideoTransformOverlay
-                containerWidth={boxDimensions.width}
-                containerHeight={boxDimensions.height}
+                containerWidth={effectiveBoxWidth}
+                containerHeight={effectiveBoxHeight}
                 position={videoPosition}
                 scale={scaleZoom}
                 rotation={rotation}
@@ -527,21 +734,28 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
             )}
 
             {/* === 3. Lớp Phủ Che Sub Gốc (Preview Mask Bám Chuẩn Tọa Độ ROI) === */}
-            {previewMask && boxDimensions.width > 0 && (
-              <div
-                className={`absolute pointer-events-none ${getMaskStyleClass(maskStyle)} z-30`}
-                style={{
-                  left: `${Math.round(region.x * boxDimensions.width)}px`,
-                  top: `${Math.round(region.y * boxDimensions.height)}px`,
-                  width: `${Math.round(region.width * boxDimensions.width)}px`,
-                  height: `${Math.round(region.height * boxDimensions.height)}px`,
-                  backdropFilter: `blur(${blurStrength}px)`,
-                }}
-              />
+            {previewMask && effectiveBoxWidth > 0 && effectiveBoxHeight > 0 && (
+              <>
+                {(regions && regions.length > 0 ? regions : [region])
+                  .filter((r) => r.mask_enabled !== false)
+                  .map((reg) => (
+                    <div
+                      key={reg.region_id}
+                      className={`absolute pointer-events-none ${getMaskStyleClass(maskStyle)} z-30`}
+                      style={{
+                        left: `${Math.round(reg.x * effectiveBoxWidth)}px`,
+                        top: `${Math.round(reg.y * effectiveBoxHeight)}px`,
+                        width: `${Math.round(reg.width * effectiveBoxWidth)}px`,
+                        height: `${Math.round(reg.height * effectiveBoxHeight)}px`,
+                        backdropFilter: `blur(${blurStrength}px)`,
+                      }}
+                    />
+                  ))}
+              </>
             )}
 
-            {/* === 4. Lớp Phủ Hiển Thị Phụ Đề Dịch Tiếng Việt === */}
-            {showSubtitleOverlay && activeCue && boxDimensions.width > 0 && (
+            {/* === 4. Lớp Phủ Hiển Thị Phụ Đề Dịch Tiếng Việt (CHỈ DUY NHẤT 1 VÙNG HIỂN THỊ CHUẨN) === */}
+            {showSubtitleOverlay && activeCue && effectiveBoxWidth > 0 && (
               <div
                 className={`absolute pointer-events-none flex justify-center z-40 transition-all duration-75 px-4 ${
                   subtitlePlacement === 'bottom'
@@ -554,21 +768,14 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
                     : {
                         left: 0,
                         right: 0,
-                        top: `${Math.round(region.y * boxDimensions.height)}px`,
-                        minHeight: `${Math.round(region.height * boxDimensions.height)}px`,
+                        top: `${Math.round(subDisplayRegion.y * effectiveBoxHeight)}px`,
+                        minHeight: `${Math.round(subDisplayRegion.height * effectiveBoxHeight)}px`,
                         margin: '0 auto',
                       }
                 }
               >
-                <div className="relative inline-flex items-center justify-center max-w-[92%] px-4 py-1.5 transition-all duration-100">
-                  {!previewMask && subtitlePlacement === 'roi' && (
-                    <div
-                      className={`absolute inset-0 ${getMaskStyleClass(maskStyle)} -z-10 animate-in fade-in duration-100 rounded-md`}
-                      style={{ backdropFilter: `blur(${blurStrength}px)` }}
-                    />
-                  )}
-
-                  {/* Phụ đề dịch tiếng Việt chuẩn điện ảnh */}
+                <div className="relative inline-flex items-center justify-center max-w-[94%] px-4 py-1.5 transition-all duration-100">
+                  {/* Phụ đề dịch tiếng Việt chuẩn điện ảnh - Không vẽ đè blur giả tạo khi đã tắt làm mờ */}
                   <div className="text-amber-300 font-bold text-sm sm:text-base md:text-lg lg:text-xl tracking-wide text-center leading-snug drop-shadow-[0_2px_4px_rgba(0,0,0,1)] [text-shadow:_0_1px_3px_rgba(0,0,0,0.95),_0_2px_8px_rgba(0,0,0,0.85)] select-none whitespace-normal">
                     {activeCue.translated_text || activeCue.source_text}
                   </div>
@@ -576,45 +783,21 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
               </div>
             )}
 
-            {/* === 5. KHUNG QUÉT SUB (ROI OVERLAY) - Ở CẤP CAO NHẤT (Z-50) === */}
-            {/* Luôn ở cấp cao nhất của Canvas, nổi trên tất cả mọi thứ, luôn tương tác được */}
-            {showRoi && boxDimensions.width > 0 && boxDimensions.height > 0 && (
+            {/* === 5. KHUNG QUÉT SUB (ROI OVERLAY) === */}
+            {showRoi && effectiveBoxWidth > 0 && effectiveBoxHeight > 0 && (
               <div className="absolute inset-0 pointer-events-none z-50 overflow-visible">
                 <RoiOverlay
                   region={region}
                   onChange={onUpdateRegion}
-                  containerWidth={boxDimensions.width}
-                  containerHeight={boxDimensions.height}
+                  regions={regions}
+                  activeRegionId={activeRegionId}
+                  onSelectRegion={onSelectRegion}
+                  containerWidth={effectiveBoxWidth}
+                  containerHeight={effectiveBoxHeight}
+                  disabled={interactionMode !== 'roi'}
                 />
               </div>
             )}
-
-            {/* Thanh điều khiển âm lượng: NGOÀI transform wrapper → không bị zoom */}
-            <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2 bg-slate-900/80 backdrop-blur border border-slate-800 px-2.5 py-1 rounded-lg shadow pointer-events-auto">
-              <button
-                onClick={() => setIsMuted(!isMuted)}
-                className="text-slate-300 hover:text-white transition"
-                title={isMuted ? 'Bật âm thanh' : 'Tắt tiếng'}
-              >
-                {isMuted || volume === 0 ? (
-                  <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-                ) : (
-                  <Volume2 className="w-3.5 h-3.5 text-slate-300" />
-                )}
-              </button>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={isMuted ? 0 : volume}
-                onChange={(e) => {
-                  setVolume(parseFloat(e.target.value));
-                  setIsMuted(false);
-                }}
-                className="w-14 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-              />
-            </div>
           </div>
         </div>
       ) : (

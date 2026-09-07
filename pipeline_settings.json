@@ -1,6 +1,7 @@
 {
   "ocr": {
     "mode": "api",
+    "auto_fallback": true,
     "local_engine": "hybrid",
     "api_provider": "capcut",
     "capcut_api_endpoint": "https://editor-api-sg.capcutapi.com",
@@ -26,8 +27,7 @@
     "demux_stream_lang": "auto",
     "hybrid_whisper_model": "small",
     "hybrid_confidence_threshold": 0.65,
-    "hybrid_rescue_missing": true,
-    "auto_fallback": true
+    "hybrid_rescue_missing": true
   },
   "translation": {
     "provider": "gemini",
@@ -41,12 +41,15 @@
     "use_glossary": true
   },
   "dubbing": {
+    "enabled": true,
+    "provider": "capcut",
     "mode": "single",
-    "voice": "vi-VN-NamMinhNeural",
-    "voice_male": "vi-VN-NamMinhNeural",
-    "voice_female": "vi-VN-HoaiMyNeural",
+    "voice": "vi-VN-HoaiMyNeural",
+    "voice_male": "BV075_streaming",
+    "voice_female": "BV074_streaming",
     "auto_detect_speakers": true,
-    "rate": "+0%",
+    "gemini_prompt_style": "dramatic",
+    "rate": "+10%",
     "pitch": "+0Hz",
     "ducking_volume": 0.25
   },
@@ -55,5 +58,22 @@
     "default_mask_style": "feather_tight",
     "default_blur_strength": 24,
     "burn_subtitles": true
+  },
+  "batch": {
+    "target_lang": "vi",
+    "ducking_volume": 25,
+    "dubbing_enabled": true,
+    "dubbing_mode": "single",
+    "dubbing_voice": "vi-VN-NamMinhNeural",
+    "export_format": "mp4",
+    "export_resolution": "original",
+    "export_aspect_ratio": "original",
+    "stage_ocr": true,
+    "stage_translate": true,
+    "stage_dubbing": true,
+    "stage_export": true,
+    "active_preset_id": "",
+    "sort_mode": "ep_asc",
+    "grid_cols": 3
   }
 }

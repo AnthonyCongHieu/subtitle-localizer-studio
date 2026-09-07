@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
@@ -45,6 +46,11 @@ class CreateProjectRequest(BaseModel):
     target_language: str = "vi"
 
 
+class BatchCreateProjectsRequest(BaseModel):
+    items: List[CreateProjectRequest]
+    regions: Optional[List[Dict[str, Any]]] = None
+
+
 class CommandRequest(BaseModel):
     command_id: Optional[str] = None
     expected_revision: int
@@ -61,6 +67,9 @@ class Mp4ExportRequest(BaseModel):
     video_y: float = 0.0
     video_scale: float = 1.0
     rotation: float = 0.0
+    regions: Optional[List[Dict[str, Any]]] = None
+    subtitle_placement: Optional[str] = "roi"
+    blur_strength: Optional[int] = 20
 
 
 class BatchRunRequest(BaseModel):
@@ -449,8 +458,11 @@ def create_app(
                 d["first_cue_text"] = ""
                 d["first_cue_original"] = ""
 
-            voiceover_path = resolved_output_root / p.project_id / f"voiceover_{p.project_id}.mp3"
-            d["has_voiceover"] = voiceover_path.exists() and voiceover_path.stat().st_size > 0
+            voiceover_path = (resolved_output_root / p.project_id / f"voiceover_{p.project_id}.mp3").resolve()
+            voiceover_exists = voiceover_path.exists() and voiceover_path.stat().st_size > 0
+            d["has_voiceover"] = voiceover_exists
+            d["voiceover_path"] = str(voiceover_path) if voiceover_exists else None
+            d["voiceover_file_size_bytes"] = voiceover_path.stat().st_size if voiceover_exists else 0
 
             export_path = resolved_output_root / p.project_id / f"{Path(p.source_video_path).stem}-localized.mp4"
             export_exists = export_path.exists() and export_path.stat().st_size > 0
@@ -470,6 +482,26 @@ def create_app(
             results.append(d)
         return results
 
+    def _inspect_video_media(video_path: Path):
+        try:
+            import cv2
+            from subtitle_localizer.detector.roi import propose_default_roi
+            cap = cv2.VideoCapture(str(video_path))
+            vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+            vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            duration = round(frame_count / fps, 2) if fps > 0 else 0.0
+            cap.release()
+            return [propose_default_roi(vw, vh)], {
+                "width": vw,
+                "height": vh,
+                "fps": fps,
+                "duration": duration,
+            }
+        except Exception:
+            return [], {"width": 1920, "height": 1080, "fps": 25.0, "duration": 0.0}
+
     @app.post("/api/v1/projects")
     async def create_project(req: CreateProjectRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
@@ -484,27 +516,48 @@ def create_app(
         )
         video_path = Path(manifest.source_video_path)
         if video_path.exists() and video_path.is_file():
-            try:
-                import cv2
-                from subtitle_localizer.detector.roi import propose_default_roi
-                cap = cv2.VideoCapture(str(video_path))
-                vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
-                vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
-                fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-                frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-                duration = round(frame_count / fps, 2) if fps > 0 else 0.0
-                cap.release()
-                manifest.regions = [propose_default_roi(vw, vh)]
-                manifest.media_metadata = {
-                    "width": vw,
-                    "height": vh,
-                    "fps": fps,
-                    "duration": duration,
-                }
-            except Exception:
-                pass
+            regions, metadata = await asyncio.to_thread(_inspect_video_media, video_path)
+            if regions:
+                manifest.regions = regions
+            manifest.media_metadata = metadata
         repository.save_project(manifest)
         return manifest.to_dict()
+
+    @app.post("/api/v1/projects/batch-create")
+    async def batch_create_projects(req: BatchCreateProjectsRequest, authorization: Optional[str] = Header(None)) -> List[Dict[str, Any]]:
+        verify_auth(authorization)
+        created_projects = []
+        for item in req.items:
+            manifest = ProjectManifestV1(
+                project_id=f"proj-{uuid.uuid4().hex[:8]}",
+                title=item.title,
+                source_video_path=item.source_video_path,
+                video_fingerprint="fp_" + uuid.uuid4().hex[:12],
+                source_language=item.source_language,
+                target_language=item.target_language,
+                active_revision=1,
+            )
+            if req.regions:
+                manifest.regions = [
+                    RegionTrackV1(
+                        region_id=r.get("region_id", f"roi-{idx}"),
+                        x=float(r.get("x", 0.06)),
+                        y=float(r.get("y", 0.81)),
+                        width=float(r.get("width", 0.88)),
+                        height=float(r.get("height", 0.15)),
+                        mask_enabled=bool(r.get("mask_enabled", True)),
+                    )
+                    for idx, r in enumerate(req.regions)
+                ]
+            video_path = Path(manifest.source_video_path)
+            if video_path.exists() and video_path.is_file():
+                regions, metadata = await asyncio.to_thread(_inspect_video_media, video_path)
+                if not req.regions and regions:
+                    manifest.regions = regions
+                manifest.media_metadata = metadata
+            repository.save_project(manifest)
+            created_projects.append(manifest.to_dict())
+        return created_projects
 
     @app.get("/api/v1/projects/{project_id}")
     async def get_project(project_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
@@ -525,8 +578,11 @@ def create_app(
             d["first_cue_text"] = ""
             d["first_cue_original"] = ""
 
-        voiceover_path = resolved_output_root / project_id / f"voiceover_{project_id}.mp3"
-        d["has_voiceover"] = voiceover_path.exists() and voiceover_path.stat().st_size > 0
+        voiceover_path = (resolved_output_root / project_id / f"voiceover_{project_id}.mp3").resolve()
+        voiceover_exists = voiceover_path.exists() and voiceover_path.stat().st_size > 0
+        d["has_voiceover"] = voiceover_exists
+        d["voiceover_path"] = str(voiceover_path) if voiceover_exists else None
+        d["voiceover_file_size_bytes"] = voiceover_path.stat().st_size if voiceover_exists else 0
 
         export_path = resolved_output_root / project_id / f"{Path(project.source_video_path).stem}-localized.mp4"
         export_exists = export_path.exists() and export_path.stat().st_size > 0
@@ -1008,19 +1064,40 @@ def create_app(
             draft_id=draft_id,
             draft_path=draft_path,
         )
-        if not cues:
-            return {
-                "status": "empty",
-                "message": "Không tìm thấy phụ đề nào trong bản nháp CapCut được chỉ định.",
-                "imported_count": 0,
-                "cues": [],
-            }
+        existing_cues = repository.get_cues(project_id)
+        has_new_translations = any(c.translated_text for c in cues)
+        has_existing_cues = len(existing_cues) > 0
 
-        repository.save_cues(project_id, cues)
+        if has_existing_cues and has_new_translations:
+            # Ghép thông minh: Gán bản dịch tiếng Việt từ CapCut vào câu gốc tương ứng theo mốc thời gian
+            for cap_cue in cues:
+                if not cap_cue.translated_text:
+                    continue
+                best_match = None
+                max_overlap = 0.0
+                for ex_cue in existing_cues:
+                    overlap = max(0.0, min(cap_cue.end_pts, ex_cue.end_pts) - max(cap_cue.start_pts, ex_cue.start_pts))
+                    if overlap > max_overlap:
+                        max_overlap = overlap
+                        best_match = ex_cue
+                if best_match and max_overlap >= 0.2:
+                    best_match.translated_text = cap_cue.translated_text
+                    best_match.status = "reviewed"
+            final_cues = existing_cues
+        else:
+            final_cues = cues
+
+        repository.save_cues(project_id, final_cues)
+        manifest.cues_count = len(final_cues)
+        manifest.translated_count = len([c for c in final_cues if (c.translated_text or "").strip()])
+        repository.save_project(manifest)
+
         return {
             "status": "success",
             "imported_count": len(cues),
-            "cues": [c.to_dict() for c in cues],
+            "cues_count": manifest.cues_count,
+            "translated_count": manifest.translated_count,
+            "cues": [c.to_dict() for c in final_cues],
         }
 
     @app.put("/api/v1/projects/{project_id}/regions")
@@ -1145,6 +1222,41 @@ def create_app(
             "max_duration_seconds": max_dur,
         }
 
+    @app.post("/api/v1/projects/{project_id}/pipeline/stop")
+    @app.post("/api/v1/projects/{project_id}/pipeline/cancel")
+    async def stop_pipeline(
+        project_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        worker.cancel_project(project_id)
+        with running_lock:
+            running_project_ids.discard(project_id)
+
+        cancel_stage = StageRunV1(
+            stage_name="cancelled",
+            status="cancelled",
+            progress=0.0,
+            metrics={"label": "Tiến trình quét phụ đề đã được dừng theo yêu cầu"},
+            end_time=time.time(),
+        )
+        repository.save_stage_run(project_id, cancel_stage)
+
+        try:
+            await ws_manager.broadcast_event(
+                project_id=project_id,
+                event_type="pipeline_cancelled",
+                payload={"message": "Đã dừng tiến trình theo yêu cầu"},
+            )
+        except Exception:
+            pass
+
+        return {"status": "cancelled", "project_id": project_id}
+
     @app.get("/api/v1/projects/{project_id}/stages")
     async def get_project_stages(
         project_id: str,
@@ -1220,7 +1332,10 @@ def create_app(
                 cues, source_lang=manifest.source_language, target_lang=manifest.target_language
             )
             repository.save_cues(project_id, translated_cues)
-            return {"status": "success", "cues_count": len(translated_cues)}
+            manifest.cues_count = len(translated_cues)
+            manifest.translated_count = sum(1 for c in translated_cues if bool((c.translated_text or "").strip()))
+            repository.save_project(manifest)
+            return {"status": "success", "cues_count": len(translated_cues), "translated_count": manifest.translated_count}
         finally:
             translator.unload()
 
@@ -1273,6 +1388,11 @@ def create_app(
             prompt_style=prompt_style,
         )
 
+        manifest.has_voiceover = True
+        manifest.voiceover_path = str(out_voiceover).replace("\\", "/")
+        manifest.voiceover_file_size_bytes = out_voiceover.stat().st_size if out_voiceover.exists() else 0
+        repository.save_project(manifest)
+
         return {
             "status": "completed",
             "project_id": project_id,
@@ -1290,6 +1410,80 @@ def create_app(
             raise HTTPException(status_code=404, detail="Chưa có file thuyết minh cho dự án này")
         return FileResponse(path=str(voiceover_path), media_type="audio/mpeg", filename=f"voiceover_{project_id}.mp3")
 
+    @app.post("/api/v1/projects/{project_id}/cues/{cue_id}/dub")
+    async def dub_single_cue(
+        project_id: str,
+        cue_id: str,
+        body: Optional[Dict[str, Any]] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Tạo giọng đọc thuyết minh riêng cho 1 câu phụ đề và vá vào file MP3 master."""
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        cues = repository.get_cues(project_id)
+        target_cue = next((c for c in cues if c.cue_id == cue_id), None)
+        if not target_cue:
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy câu phụ đề {cue_id}")
+
+        settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
+        provider = (body or {}).get("provider") or getattr(settings.dubbing, "provider", "edge")
+        voice = (body or {}).get("voice") or settings.dubbing.voice
+        rate = (body or {}).get("rate") or settings.dubbing.rate
+        prompt_style = (body or {}).get("prompt_style") or getattr(settings.dubbing, "gemini_prompt_style", "dramatic")
+
+        project_output = resolved_output_root / project_id
+        project_output.mkdir(parents=True, exist_ok=True)
+        out_voiceover = project_output / f"voiceover_{project_id}.mp3"
+        cues_dir = project_output / "cues"
+        cues_dir.mkdir(parents=True, exist_ok=True)
+        cue_audio_path = cues_dir / f"{cue_id}.mp3"
+
+        duration = 0.0
+        try:
+            probe = probe_video(manifest.source_video_path)
+            duration = probe.duration
+        except Exception:
+            pass
+
+        from subtitle_localizer.dubbing.tts import splice_cue_voiceover
+        result = await splice_cue_voiceover(
+            cues=cues,
+            target_cue=target_cue,
+            voice=voice,
+            output_path=out_voiceover,
+            cue_output_path=cue_audio_path,
+            total_duration=duration,
+            rate=rate,
+            provider=provider,
+            prompt_style=prompt_style,
+        )
+
+        manifest.has_voiceover = True
+        manifest.voiceover_path = str(out_voiceover).replace("\\", "/")
+        manifest.voiceover_file_size_bytes = out_voiceover.stat().st_size if out_voiceover.exists() else 0
+        repository.save_project(manifest)
+
+        return {
+            "status": "completed",
+            "project_id": project_id,
+            "cue_id": cue_id,
+            "voice": voice,
+            "duration": result.get("duration", 0.0),
+            "cue_audio_url": f"/api/v1/projects/{project_id}/cues/{cue_id}/audio",
+            "audio_url": f"/api/v1/projects/{project_id}/audio/voiceover",
+        }
+
+    @app.get("/api/v1/projects/{project_id}/cues/{cue_id}/audio")
+    async def get_cue_audio(project_id: str, cue_id: str) -> FileResponse:
+        """Phát âm thanh của 1 câu phụ đề đơn lẻ."""
+        cue_audio_path = resolved_output_root / project_id / "cues" / f"{cue_id}.mp3"
+        if not cue_audio_path.exists() or cue_audio_path.stat().st_size == 0:
+            raise HTTPException(status_code=404, detail="Chưa có file âm thanh cho câu phụ đề này")
+        return FileResponse(path=str(cue_audio_path), media_type="audio/mpeg", filename=f"{cue_id}.mp3")
+
     def _do_export_mp4(
         project_id: str,
         mask_mode: str = "blur",
@@ -1300,10 +1494,17 @@ def create_app(
         video_y: float = 0.0,
         video_scale: float = 1.0,
         rotation: float = 0.0,
+        regions_override: Optional[List[Dict[str, Any]]] = None,
+        subtitle_placement: Optional[str] = "roi",
+        blur_strength: Optional[int] = 20,
     ) -> str:
         project = repository.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
+
+        if regions_override is not None:
+            project.regions = [RegionTrackV1.from_dict(r) for r in regions_override]
+            repository.save_project(project)
 
         source_path = Path(project.source_video_path)
         if not source_path.exists() or not source_path.is_file():
@@ -1333,13 +1534,15 @@ def create_app(
             vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
             cap.release()
 
-            region = project.regions[0] if project.regions else None
+            all_regions = project.regions or []
             font_size = max(24, int(vh * 0.036))
-            if region:
-                sub_y = region.y * vh
-                margin_v = max(10, int(vh - sub_y - (region.height * vh)))
+            if (subtitle_placement or "roi") == "bottom" or not all_regions:
+                margin_v = int(vh * 0.06)
             else:
-                margin_v = int(vh * 0.08)
+                # Duy nhất 1 vị trí hiển thị phụ đề: vùng có y lớn nhất (đáy màn hình)
+                sub_region = sorted(all_regions, key=lambda r: getattr(r, "y", 0.0), reverse=True)[0]
+                sub_y = sub_region.y * vh
+                margin_v = max(10, int(vh - sub_y - (sub_region.height * vh)))
 
             ass_content = AssExporter(
                 font_name="Arial",
@@ -1358,30 +1561,27 @@ def create_app(
                 use_translated=use_translated,
             )
 
-            if region:
-                rx1 = max(0, min(vw - 2, int(region.x * vw)))
-                ry1 = max(0, min(vh - 2, int(region.y * vh)))
-                rx2 = max(rx1 + 2, min(vw, int((region.x + region.width) * vw)))
-                ry2 = max(ry1 + 2, min(vh, int((region.y + region.height) * vh)))
-                roi_x = rx1
-                roi_y = ry1
-                roi_w = max(2, rx2 - rx1)
-                roi_h = max(2, ry2 - ry1)
-            else:
-                roi_x = 0
-                roi_y = int(vh * 0.8)
-                roi_w = vw
-                roi_h = max(2, int(vh * 0.2))
+            # Lọc các vùng được cấu hình làm mờ (mask_enabled != False)
+            all_regions = project.regions or []
+            masked_regions = [r for r in all_regions if getattr(r, "mask_enabled", True) is not False]
 
             mask_filter = None
             if mask_mode != "none":
-                mask_filter = SubtitleMasker().get_filter_string(
-                    mode=mask_mode,
-                    x=roi_x,
-                    y=roi_y,
-                    width=roi_w,
-                    height=roi_h,
-                )
+                if all_regions and not masked_regions:
+                    # Người dùng đã cấu hình vùng quét nhưng tất cả đều chọn "Chỉ Quét Sub / Không làm mờ"
+                    mask_filter = None
+                else:
+                    boxes: list[tuple[int, int, int, int]] = []
+                    if masked_regions:
+                        for reg in masked_regions:
+                            rx1 = max(0, min(vw - 2, int(reg.x * vw)))
+                            ry1 = max(0, min(vh - 2, int(reg.y * vh)))
+                            rx2 = max(rx1 + 2, min(vw, int((reg.x + reg.width) * vw)))
+                            ry2 = max(ry1 + 2, min(vh, int((reg.y + reg.height) * vh)))
+                            boxes.append((rx1, ry1, max(2, rx2 - rx1), max(2, ry2 - ry1)))
+                    else:
+                        boxes.append((0, int(vh * 0.8), vw, max(2, int(vh * 0.2))))
+                    mask_filter = SubtitleMasker().get_multi_filter_string(boxes=boxes, mode=mask_mode)
 
             with tempfile.NamedTemporaryFile(
                 dir=project_output,
@@ -1406,12 +1606,14 @@ def create_app(
             if voiceover_path.exists() and voiceover_path.stat().st_size > 0:
                 from subtitle_localizer.dubbing.tts import mix_voiceover_into_video
                 temp_mixed = project_output / f".tmp_dubbed_{output_path.name}"
+                merged_settings = merge_pipeline_settings(overrides=project.custom_pipeline_settings)
+                actual_ducking = getattr(merged_settings.dubbing, "ducking_volume", 0.25)
                 try:
                     mix_voiceover_into_video(
                         video_path=rendered_path,
                         voiceover_path=voiceover_path,
                         output_path=temp_mixed,
-                        ducking_volume=0.25,
+                        ducking_volume=actual_ducking,
                     )
                     if temp_mixed.exists() and temp_mixed.stat().st_size > 0:
                         temp_mixed.replace(rendered_path)
@@ -2137,9 +2339,9 @@ def create_app(
     ):
         """Thử nghiệm tạo giọng đọc mẫu cho 1 câu thoại ngắn và stream audio về UI."""
         verify_auth(authorization)
-        from subtitle_localizer.dubbing.tts import synthesize_text
+        from subtitle_localizer.dubbing.tts import synthesize_text, detect_voice_provider
         text = req.text.strip() or "Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio."
-        provider = req.provider or "edge"
+        provider = detect_voice_provider(req.voice) if req.voice else (req.provider or "edge")
         prompt_style = req.prompt_style or "dramatic"
         audio_bytes = await synthesize_text(
             text=text,
@@ -2237,6 +2439,9 @@ def create_app(
             video_y=request.video_y,
             video_scale=request.video_scale,
             rotation=request.rotation,
+            regions_override=request.regions,
+            subtitle_placement=request.subtitle_placement,
+            blur_strength=request.blur_strength,
         )
         return {"status": "completed", "output_path": rendered_path}
 
@@ -2256,9 +2461,25 @@ def create_app(
             return FileResponse(path=str(rendered_path), media_type="video/mp4", filename=f"{source_path.stem}-localized.mp4")
         return FileResponse(path=str(rendered_path), media_type="video/mp4")
 
+    @app.get("/api/v1/projects/{project_id}/audio/voiceover")
+    def stream_voiceover_audio(project_id: str, download: bool = False):
+        """Phát trực tuyến hoặc tải về file âm thanh lồng tiếng AI (MP3)."""
+        project = repository.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        from pathlib import Path
+        voiceover_path = (resolved_output_root / project_id / f"voiceover_{project_id}.mp3").resolve()
+        if not voiceover_path.exists():
+            raise HTTPException(status_code=404, detail="Voiceover audio file not found on disk")
+        from fastapi.responses import FileResponse
+        source_path = Path(project.source_video_path)
+        if download:
+            return FileResponse(path=str(voiceover_path), media_type="audio/mpeg", filename=f"{source_path.stem}-voiceover.mp3")
+        return FileResponse(path=str(voiceover_path), media_type="audio/mpeg")
+
     @app.post("/api/v1/projects/{project_id}/reveal-export")
     async def reveal_project_export(project_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-        """Mở thư mục chứa file MP4 đã xuất trên Windows Explorer hoặc hệ điều hành sở tại."""
+        """Mở thư mục chứa file MP4/MP3 đã xuất trên Windows Explorer hoặc hệ điều hành sở tại."""
         verify_auth(authorization)
         project = repository.get_project(project_id)
         if not project:
@@ -2266,24 +2487,26 @@ def create_app(
         from pathlib import Path
         source_path = Path(project.source_video_path)
         export_path = (resolved_output_root / project_id / f"{source_path.stem}-localized.mp4").resolve()
+        voiceover_path = (resolved_output_root / project_id / f"voiceover_{project_id}.mp3").resolve()
         
-        target_to_open = export_path if export_path.exists() else (resolved_output_root / project_id).resolve()
+        target_to_select = export_path if export_path.exists() else (voiceover_path if voiceover_path.exists() else None)
+        target_to_open = target_to_select if target_to_select else (resolved_output_root / project_id).resolve()
         if not target_to_open.exists():
-            target_to_open.mkdir(parents=True, exist_ok=True)
+            (resolved_output_root / project_id).resolve().mkdir(parents=True, exist_ok=True)
             
         import sys
         import subprocess
         try:
             if sys.platform == "win32":
-                if export_path.exists():
-                    subprocess.Popen(f'explorer /select,"{str(export_path)}"')
+                if target_to_select and target_to_select.exists():
+                    subprocess.Popen(f'explorer /select,"{str(target_to_select)}"')
                 else:
-                    subprocess.Popen(f'explorer "{str(target_to_open)}"')
+                    subprocess.Popen(f'explorer "{str((resolved_output_root / project_id).resolve())}"')
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", str(export_path)] if export_path.exists() else ["open", str(target_to_open)])
+                subprocess.Popen(["open", "-R", str(target_to_open)] if target_to_open.exists() else ["open", str((resolved_output_root / project_id).resolve())])
             else:
-                subprocess.Popen(["xdg-open", str(target_to_open)])
-            return {"success": True, "path": str(export_path if export_path.exists() else target_to_open)}
+                subprocess.Popen(["xdg-open", str((resolved_output_root / project_id).resolve())])
+            return {"success": True, "path": str(target_to_open)}
         except Exception as e:
             logger.warning(f"Failed to reveal export path: {e}")
             return {"success": False, "error": str(e), "path": str(target_to_open)}
@@ -2309,9 +2532,13 @@ def create_app(
         upload_dir.mkdir(parents=True, exist_ok=True)
         safe_name = file.filename or "uploaded_video.mp4"
         target_path = upload_dir / safe_name
-        with target_path.open("wb") as buffer:
-            while chunk := await file.read(1024 * 1024):
-                buffer.write(chunk)
+
+        def _write_file():
+            with target_path.open("wb") as buffer:
+                while chunk := file.file.read(16 * 1024 * 1024):
+                    buffer.write(chunk)
+
+        await asyncio.to_thread(_write_file)
         return {"path": str(target_path).replace("\\", "/"), "filename": safe_name}
 
     @app.post("/api/v1/system/pick-video")
@@ -2322,12 +2549,16 @@ def create_app(
             import sys
             from pathlib import Path
             script_path = Path(__file__).resolve().parents[3] / "scripts" / "pick_file.py"
-            res = subprocess.run(
-                [sys.executable, str(script_path)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-            )
+
+            def _run_pick():
+                return subprocess.run(
+                    [sys.executable, str(script_path)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+            res = await asyncio.to_thread(_run_pick)
             selected = res.stdout.strip()
             if selected:
                 p = Path(selected)
@@ -2335,6 +2566,62 @@ def create_app(
             return {"path": "", "filename": ""}
         except Exception as e:
             return {"path": "", "filename": "", "error": str(e)}
+
+    @app.post("/api/v1/system/pick-multiple-videos")
+    async def pick_multiple_videos(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            import subprocess
+            import sys
+            import json
+            from pathlib import Path
+            script_path = Path(__file__).resolve().parents[3] / "scripts" / "pick_file.py"
+
+            def _run_pick():
+                return subprocess.run(
+                    [sys.executable, str(script_path), "--multiple"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+            res = await asyncio.to_thread(_run_pick)
+            stdout = res.stdout.strip()
+            if stdout:
+                paths = json.loads(stdout)
+                files = [{"path": p, "filename": Path(p).name} for p in paths if p]
+                return {"files": files}
+            return {"files": []}
+        except Exception as e:
+            return {"files": [], "error": str(e)}
+
+    @app.post("/api/v1/system/pick-folder")
+    async def pick_folder(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            import subprocess
+            import sys
+            import json
+            from pathlib import Path
+            script_path = Path(__file__).resolve().parents[3] / "scripts" / "pick_file.py"
+
+            def _run_pick():
+                return subprocess.run(
+                    [sys.executable, str(script_path), "--folder"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+
+            res = await asyncio.to_thread(_run_pick)
+            stdout = res.stdout.strip()
+            if stdout:
+                paths = json.loads(stdout)
+                files = [{"path": p, "filename": Path(p).name} for p in paths if p]
+                return {"files": files}
+            return {"files": []}
+        except Exception as e:
+            return {"files": [], "error": str(e)}
 
     @app.get("/api/v1/models")
     async def list_models(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:

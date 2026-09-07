@@ -44,3 +44,45 @@ class SubtitleMasker:
             return f"drawbox=x={x}:y={y}:w={width}:h={height}:color=black@{opacity}:t=fill"
 
         return ""
+
+    def get_multi_filter_string(
+        self,
+        boxes: list[tuple[int, int, int, int]],
+        mode: str = "blur",
+        opacity: float = 0.85,
+    ) -> str:
+        """Sinh chuỗi filter FFmpeg che đồng thời nhiều vùng (boxes)."""
+        if not boxes:
+            return ""
+        if len(boxes) == 1:
+            x, y, w, h = boxes[0]
+            return self.get_filter_string(mode=mode, x=x, y=y, width=w, height=h, opacity=opacity)
+
+        if mode in ("box", "sttn_lama"):
+            return ",".join(
+                f"drawbox=x={x}:y={y}:w={w}:h={h}:color=black@{opacity}:t=fill"
+                for x, y, w, h in boxes
+            )
+
+        if mode in ("blur", "feather_tight", "optical_blend", "soft_cinema", "feather", "glass", "ambient", "mosaic", "gradient"):
+            chain_parts = []
+            for i, (bx, by, bw, bh) in enumerate(boxes):
+                ox = str(bx).replace("iw", "main_w").replace("ih", "main_h")
+                oy = str(by).replace("iw", "main_w").replace("ih", "main_h")
+                radius = 14 if mode in ("feather_tight", "optical_blend") else 10
+                try:
+                    h_val = int(bh)
+                    if h_val > 0:
+                        radius = max(1, min(radius, max(1, (h_val // 2) - 1)))
+                except (ValueError, TypeError):
+                    radius = min(radius, 4)
+                power = 3
+                in_tag = f"[m{i-1}]" if i > 0 else ""
+                is_last = (i == len(boxes) - 1)
+                out_tag = "" if is_last else f"[m{i}]"
+                chain_parts.append(
+                    f"{in_tag}split[main{i}][sub{i}];[sub{i}]crop={bw}:{bh}:{bx}:{by},boxblur=luma_radius={radius}:luma_power={power}:chroma_radius=0[blurred{i}];[main{i}][blurred{i}]overlay={ox}:{oy}{out_tag}"
+                )
+            return ";".join(chain_parts)
+
+        return ""

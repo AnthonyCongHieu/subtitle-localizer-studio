@@ -86,6 +86,61 @@ class DetectorAndRoiTest(unittest.TestCase):
         self.assertEqual(len(crops), 2)
         self.assertEqual(pts, [1.0, 3.0])
 
+    def test_adaptive_sampler_multi_roi_sampling(self) -> None:
+        from unittest.mock import patch
+        import numpy as np
+
+        class MultiCap:
+            def __init__(self):
+                self.idx = 0
+                self.frames = [
+                    np.full((100, 100, 3), 120, dtype=np.uint8),
+                ]
+
+            def isOpened(self):
+                return True
+
+            def get(self, prop):
+                if prop == 5:
+                    return 1.0  # fps
+                if prop == 7:
+                    return 1.0  # frame_count
+                if prop == 3:
+                    return 100.0  # width
+                if prop == 4:
+                    return 100.0  # height
+                if prop == 0:
+                    return 1000.0  # 1s
+                return 0.0
+
+            def set(self, prop, val):
+                return True
+
+            def grab(self):
+                return True
+
+            def read(self):
+                if self.idx < len(self.frames):
+                    f = self.frames[self.idx]
+                    self.idx += 1
+                    return True, f
+                return False, None
+
+            def release(self):
+                pass
+
+        sampler = AdaptiveFrameSampler(sample_fps=1.0)
+        # Pass 2 distinct ROIs
+        rois = [(0.05, 0.10, 0.90, 0.20), (0.05, 0.75, 0.90, 0.20)]
+        with patch("cv2.VideoCapture", return_value=MultiCap()):
+            crops, pts = sampler.sample_video_frames("dummy.mp4", roi_norms=rois)
+        self.assertEqual(len(crops), 2)
+        self.assertEqual(len(pts), 2)
+        self.assertEqual(pts, [1.0, 1.0])
+        # Check crop height for 20% of 100 = 20 pixels
+        self.assertEqual(crops[0].shape[0], 20)
+        self.assertEqual(crops[1].shape[0], 20)
+
     def test_native_temporal_detector_detects_cues_and_filters_watermark(self) -> None:
         detector = NativeTemporalDetector(min_duration_pts=0.4, max_watermark_ratio=0.85)
 
