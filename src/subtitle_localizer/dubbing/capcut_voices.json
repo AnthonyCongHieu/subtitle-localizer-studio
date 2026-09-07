@@ -1,0 +1,1653 @@
+[
+  {
+    "voice_id": "BV421_vivn_streaming",
+    "display_name": "Nhỏ Ngọt Ngào",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng nữ nhẹ nhàng, ngọt ngào, ấm áp, phù hợp tâm sự, vlog và tóm tắt phim tình cảm.",
+    "tags": [
+      "Nữ ngọt ngào",
+      "Tâm sự",
+      "Truyền cảm"
+    ],
+    "resource_id": "7252594014782755330"
+  },
+  {
+    "voice_id": "vi_female_huong",
+    "display_name": "Giọng Nữ Phổ Thông",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng nữ phổ thông miền Bắc, rõ ràng, dễ nghe, phù hợp tin tức tổng hợp.",
+    "tags": [
+      "Nữ phổ thông",
+      "Tin tức",
+      "Miền Bắc"
+    ],
+    "resource_id": "7264854897953083905"
+  },
+  {
+    "voice_id": "BV074_streaming_dsp",
+    "display_name": "Giọng Bé",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng trẻ em dễ thương, ngộ nghĩnh, dùng cho nội dung thiếu nhi hoạt hình.",
+    "tags": [
+      "Trẻ em",
+      "Hoạt hình",
+      "Dễ thương"
+    ],
+    "resource_id": "7550087831092251920"
+  },
+  {
+    "voice_id": "BV074_streaming",
+    "display_name": "Cô Gái Hoạt Ngôn",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng nữ hoạt bát, tươi sáng, biểu cảm tốt, rất cuốn hút người xem.",
+    "tags": [
+      "Nữ trẻ trung",
+      "Kể chuyện",
+      "TikTok Hot"
+    ],
+    "resource_id": "7102355709945188865"
+  },
+  {
+    "voice_id": "vi-VN-HoaiMyNeural",
+    "display_name": "Hoai My",
+    "lang": "vi",
+    "gender": "male",
+    "description": "Giọng Hoai My (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Hoai My",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7371666434650280464"
+  },
+  {
+    "voice_id": "vi-VN-NamMinhNeural",
+    "display_name": "Nam Minh",
+    "lang": "vi",
+    "gender": "male",
+    "description": "Giọng Nam Minh (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Nam Minh",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7371666524727153168"
+  },
+  {
+    "voice_id": "BV075_streaming_vibrato_dsp",
+    "display_name": "Việt Méo",
+    "lang": "vi",
+    "gender": "male",
+    "description": "Giọng rung ngân độc lạ, hài hước, giải trí cao độ cho meme và clip ngắn.",
+    "tags": [
+      "Hài hước",
+      "Parody",
+      "Độc lạ"
+    ],
+    "resource_id": "7569450639810465040"
+  },
+  {
+    "voice_id": "BV562_streaming",
+    "display_name": "Mai",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng nữ thanh lịch, phát âm chuẩn đài truyền hình, thuyết minh tài liệu chuyên nghiệp.",
+    "tags": [
+      "Nữ thanh lịch",
+      "Thuyết minh",
+      "Chuẩn đài"
+    ],
+    "resource_id": "7483736254694035984"
+  },
+  {
+    "voice_id": "multi_female_yangguangnv_uranus_bigtts",
+    "display_name": "Ban Mai",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Ban Mai (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Ban Mai",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637456432522218773"
+  },
+  {
+    "voice_id": "multi_female_richgirl_uranus_bigtts",
+    "display_name": "Review Phim new",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Review Phim new (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Review Phim new",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637460351541447956"
+  },
+  {
+    "voice_id": "multi_female_quanweinv_uranus_bigtts",
+    "display_name": "Bản Tin 1",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Bản Tin 1 (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Bản Tin 1",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637458743197732117"
+  },
+  {
+    "voice_id": "multi_female_stokie_uranus_bigtts",
+    "display_name": "Review Phim 4",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Review Phim 4 (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Review Phim 4",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637456729696996628"
+  },
+  {
+    "voice_id": "multi_female_sisi_uranus_bigtts",
+    "display_name": "Bản Tin nữ",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Bản Tin nữ (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Bản Tin nữ",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637455857285860629"
+  },
+  {
+    "voice_id": "multi_female_daqi_uranus_bigtts",
+    "display_name": "Review Phim 3",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Review Phim 3 (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Review Phim 3",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637451983389019409"
+  },
+  {
+    "voice_id": "multi_female_xyf04auto_uranus_bigtts",
+    "display_name": "Review Phim 2",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Review Phim 2 (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Review Phim 2",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637458743197732117"
+  },
+  {
+    "voice_id": "multi_female_kiwi_uranus_bigtts",
+    "display_name": "Sunny Idol",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Sunny Idol (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Sunny Idol",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637457995882089749"
+  },
+  {
+    "voice_id": "BV075_streaming_demon_dsp",
+    "display_name": "Kenny Đại Đế",
+    "lang": "vi",
+    "gender": "male",
+    "description": "Giọng Kenny Đại Đế (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Kenny Đại Đế",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7569442422665661712"
+  },
+  {
+    "voice_id": "th",
+    "display_name": "ThaiLand 3",
+    "lang": "th",
+    "gender": "male",
+    "description": "Giọng ThaiLand 3 (TH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "ThaiLand 3",
+      "TikTok TH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7371666742055014913"
+  },
+  {
+    "voice_id": "en_us_006",
+    "display_name": "EN US 2",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng EN US 2 (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "EN US 2",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7114563482518819329"
+  },
+  {
+    "voice_id": "en_us_002",
+    "display_name": "EN US",
+    "lang": "en",
+    "gender": "male",
+    "description": "Clean, broadcast-grade standard American male voice.",
+    "tags": [
+      "Standard",
+      "Broadcast",
+      "American"
+    ],
+    "resource_id": "7130515992936976897"
+  },
+  {
+    "voice_id": "en_female_janeamber_mars_bigtts",
+    "display_name": "Janeamber",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Janeamber (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Janeamber",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7538652405005700369"
+  },
+  {
+    "voice_id": "en_female_emotional_moon_bigtts",
+    "display_name": "Emotional",
+    "lang": "en",
+    "gender": "female",
+    "description": "Highly expressive female voice with dramatic nuances and emotional range.",
+    "tags": [
+      "Emotional",
+      "Drama",
+      "Storytelling"
+    ],
+    "resource_id": "7114563483257016833"
+  },
+  {
+    "voice_id": "BV452_streaming",
+    "display_name": "Vũ hán",
+    "lang": "zh",
+    "gender": "male",
+    "description": "Giọng Vũ hán (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Vũ hán",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7543766515837848833"
+  },
+  {
+    "voice_id": "id_female_icha_uranus_bigtts",
+    "display_name": "Icathian",
+    "lang": "id",
+    "gender": "female",
+    "description": "Giọng Icathian (ID) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Icathian",
+      "TikTok ID",
+      "Tự nhiên"
+    ],
+    "resource_id": "7587328219989249296"
+  },
+  {
+    "voice_id": "zh_female_xiaonan_lv_clone2",
+    "display_name": "旅遊主播",
+    "lang": "zh",
+    "gender": "female",
+    "description": "Giọng 旅遊主播 (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "旅遊主播",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7554226531451833617"
+  },
+  {
+    "voice_id": "ICL_ja_female_zhiyu",
+    "display_name": "Lovely Idol",
+    "lang": "ja",
+    "gender": "female",
+    "description": "Giọng Lovely Idol (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Lovely Idol",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7579078759446285584"
+  },
+  {
+    "voice_id": "ICL_ja_male_xinggan",
+    "display_name": "Xinggan",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng Xinggan (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Xinggan",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7522965008020540688"
+  },
+  {
+    "voice_id": "BV510_streaming",
+    "display_name": "English",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng English (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "English",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7081169180120060418"
+  },
+  {
+    "voice_id": "DiT_fr_male_wit",
+    "display_name": "Wit",
+    "lang": "fr",
+    "gender": "male",
+    "description": "Giọng Wit (FR) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Wit",
+      "TikTok FR",
+      "Tự nhiên"
+    ],
+    "resource_id": "7573964692587023617"
+  },
+  {
+    "voice_id": "ICL_ja_male_rap",
+    "display_name": "Rap",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng Rap (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Rap",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7573959040657591553"
+  },
+  {
+    "voice_id": "en_female_sherry",
+    "display_name": "Sherry",
+    "lang": "en",
+    "gender": "female",
+    "description": "Casual, friendly conversational American female voice.",
+    "tags": [
+      "Casual",
+      "Friendly",
+      "Natural"
+    ],
+    "resource_id": "7278146554844680706"
+  },
+  {
+    "voice_id": "ICL_jp_male_wutiaowu",
+    "display_name": "クールな青年",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng クールな青年 (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "クールな青年",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7527837025815334161"
+  },
+  {
+    "voice_id": "DiT_es_male_bilunan",
+    "display_name": "Señor entusiasta",
+    "lang": "es",
+    "gender": "male",
+    "description": "Giọng Señor entusiasta (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Señor entusiasta",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "7597943534309690641"
+  },
+  {
+    "voice_id": "DiT_es_male_agenting",
+    "display_name": "Agenting",
+    "lang": "es",
+    "gender": "male",
+    "description": "Giọng Agenting (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Agenting",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "7597890302053010704"
+  },
+  {
+    "voice_id": "DiT_de_male_koubo",
+    "display_name": "Koubo",
+    "lang": "de",
+    "gender": "male",
+    "description": "Giọng Koubo (DE) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Koubo",
+      "TikTok DE",
+      "Tự nhiên"
+    ],
+    "resource_id": "7584344912276114704"
+  },
+  {
+    "voice_id": "en_us_010",
+    "display_name": "Chrming Male",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Chrming Male (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Chrming Male",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7114563482359435778"
+  },
+  {
+    "voice_id": "BV433_streaming",
+    "display_name": "電視廣告",
+    "lang": "zh",
+    "gender": "male",
+    "description": "Giọng 電視廣告 (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "電視廣告",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7436608032152228353"
+  },
+  {
+    "voice_id": "ICL_jp_female_hatunemiku",
+    "display_name": "Hatunemiku",
+    "lang": "ja",
+    "gender": "female",
+    "description": "Giọng Hatunemiku (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Hatunemiku",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "749455601346334"
+  },
+  {
+    "voice_id": "ICL_ja_male_paoxiao",
+    "display_name": "Ơaoxiao",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng Ơaoxiao (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Ơaoxiao",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7584702432115019009"
+  },
+  {
+    "voice_id": "DiT_pt_male_wenrou",
+    "display_name": "Wenrou",
+    "lang": "pt",
+    "gender": "male",
+    "description": "Giọng Wenrou (PT) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Wenrou",
+      "TikTok PT",
+      "Tự nhiên"
+    ],
+    "resource_id": "7576131428711255297"
+  },
+  {
+    "voice_id": "ICL_jp_female_tanhua",
+    "display_name": "Tanhua",
+    "lang": "ja",
+    "gender": "female",
+    "description": "Giọng Tanhua (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Tanhua",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7522976550736760065"
+  },
+  {
+    "voice_id": "en_male_deadpool",
+    "display_name": "Deadpool",
+    "lang": "en",
+    "gender": "male",
+    "description": "Sarcastic, humorous, energetic voice full of attitude and personality.",
+    "tags": [
+      "Comic",
+      "Sarcastic",
+      "Hero"
+    ],
+    "resource_id": "7231025912261644802"
+  },
+  {
+    "voice_id": "BV421_thth_streaming_vibrato_dsp",
+    "display_name": "ThaiLand 2",
+    "lang": "th",
+    "gender": "male",
+    "description": "Giọng ThaiLand 2 (TH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "ThaiLand 2",
+      "TikTok TH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7569439521352338689"
+  },
+  {
+    "voice_id": "en-US-JennyMultilingualNeural",
+    "display_name": "Jenny",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Jenny (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Jenny",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7569439521352338689"
+  },
+  {
+    "voice_id": "en",
+    "display_name": "Male Eng",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Male Eng (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Male Eng",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7337657863390630401"
+  },
+  {
+    "voice_id": "en_male_m03_classical",
+    "display_name": "Classical Music",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Classical Music (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Classical Music",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7245192458206712322"
+  },
+  {
+    "voice_id": "en_male_dramaqueen_zachk",
+    "display_name": "Dramaaa",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Dramaaa (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Dramaaa",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "733719524381032"
+  },
+  {
+    "voice_id": "BV213_streaming",
+    "display_name": "Dramaaa",
+    "lang": "zh",
+    "gender": "male",
+    "description": "Giọng Dramaaa (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Dramaaa",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7372474337594446337"
+  },
+  {
+    "voice_id": "BV503_streaming",
+    "display_name": "Energetic Famale",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Energetic Famale (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Energetic Famale",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7081168775646548482"
+  },
+  {
+    "voice_id": "ICL_id_female_hantuperempuan",
+    "display_name": "Hantuperempuan",
+    "lang": "id",
+    "gender": "female",
+    "description": "Giọng Hantuperempuan (ID) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Hantuperempuan",
+      "TikTok ID",
+      "Tự nhiên"
+    ],
+    "resource_id": "7469006620379320848"
+  },
+  {
+    "voice_id": "zh_female_guaiqiaogirl",
+    "display_name": "Guaiqiaogirl",
+    "lang": "zh",
+    "gender": "female",
+    "description": "Giọng Guaiqiaogirl (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Guaiqiaogirl",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7473014336223449616"
+  },
+  {
+    "voice_id": "en_female_nail_artist",
+    "display_name": "Artist",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Artist (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Artist",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7393228944540963344"
+  },
+  {
+    "voice_id": "DiT_es_female_bilunv",
+    "display_name": "Female Bilunv",
+    "lang": "es",
+    "gender": "female",
+    "description": "Giọng Female Bilunv (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Female Bilunv",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "7598080655146192144"
+  },
+  {
+    "voice_id": "zh_male_tangsengdsp",
+    "display_name": "Tangsengdsp",
+    "lang": "zh",
+    "gender": "male",
+    "description": "Giọng Tangsengdsp (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Tangsengdsp",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7520150587619478801"
+  },
+  {
+    "voice_id": "DiT_de_female_jiangshi",
+    "display_name": "TieFE Dozen",
+    "lang": "de",
+    "gender": "female",
+    "description": "Giọng TieFE Dozen (DE) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "TieFE Dozen",
+      "TikTok DE",
+      "Tự nhiên"
+    ],
+    "resource_id": "7584344912292777232"
+  },
+  {
+    "voice_id": "zh_female_naying",
+    "display_name": "Naying",
+    "lang": "zh",
+    "gender": "female",
+    "description": "Giọng Naying (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Naying",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7436607833887478289"
+  },
+  {
+    "voice_id": "ICL_en_female_little_cute_dsp",
+    "display_name": "Cute Girl",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Cute Girl (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Cute Girl",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7605129105306111233"
+  },
+  {
+    "voice_id": "DiT_fr_female_soothing",
+    "display_name": "Douce",
+    "lang": "fr",
+    "gender": "female",
+    "description": "Giọng Douce (FR) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Douce",
+      "TikTok FR",
+      "Tự nhiên"
+    ],
+    "resource_id": "7573961077009042689"
+  },
+  {
+    "voice_id": "en_male_trickster_stream",
+    "display_name": "Trickster",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Trickster (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Trickster",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7189462618589893121"
+  },
+  {
+    "voice_id": "multi_male_M092_conversation_wvae_bigtts_cc",
+    "display_name": "conversation",
+    "lang": "zh",
+    "gender": "male",
+    "description": "Giọng conversation (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "conversation",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7483453668117713425"
+  },
+  {
+    "voice_id": "en_male_artistic_layne",
+    "display_name": "Mentor",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Mentor (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Mentor",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7337195454980952577"
+  },
+  {
+    "voice_id": "ICL_ja_male_bobao2",
+    "display_name": "穏やかな声優",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng 穏やかな声優 (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "穏やかな声優",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7579090923636755729"
+  },
+  {
+    "voice_id": "BV567_streaming_dsp",
+    "display_name": "เด็กเสียง",
+    "lang": "th",
+    "gender": "male",
+    "description": "Giọng เด็กเสียง (TH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "เด็กเสียง",
+      "TikTok TH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7550069260152818960"
+  },
+  {
+    "voice_id": "ICL_jp_male_yangguang",
+    "display_name": "Yangguang",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng Yangguang (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Yangguang",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "752572180004351515"
+  },
+  {
+    "voice_id": "en_male_death_rock",
+    "display_name": "Grim Rock",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Grim Rock (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Grim Rock",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7372472588859085313"
+  },
+  {
+    "voice_id": "ICL_ja_female_lengjingnv",
+    "display_name": "女性AI",
+    "lang": "ja",
+    "gender": "female",
+    "description": "Giọng 女性AI (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "女性AI",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7571602819283701009"
+  },
+  {
+    "voice_id": "ICL_es_male_emo",
+    "display_name": "Diablomalo",
+    "lang": "es",
+    "gender": "male",
+    "description": "Giọng Diablomalo (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Diablomalo",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "7568807675337723137"
+  },
+  {
+    "voice_id": "ICL_en_male_philosopher_dsp",
+    "display_name": "Narrator",
+    "lang": "en",
+    "gender": "male",
+    "description": "Deep, authoritative cinematic narrator voice. Perfect for movie recaps and documentaries.",
+    "tags": [
+      "Cinematic",
+      "Deep",
+      "Narrator"
+    ],
+    "resource_id": "7525722920161725712"
+  },
+  {
+    "voice_id": "ICL_ja_female_kuaizui02",
+    "display_name": "マネージャー",
+    "lang": "ja",
+    "gender": "female",
+    "description": "Giọng マネージャー (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "マネージャー",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7522976550736678145"
+  },
+  {
+    "voice_id": "en_us_007",
+    "display_name": "Male Profess",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Male Profess (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Male Profess",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7114563482472681986"
+  },
+  {
+    "voice_id": "ICL_en_female_ditie_dsp",
+    "display_name": "Creepy female",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Creepy female (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Creepy female",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7572089965652315393"
+  },
+  {
+    "voice_id": "en_female_soothing_mars_bigtts",
+    "display_name": "Female Teacher",
+    "lang": "en",
+    "gender": "female",
+    "description": "Warm, gentle, clear and soothing educational storytelling voice.",
+    "tags": [
+      "Soothing",
+      "Warm",
+      "Educational"
+    ],
+    "resource_id": "7526754143369760016"
+  },
+  {
+    "voice_id": "BV072_streaming",
+    "display_name": "Suaraaa",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Suaraaa (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Suaraaa",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7028847457089884674"
+  },
+  {
+    "voice_id": "ICL_es_male_jiqiren",
+    "display_name": "Male Jiqiren",
+    "lang": "es",
+    "gender": "male",
+    "description": "Giọng Male Jiqiren (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Male Jiqiren",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "7568807473923099920"
+  },
+  {
+    "voice_id": "ICL_jp_male_zhenfennan",
+    "display_name": "少年ヒーロー",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng 少年ヒーロー (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "少年ヒーロー",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7538698409633516816"
+  },
+  {
+    "voice_id": "BV075_streaming_robot_dsp",
+    "display_name": "Robot VN",
+    "lang": "vi",
+    "gender": "male",
+    "description": "Giọng Robot VN (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Robot VN",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7538698409633516816"
+  },
+  {
+    "voice_id": "multi_male_felipe_uranus_bigtts",
+    "display_name": "Giọng Nam Trầm",
+    "lang": "vi",
+    "gender": "male",
+    "description": "Giọng Giọng Nam Trầm (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Giọng Nam Trầm",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637456729696996628"
+  },
+  {
+    "voice_id": "multi_female_peiqi_uranus_bigtts",
+    "display_name": "Giọng Gái Mới Lớn",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng nữ trẻ trung, điệu đà, phong cách Gen Z năng động.",
+    "tags": [
+      "Gen Z",
+      "Điệu đà",
+      "Nữ sinh"
+    ],
+    "resource_id": "7637458789033151751"
+  },
+  {
+    "voice_id": "multi_female_xinwenjieshuo_uranus_bigtts",
+    "display_name": "Nam bản tin",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng Nam bản tin (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Nam bản tin",
+      "TikTok VI",
+      "Tự nhiên"
+    ],
+    "resource_id": "7637455039719640327"
+  },
+  {
+    "voice_id": "multi_female_tianmeijieshuo_uranus_bigtts",
+    "display_name": "Quên Tên Tự Test",
+    "lang": "vi",
+    "gender": "female",
+    "description": "Giọng nữ thuyết minh chuyên nghiệp cho các phim ngắn, drama gia đình.",
+    "tags": [
+      "Thuyết minh",
+      "Drama",
+      "Kể chuyện"
+    ],
+    "resource_id": "7637460417295469832"
+  },
+  {
+    "voice_id": "BV075_streaming",
+    "display_name": "Thanh Niên Tự Tin",
+    "lang": "vi",
+    "gender": "male",
+    "description": "Giọng nam năng động, tự tin, phát âm chuẩn, phù hợp review phim và truyện tranh.",
+    "tags": [
+      "Nam sôi nổi",
+      "Review phim",
+      "TikTok Hot"
+    ],
+    "resource_id": "7102355803792740865"
+  },
+  {
+    "voice_id": "DiT_pt_male_shangren",
+    "display_name": "Empresário Frio",
+    "lang": "pt",
+    "gender": "male",
+    "description": "Giọng Empresário Frio (PT) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Empresário Frio",
+      "TikTok PT",
+      "Tự nhiên"
+    ],
+    "resource_id": "7576131970103643408"
+  },
+  {
+    "voice_id": "ICL_jp_female_araisan",
+    "display_name": "天真爛漫な娘",
+    "lang": "ja",
+    "gender": "female",
+    "description": "Giọng 天真爛漫な娘 (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "天真爛漫な娘",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7527796800649055489"
+  },
+  {
+    "voice_id": "ICL_jp_male_dashu",
+    "display_name": "Dashu",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng Dashu (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Dashu",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7527814111502077201"
+  },
+  {
+    "voice_id": "DiT_en_female_jessie",
+    "display_name": "Jessie",
+    "lang": "en",
+    "gender": "female",
+    "description": "The iconic, upbeat viral female TikTok voice recognized worldwide.",
+    "tags": [
+      "TikTok Iconic",
+      "Viral",
+      "Upbeat"
+    ],
+    "resource_id": "7564325260414160129"
+  },
+  {
+    "voice_id": "zh_female_xiaoyue",
+    "display_name": "Xiaoyue",
+    "lang": "zh",
+    "gender": "female",
+    "description": "Giọng Xiaoyue (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Xiaoyue",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7543792542727425281"
+  },
+  {
+    "voice_id": "zh_female_angela",
+    "display_name": "暗夜蘿莉",
+    "lang": "zh",
+    "gender": "female",
+    "description": "Giọng 暗夜蘿莉 (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "暗夜蘿莉",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7473014770862395905"
+  },
+  {
+    "voice_id": "multi_zh_male_youyoujunzi_moon_bigtts_cc",
+    "display_name": "Rizki",
+    "lang": "zh",
+    "gender": "male",
+    "description": "Giọng Rizki (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Rizki",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7501234950042030608"
+  },
+  {
+    "voice_id": "BV540_streaming",
+    "display_name": "Desti",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Desti (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Desti",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7477925128651674113"
+  },
+  {
+    "voice_id": "DiT_zh_male_xionger",
+    "display_name": "XiaoChao",
+    "lang": "zh",
+    "gender": "male",
+    "description": "Giọng XiaoChao (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "XiaoChao",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7564318793716059409"
+  },
+  {
+    "voice_id": "ICL_id_male_deep_god_dsp",
+    "display_name": "Deep God",
+    "lang": "id",
+    "gender": "male",
+    "description": "Giọng Deep God (ID) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Deep God",
+      "TikTok ID",
+      "Tự nhiên"
+    ],
+    "resource_id": "7605123605034208513"
+  },
+  {
+    "voice_id": "zh_female_inspirational",
+    "display_name": "溫柔姐姐",
+    "lang": "zh",
+    "gender": "female",
+    "description": "Giọng 溫柔姐姐 (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "溫柔姐姐",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7473013595417088528"
+  },
+  {
+    "voice_id": "en_female_loba_apex",
+    "display_name": "Robaa",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Robaa (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Robaa",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7360986396594541057"
+  },
+  {
+    "voice_id": "ICL_ja_male_reborn",
+    "display_name": "厳しい先生",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng 厳しい先生 (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "厳しい先生",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7573954050379566337"
+  },
+  {
+    "voice_id": "DiT_de_female_qingsong",
+    "display_name": "Sanfte Führerin",
+    "lang": "de",
+    "gender": "female",
+    "description": "Giọng Sanfte Führerin (DE) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Sanfte Führerin",
+      "TikTok DE",
+      "Tự nhiên"
+    ],
+    "resource_id": "7584344912292760848"
+  },
+  {
+    "voice_id": "ICL_br_male_212M_LuizS",
+    "display_name": "Contra",
+    "lang": "pt",
+    "gender": "male",
+    "description": "Giọng Contra (PT) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Contra",
+      "TikTok PT",
+      "Tự nhiên"
+    ],
+    "resource_id": "7501618011829178896"
+  },
+  {
+    "voice_id": "DiT_en_male_trickster",
+    "display_name": "Trickster",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Trickster (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Trickster",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7564317234814848273"
+  },
+  {
+    "voice_id": "en_female_caroline_clone2",
+    "display_name": "Excited",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Excited (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Excited",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7232136837861478913"
+  },
+  {
+    "voice_id": "ICL_en_male_305M_JamieTr",
+    "display_name": "Tinn",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Tinn (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Tinn",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7501615071068426768"
+  },
+  {
+    "voice_id": "ICL_en_male_kevin2",
+    "display_name": "Mischief",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Mischief (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Mischief",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7438551246824280592"
+  },
+  {
+    "voice_id": "en_us_002_dsp",
+    "display_name": "Dolly famle",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Dolly famle (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Dolly famle",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7519722328935140624"
+  },
+  {
+    "voice_id": "zh_female_sistermango",
+    "display_name": "語音助理",
+    "lang": "zh",
+    "gender": "female",
+    "description": "Giọng 語音助理 (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "語音助理",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7588056140685036817"
+  },
+  {
+    "voice_id": "BV507_streaming",
+    "display_name": "Cute Boy",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Cute Boy (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Cute Boy",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7081168994673103362"
+  },
+  {
+    "voice_id": "BV029_streaming",
+    "display_name": "American Female",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng American Female (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "American Female",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "6898240012404396546"
+  },
+  {
+    "voice_id": "ICL_en_female_cc_bluetooth",
+    "display_name": "Bluetooth",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Bluetooth (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Bluetooth",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7427072447129588225"
+  },
+  {
+    "voice_id": "DiT_pt_female_youya",
+    "display_name": "Youya",
+    "lang": "pt",
+    "gender": "female",
+    "description": "Giọng Youya (PT) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Youya",
+      "TikTok PT",
+      "Tự nhiên"
+    ],
+    "resource_id": "7576144104547945729"
+  },
+  {
+    "voice_id": "ICL_en_female_lisa",
+    "display_name": "Lisa",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Lisa (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Lisa",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7491194157852004881"
+  },
+  {
+    "voice_id": "ICL_ja_male_huolinan2",
+    "display_name": "爽やかメンズ",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng 爽やかメンズ (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "爽やかメンズ",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7510072022672624913"
+  },
+  {
+    "voice_id": "BV567_streaming_demon_dsp",
+    "display_name": "Thailand",
+    "lang": "th",
+    "gender": "male",
+    "description": "Giọng Thailand (TH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Thailand",
+      "TikTok TH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7569443462295178512"
+  },
+  {
+    "voice_id": "BV568_streaming",
+    "display_name": "นภา",
+    "lang": "th",
+    "gender": "male",
+    "description": "Giọng นภา (TH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "นภา",
+      "TikTok TH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7569443462295178512"
+  },
+  {
+    "voice_id": "multi_female_zendaya_uranus_bigtts",
+    "display_name": "สุนิสา",
+    "lang": "th",
+    "gender": "female",
+    "description": "Giọng สุนิสา (TH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "สุนิสา",
+      "TikTok TH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7569443462295178512"
+  },
+  {
+    "voice_id": "ICL_en_male_317M_BrianJW",
+    "display_name": "BrianJW",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng BrianJW (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "BrianJW",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7501615796456526352"
+  },
+  {
+    "voice_id": "DiT_fr_female_sharp",
+    "display_name": "sharp",
+    "lang": "fr",
+    "gender": "female",
+    "description": "Giọng sharp (FR) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "sharp",
+      "TikTok FR",
+      "Tự nhiên"
+    ],
+    "resource_id": "7573963007588371728"
+  },
+  {
+    "voice_id": "ICL_en_male_310M_CoreyK",
+    "display_name": "Kai",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Kai (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Kai",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7501615396093432337"
+  },
+  {
+    "voice_id": "ICL_en_male_captain",
+    "display_name": "Captain",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Captain (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Captain",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7510080106199665937"
+  },
+  {
+    "voice_id": "ICL_ja_female_narrator",
+    "display_name": "narrator",
+    "lang": "ja",
+    "gender": "female",
+    "description": "Giọng narrator (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "narrator",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7573956962279361809"
+  },
+  {
+    "voice_id": "multi_female_wenjingmaomao_moon_bigtts_cc",
+    "display_name": "Daiana",
+    "lang": "en",
+    "gender": "female",
+    "description": "Giọng Daiana (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Daiana",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7501234865447113233"
+  },
+  {
+    "voice_id": "DiT_zh_male_paoxiaoge",
+    "display_name": "paoxiaoge",
+    "lang": "zh",
+    "gender": "male",
+    "description": "Giọng paoxiaoge (ZH) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "paoxiaoge",
+      "TikTok ZH",
+      "Tự nhiên"
+    ],
+    "resource_id": "7564296190074948865"
+  },
+  {
+    "voice_id": "ICL_ja_male_gaoxiao",
+    "display_name": "gaoxiao",
+    "lang": "ja",
+    "gender": "male",
+    "description": "Giọng gaoxiao (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "gaoxiao",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7522976550736661761"
+  },
+  {
+    "voice_id": "ICL_ja_male_cute",
+    "display_name": "cute",
+    "lang": "ja",
+    "gender": "female",
+    "description": "Giọng cute (JA) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "cute",
+      "TikTok JA",
+      "Tự nhiên"
+    ],
+    "resource_id": "7573955139086667009"
+  },
+  {
+    "voice_id": "ICL_es_female_tt_Vivi",
+    "display_name": "Lía",
+    "lang": "es",
+    "gender": "female",
+    "description": "Giọng Lía (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Lía",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "7501616990008644113"
+  },
+  {
+    "voice_id": "ICL_es_male_tt_EdgarRu",
+    "display_name": "EdgarRu",
+    "lang": "es",
+    "gender": "male",
+    "description": "Giọng EdgarRu (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "EdgarRu",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "7501616889173381633"
+  },
+  {
+    "voice_id": "ICL_es_female_tt_RosaW",
+    "display_name": "Lina",
+    "lang": "es",
+    "gender": "female",
+    "description": "Giọng Lina (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Lina",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "75016171499039011"
+  },
+  {
+    "voice_id": "ICL_es_male_shenchen",
+    "display_name": "Lavana",
+    "lang": "es",
+    "gender": "male",
+    "description": "Giọng Lavana (ES) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Lavana",
+      "TikTok ES",
+      "Tự nhiên"
+    ],
+    "resource_id": "7568807534438468865"
+  },
+  {
+    "voice_id": "ICL_en_male_oogie2",
+    "display_name": "Oogie",
+    "lang": "en",
+    "gender": "male",
+    "description": "Giọng Oogie (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Oogie",
+      "TikTok EN",
+      "Tự nhiên"
+    ],
+    "resource_id": "7438551608746578449"
+  },
+  {
+    "voice_id": "id_male_putra_uranus_bigtts",
+    "display_name": "Uranus",
+    "lang": "id",
+    "gender": "male",
+    "description": "Giọng Uranus (ID) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
+    "tags": [
+      "Uranus",
+      "TikTok ID",
+      "Tự nhiên"
+    ],
+    "resource_id": "7587328479071309073"
+  },
+  {
+    "voice_id": "BV560_streaming",
+    "display_name": "Alex Đại Đế",
+    "lang": "vi",
+    "gender": "male",
+    "description": "Giọng nam trầm ấm, quyền uy, cực kỳ phù hợp phim hành động, khoa học viễn tưởng.",
+    "tags": [
+      "Nam trầm",
+      "Hành động",
+      "Kịch tính"
+    ],
+    "resource_id": "7483736167565758992"
+  }
+]
