@@ -1,6 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { RoiOverlay } from '../roi/RoiOverlay';
-import { ViewerToolbar } from './ViewerToolbar';
 import { VideoTransformOverlay } from './VideoTransformOverlay';
 import { RegionTrackV1, SubtitleCueV1 } from '../../types/api';
 import {
@@ -13,6 +12,10 @@ import {
   Upload,
   Volume2,
   VolumeX,
+  Move,
+  Crop,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 
 interface VideoPlayerProps {
@@ -25,34 +28,22 @@ interface VideoPlayerProps {
   onDurationChange: (duration: number) => void;
   onTogglePlay: () => void;
   onUpdateRegion: (region: RegionTrackV1) => void;
-  onAutoDetectRoi?: () => void;
   onPickLocalVideo?: (file: File) => void;
 
   cues?: SubtitleCueV1[];
   aspectRatio: AspectRatioType;
-  onAspectRatioChange: (ratio: AspectRatioType) => void;
   fitMode?: 'contain' | 'cover';
-  onToggleFitMode?: () => void;
   isFlippedH: boolean;
-  onToggleFlipH: () => void;
   isFlippedV: boolean;
-  onToggleFlipV: () => void;
   rotation: number;
-  onRotate: () => void;
   onRotationChange?: (rotation: number) => void;
   zoomLevel: ZoomMode;
   onZoomChange: (zoom: ZoomMode) => void;
-  onResetTransform: () => void;
   previewMask: boolean;
-  onTogglePreviewMask: () => void;
   maskStyle?: MaskStyleType;
-  onMaskStyleChange?: (style: MaskStyleType) => void;
   blurStrength?: number;
-  onBlurStrengthChange?: (strength: number) => void;
   showSubtitleOverlay: boolean;
-  onToggleSubtitleOverlay: () => void;
   subtitlePlacement?: SubtitlePlacementMode;
-  onSubtitlePlacementChange?: (mode: SubtitlePlacementMode) => void;
   videoPosition?: { x: number; y: number };
   onPositionChange?: (pos: { x: number; y: number }) => void;
   interactionMode?: 'video' | 'roi';
@@ -133,7 +124,6 @@ const getCanvasAspectRatio = (
 
 const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   videoUrl,
-  videoTitle,
   region,
   currentTime,
   isPlaying,
@@ -145,29 +135,18 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
 
   cues = [],
   aspectRatio = 'original',
-  onAspectRatioChange,
   fitMode = 'contain',
-  onToggleFitMode,
   isFlippedH,
-  onToggleFlipH,
   isFlippedV,
-  onToggleFlipV,
   rotation,
-  onRotate,
   onRotationChange,
   zoomLevel,
   onZoomChange,
-  onResetTransform,
   previewMask,
-  onTogglePreviewMask,
   maskStyle = 'feather_tight',
-  onMaskStyleChange,
   blurStrength = 20,
-  onBlurStrengthChange,
   showSubtitleOverlay,
-  onToggleSubtitleOverlay,
   subtitlePlacement = 'roi',
-  onSubtitlePlacementChange,
   videoPosition = { x: 0, y: 0 },
   onPositionChange,
   interactionMode = 'video',
@@ -195,7 +174,7 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
 
   const [volume, setVolume] = useState<number>(1.0);
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [showRoi, setShowRoi] = useState<boolean>(true);
+  const showRoi = true;
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
   const handleToggleFullscreen = useCallback(() => {
@@ -371,44 +350,106 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
 
   return (
     <div className="w-full h-full flex-1 min-h-0 min-w-0 bg-slate-950 flex flex-col select-none overflow-hidden relative">
-      {/* 1. Thanh Viewer Header Bar gắn cố định phía trên Viewport */}
+      {/* 1. Mini Floating Canvas HUD: Kéo Video / Quét Sub + Zoom + Toàn Màn Hình */}
       {videoUrl && (
-        <ViewerToolbar
-          videoTitle={videoTitle}
-          videoDimensions={videoDimensions}
-          aspectRatio={aspectRatio}
-          onAspectRatioChange={onAspectRatioChange}
-          fitMode={fitMode}
-          onToggleFitMode={onToggleFitMode}
-          isFlippedH={isFlippedH}
-          onToggleFlipH={onToggleFlipH}
-          isFlippedV={isFlippedV}
-          onToggleFlipV={onToggleFlipV}
-          rotation={rotation}
-          onRotate={onRotate}
-          onRotationChange={onRotationChange}
-          zoomLevel={zoomLevel}
-          onZoomChange={onZoomChange}
-          onResetTransform={onResetTransform}
-          showRoi={showRoi}
-          onToggleRoi={() => setShowRoi(!showRoi)}
-          previewMask={previewMask}
-          onTogglePreviewMask={onTogglePreviewMask}
-          maskStyle={maskStyle}
-          onMaskStyleChange={onMaskStyleChange}
-          blurStrength={blurStrength}
-          onBlurStrengthChange={onBlurStrengthChange}
-          showSubtitleOverlay={showSubtitleOverlay}
-          onToggleSubtitleOverlay={onToggleSubtitleOverlay}
-          subtitlePlacement={subtitlePlacement}
-          onSubtitlePlacementChange={onSubtitlePlacementChange}
-          isFullscreen={isFullscreen}
-          onToggleFullscreen={handleToggleFullscreen}
-          videoPosition={videoPosition}
-          onPositionChange={onPositionChange}
-          interactionMode={interactionMode}
-          onInteractionModeChange={onInteractionModeChange}
-        />
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-slate-900/85 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-slate-800 text-xs shadow-xl">
+          {/* Chuyển chế độ: Kéo Video vs Quét Sub */}
+          <div className="flex items-center bg-slate-950 p-0.5 rounded-full border border-slate-800">
+            <button
+              type="button"
+              onClick={() => onInteractionModeChange?.('video')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium transition ${
+                interactionMode === 'video'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Chế độ Kéo di chuyển / Co giãn / Xoay Video (Chuẩn CapCut)"
+            >
+              <Move className="w-3 h-3" />
+              <span>Kéo Video</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onInteractionModeChange?.('roi')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium transition ${
+                interactionMode === 'roi'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Chế độ Quét Sub: Điều chỉnh khung nhận diện phụ đề (ROI)"
+            >
+              <Crop className="w-3 h-3" />
+              <span>Quét Sub</span>
+            </button>
+          </div>
+
+          {/* Huy hiệu Vị trí X, Y (Nhấp để reset về 0, 0) */}
+          {(videoPosition.x !== 0 || videoPosition.y !== 0) && (
+            <button
+              type="button"
+              onClick={() => onPositionChange?.({ x: 0, y: 0 })}
+              className="hidden sm:flex items-center gap-1 bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 px-2 py-0.5 rounded-full text-[10px] font-mono hover:bg-indigo-900 transition"
+              title="Nhấp để đặt lại video về tâm (0, 0)"
+            >
+              <span>X: {videoPosition.x}</span>
+              <span>Y: {videoPosition.y}</span>
+            </button>
+          )}
+
+          <div className="h-3.5 w-px bg-slate-700" />
+
+          {/* Zoom Canvas */}
+          <div className="flex items-center gap-1 text-[11px] font-mono">
+            <button
+              type="button"
+              onClick={() => onZoomChange('fit')}
+              className={`px-2 py-0.5 rounded-md transition ${
+                zoomLevel === 'fit'
+                  ? 'bg-indigo-600 text-white font-bold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Vừa vặn màn hình"
+            >
+              Fit
+            </button>
+            <button
+              type="button"
+              onClick={() => onZoomChange(1.0)}
+              className={`px-1.5 py-0.5 rounded-md transition ${
+                zoomLevel === 1.0
+                  ? 'bg-indigo-600 text-white font-bold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Tỉ lệ 100%"
+            >
+              100%
+            </button>
+            <button
+              type="button"
+              onClick={() => onZoomChange(1.5)}
+              className={`px-1.5 py-0.5 rounded-md transition hidden sm:inline ${
+                zoomLevel === 1.5
+                  ? 'bg-indigo-600 text-white font-bold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Phóng to 150%"
+            >
+              150%
+            </button>
+          </div>
+
+          <div className="h-3.5 w-px bg-slate-700" />
+
+          {/* Toàn màn hình */}
+          <button
+            type="button"
+            onClick={handleToggleFullscreen}
+            className="p-1 rounded text-slate-400 hover:text-white transition"
+            title={isFullscreen ? 'Thoát toàn màn hình (F)' : 'Toàn màn hình (F)'}
+          >
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+        </div>
       )}
 
       {/* 2. Khung Viewport Video Tự Động Co Giãn Aspect-Fit với Canvas CapCut */}
@@ -423,7 +464,7 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
             className={`relative bg-black flex items-center justify-center transition-all duration-100 ${
               isFullscreen
                 ? 'w-screen h-screen max-w-none max-h-none rounded-none border-none'
-                : 'rounded-xl border border-slate-800/90 shadow-2xl'
+                : 'rounded-none border border-slate-800/90 shadow-2xl'
             }`}
             style={
               isFullscreen
@@ -436,31 +477,35 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
                   }
             }
           >
-            {/* === Wrapper Transform: CHỈ chứa Video (Giữ bo góc và clip video) === */}
-            {/* Zoom/Xoay/Lật chỉ ảnh hưởng video, không ảnh hưởng overlay */}
+            {/* === 1. Lớp Khung Chuẩn (Canvas Bounds): Cố định theo khung chuẩn góc vuông, clip 100% phần video tràn ra ngoài === */}
             <div
-              className="relative w-full h-full overflow-hidden rounded-xl"
-              style={contentTransformStyle}
+              className="absolute inset-0 overflow-hidden cursor-pointer rounded-none"
               onClick={handleVideoClick}
             >
-              {/* Thẻ Video HTML5 */}
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                crossOrigin="anonymous"
-                playsInline
-                style={{ objectFit: fitMode === 'cover' ? 'cover' : 'contain' }}
-                className="w-full h-full block cursor-pointer"
-                onLoadedMetadata={(e) => {
-                  const target = e.currentTarget;
-                  setVideoDimensions({ width: target.videoWidth, height: target.videoHeight });
-                  onDurationChange(target.duration);
-                }}
-                onTimeUpdate={(e) => {
-                  onTimeUpdate(e.currentTarget.currentTime);
-                }}
-                onEnded={() => onTogglePlay()}
-              />
+              {/* Wrapper Transform: Chứa thẻ video, thực hiện kéo/phóng to/xoay/lật */}
+              <div
+                className="w-full h-full"
+                style={contentTransformStyle}
+              >
+                {/* Thẻ Video HTML5 */}
+                <video
+                  ref={videoRef}
+                  src={videoUrl}
+                  crossOrigin="anonymous"
+                  playsInline
+                  style={{ objectFit: fitMode === 'cover' ? 'cover' : 'contain' }}
+                  className="w-full h-full block cursor-pointer"
+                  onLoadedMetadata={(e) => {
+                    const target = e.currentTarget;
+                    setVideoDimensions({ width: target.videoWidth, height: target.videoHeight });
+                    onDurationChange(target.duration);
+                  }}
+                  onTimeUpdate={(e) => {
+                    onTimeUpdate(e.currentTarget.currentTime);
+                  }}
+                  onEnded={() => onTogglePlay()}
+                />
+              </div>
             </div>
 
             {/* === 2. Lớp Phủ Biến Đổi Video Chuẩn CapCut (Kéo di chuyển, 8 mấu co giãn, 1 mấu xoay) === */}

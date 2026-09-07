@@ -9,6 +9,9 @@ import {
   DownloadQueueListResponse,
   PlatformAuthStatusResponse,
   VideoSearchResultItem,
+  ProxyStatusResponse,
+  ProxyPoolStatusResponse,
+  XrayStatusResponse,
 } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
 import { EpisodeSelectorGrid } from './EpisodeSelectorGrid';
@@ -23,6 +26,7 @@ import {
   Shield,
   Wifi,
   Gauge,
+  Terminal,
   RefreshCw,
   Smartphone,
   Copy,
@@ -51,6 +55,7 @@ import {
   Clock,
   Flame,
   Activity,
+  ShieldCheck,
 } from 'lucide-react';
 import { appLogger, useAppLoggerCount } from '../common/GlobalActivityLogger';
 
@@ -173,14 +178,136 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
 
   // =========================================================================
   // 5. STATE: DEVICE SETTINGS & PROXY
-  // =========================================================================
+  const [networkMode, setNetworkMode] = useState<'proxy' | 'direct'>(() => {
+    const versionKey = 'sls_network_mode_pref_v2';
+    const hasExplicitPref = localStorage.getItem(versionKey);
+    if (hasExplicitPref) {
+      return (localStorage.getItem('sls_network_mode') as 'proxy' | 'direct') || 'direct';
+    }
+    // Mặc định luôn là IP Trực Tiếp (Direct IP)
+    localStorage.setItem('sls_network_mode', 'direct');
+    return 'direct';
+  });
+
+  const handleToggleNetworkMode = (mode: 'proxy' | 'direct') => {
+    setNetworkMode(mode);
+    localStorage.setItem('sls_network_mode', mode);
+    localStorage.setItem('sls_network_mode_pref_v2', 'true');
+    appLogger.info('network', `Đã chuyển sang chế độ: ${mode === 'direct' ? '⚡ Dùng IP Trực Tiếp (Không Proxy)' : '🌐 Dùng Proxy (Auto-Xray / Custom)'}`);
+  };
+
   const [proxyUrl, setProxyUrl] = useState(() => localStorage.getItem('sls_proxy_url') || '');
   const [rateLimitDelay, setRateLimitDelay] = useState<number>(() => {
     const saved = localStorage.getItem('sls_rate_limit_delay');
     return saved ? parseFloat(saved) : 2.0;
   });
-  const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; ip?: string; latency_ms?: number; error?: string } | null>(null);
+  const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; ip?: string; latency_ms?: number; error?: string; note?: string; is_standby?: boolean } | null>(null);
   const [isTestingProxy, setIsTestingProxy] = useState(false);
+  const [proxyStatus, setProxyStatus] = useState<ProxyStatusResponse | null>(null);
+  const [isLoadingProxyStatus, setIsLoadingProxyStatus] = useState<boolean>(false);
+
+  const loadProxyStatus = async (urlToCheck?: string) => {
+    setIsLoadingProxyStatus(true);
+    try {
+      const res = await apiClient.getProxyStatus(urlToCheck !== undefined ? urlToCheck : proxyUrl);
+      setProxyStatus(res);
+    } catch {
+      // ignore
+    } finally {
+      setIsLoadingProxyStatus(false);
+    }
+  };
+
+  const [proxyPoolStatus, setProxyPoolStatus] = useState<ProxyPoolStatusResponse | null>(null);
+  const [cdnDirectBypass, setCdnDirectBypass] = useState<boolean>(() => {
+    return localStorage.getItem('sls_cdn_direct_bypass') === 'true';
+  });
+  const [showTunnelConsole, setShowTunnelConsole] = useState<boolean>(true);
+
+  const isDownloading = Boolean(
+    activeTaskId ||
+    queueTasks.some((t) => t.status === 'running') ||
+    taskStatus?.status === 'running'
+  );
+
+  const loadProxyPoolStatus = async () => {
+    try {
+      const res = await apiClient.getProxyPoolStatus();
+      setProxyPoolStatus(res);
+    } catch {
+      // ignore
+    }
+  };
+
+  // =========================================================================
+  // XRAY EMBEDDED ENGINE (ZERO-SETUP AUTO PROXY)
+  // =========================================================================
+  const [xrayStatus, setXrayStatus] = useState<XrayStatusResponse | null>(null);
+  const [isRefreshingXray, setIsRefreshingXray] = useState<boolean>(false);
+  const [autoXrayEnabled, setAutoXrayEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('sls_auto_xray_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const loadXrayStatus = async () => {
+    try {
+      const res = await apiClient.getXrayStatus();
+      setXrayStatus(res);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleRefreshXrayNodes = async () => {
+    setIsRefreshingXray(true);
+    try {
+      const res = await apiClient.refreshXrayNodes();
+      setXrayStatus(res);
+      appLogger.info('proxy', `Đã sàng lọc và chọn node nhanh nhất: ${res.active_node?.name || 'Tự động'}`);
+    } catch (err: any) {
+      appLogger.warn('proxy', `Lỗi khi quét node Xray: ${err.message}`);
+    } finally {
+      setIsRefreshingXray(false);
+    }
+  };
+
+  const handleToggleAutoXray = async (enabled: boolean) => {
+    setAutoXrayEnabled(enabled);
+    localStorage.setItem('sls_auto_xray_enabled', enabled ? 'true' : 'false');
+    try {
+      await apiClient.toggleXray(enabled);
+      loadXrayStatus();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleSwitchXrayNode = async (nodeName: string) => {
+    try {
+      await apiClient.switchXrayNode(nodeName);
+      loadXrayStatus();
+    } catch (err: any) {
+      alert(`Lỗi chuyển node: ${err?.message}`);
+    }
+  };
+
+  void xrayStatus;
+  void isRefreshingXray;
+  void handleRefreshXrayNodes;
+  void handleToggleAutoXray;
+  void handleSwitchXrayNode;
+
+
+  useEffect(() => {
+    loadProxyPoolStatus();
+    loadXrayStatus();
+    if (!isDownloading) return;
+    const timer = setInterval(() => {
+      loadProxyPoolStatus();
+      loadXrayStatus();
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [isDownloading]);
 
   // Device identity
   const [deviceInfo, setDeviceInfo] = useState<DeviceStatusInfo | null>(null);
@@ -258,6 +385,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
   useEffect(() => {
     loadDeviceInfo();
     loadAuthStatus();
+    loadProxyStatus();
     fetchQueueTasks(false);
 
     apiClient
@@ -449,13 +577,16 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
           auto_create_project: autoCreateProject,
           source_language: sourceLang,
           target_language: targetLang,
-          proxy: proxyUrl.trim() || null,
+          proxy: networkMode === 'direct' ? null : (proxyUrl.trim() || null),
+          cdn_direct_bypass: cdnDirectBypass,
           rate_limit_delay: rateLimitDelay,
           rotate_device_each_ep: rotationInterval > 0,
           rotation_interval: rotationInterval,
           target_resolution: selectedResolution,
           concurrency: concurrency,
           cookie_source: cookieSource,
+          auto_xray: networkMode === 'direct' ? false : (autoXrayEnabled && (!proxyUrl || proxyUrl.includes('10809'))),
+          strict_proxy: networkMode !== 'direct',
         });
         successCount++;
       } catch (e: any) {
@@ -603,6 +734,10 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     localStorage.setItem('sls_rotation_interval', String(rotationInterval));
     localStorage.setItem('sls_download_concurrency', String(concurrency));
     localStorage.setItem('sls_cookie_source', cookieSource);
+    if (outputDir.trim()) {
+      localStorage.setItem('sls_custom_output_dir', outputDir.trim());
+      localStorage.setItem('sls_output_dir', outputDir.trim());
+    }
 
     try {
       const res = await apiClient.addToQueue({
@@ -614,13 +749,16 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
         auto_create_project: autoCreateProject,
         source_language: sourceLang,
         target_language: targetLang,
-        proxy: proxyUrl.trim() || null,
+        proxy: networkMode === 'direct' ? null : (proxyUrl.trim() || null),
+        cdn_direct_bypass: cdnDirectBypass,
         rate_limit_delay: rateLimitDelay,
         rotate_device_each_ep: rotationInterval > 0,
         rotation_interval: rotationInterval,
         target_resolution: selectedResolution,
         concurrency: concurrency,
         cookie_source: cookieSource,
+        auto_xray: networkMode === 'direct' ? false : (autoXrayEnabled && (!proxyUrl || proxyUrl.includes('10809'))),
+        strict_proxy: networkMode !== 'direct',
       });
       showQueueFeedback(`Đã thêm "${targetInfo.title}" (${selectedEpisodes.length} tập) vào hàng đợi tải (Vị trí #${res.position})!`);
       setActiveTab('queue');
@@ -774,6 +912,10 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     localStorage.setItem('sls_rotation_interval', String(rotationInterval));
     localStorage.setItem('sls_download_concurrency', String(concurrency));
     localStorage.setItem('sls_cookie_source', cookieSource);
+    if (outputDir.trim()) {
+      localStorage.setItem('sls_custom_output_dir', outputDir.trim());
+      localStorage.setItem('sls_output_dir', outputDir.trim());
+    }
 
     try {
       await apiClient.startDownload({
@@ -784,8 +926,9 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
         end_ep: actualEnd,
         auto_create_project: autoCreateProject,
         source_language: sourceLang,
-        target_language: targetLang,
-        proxy: proxyUrl.trim() || null,
+        proxy: networkMode === 'direct' ? null : (proxyUrl.trim() || null),
+        strict_proxy: networkMode !== 'direct',
+        cdn_direct_bypass: cdnDirectBypass,
         rate_limit_delay: rateLimitDelay,
         rotate_device_each_ep: rotationInterval > 0,
         rotation_interval: rotationInterval,
@@ -871,11 +1014,13 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     try {
       const res = await apiClient.testProxy(proxyUrl.trim());
       setProxyTestResult(res);
+      loadProxyStatus(proxyUrl.trim());
     } catch (err: any) {
       setProxyTestResult({
         ok: false,
         error: err?.message || 'Lỗi kết nối kiểm tra proxy',
       });
+      loadProxyStatus(proxyUrl.trim());
     } finally {
       setIsTestingProxy(false);
     }
@@ -949,8 +1094,100 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
           </div>
         </div>
 
-        {/* Phải: Trạng thái Hàng đợi + Server + Nhật Ký */}
+        {/* Phải: Nút Gạt Mạng (IP Trực Tiếp ⮂ Proxy) + Trạng thái Hàng đợi + Server + Nhật Ký */}
         <div className="flex items-center gap-2.5">
+          {/* NÚT GẠT CHUYỂN ĐỔI: IP TRỰC TIẾP ⮂ DÙNG PROXY */}
+          <div className="flex items-center p-0.5 bg-slate-950 border border-slate-800 rounded-xl text-xs select-none shadow-inner">
+            <button
+              type="button"
+              onClick={() => handleToggleNetworkMode('direct')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-semibold transition ${
+                networkMode === 'direct'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Gạt sang đây để tải trực tiếp bằng mạng nhà (Tối đa tốc độ, không qua proxy, 0% RAM)"
+            >
+              <Zap className={`w-3.5 h-3.5 ${networkMode === 'direct' ? 'text-amber-400 animate-pulse' : 'text-slate-500'}`} />
+              <span>⚡ IP Trực Tiếp</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleToggleNetworkMode('proxy')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-semibold transition ${
+                networkMode === 'proxy'
+                  ? 'bg-indigo-600 text-white border border-indigo-500 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Gạt sang đây để bật proxy ẩn danh và vượt tường lửa (Auto-Xray / Custom Proxy)"
+            >
+              <Shield className={`w-3.5 h-3.5 ${networkMode === 'proxy' ? 'text-indigo-200' : 'text-slate-500'}`} />
+              <span>🌐 Dùng Proxy</span>
+            </button>
+          </div>
+
+          {/* Proxy / Auto-Xray Network Status Badge */}
+          {networkMode === 'direct' ? (
+            <div
+              onClick={() => setActiveTab('settings')}
+              className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] cursor-pointer transition select-none bg-amber-950/40 border-amber-500/40 text-amber-300 hover:bg-amber-900/50"
+              title="Đang dùng IP mạng nhà trực tiếp (Direct Connection) - Tối đa tốc độ, không qua proxy"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span>Mạng: <strong className="text-amber-200">IP Trực Tiếp</strong></span>
+            </div>
+          ) : (
+            <div
+              onClick={() => setActiveTab('settings')}
+              className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] cursor-pointer transition select-none ${
+                autoXrayEnabled
+                  ? xrayStatus?.running
+                    ? 'bg-emerald-950/70 border-emerald-500/60 text-emerald-300 hover:bg-emerald-900/60'
+                    : 'bg-indigo-950/70 border-indigo-600/60 text-indigo-300 hover:bg-indigo-900/60'
+                  : proxyStatus?.is_alive
+                  ? 'bg-emerald-950/70 border-emerald-600/60 text-emerald-300 hover:bg-emerald-900/60'
+                  : proxyUrl.trim()
+                  ? 'bg-rose-950/70 border-rose-600/60 text-rose-300 hover:bg-rose-900/60'
+                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+              title={
+                autoXrayEnabled
+                  ? xrayStatus?.running
+                    ? `Auto-Xray đang kích hoạt (${xrayStatus.active_node?.name || 'Fast Node'} - ${xrayStatus.active_node?.latency_ms ?? '?'}ms)`
+                    : `Auto-Xray ở chế độ Chờ (${xrayStatus?.quality_nodes_count || 0} node chất lượng sẵn sàng - Tự kích hoạt khi tải)`
+                  : proxyStatus?.is_alive
+                  ? `Proxy ${proxyStatus.proxy_url} đang hoạt động tốt (${proxyStatus.latency_ms ?? '?'} ms)`
+                  : proxyUrl.trim()
+                  ? `Proxy ${proxyUrl} đang offline. Chế độ Nghiêm Ngặt (Zero-Leak) sẽ chặn kết nối để bảo vệ tuyệt đối IP thật.`
+                  : 'Đang kết nối tải trực tiếp bằng IP máy (Direct IP)'
+              }
+            >
+              <Zap className={`w-3.5 h-3.5 ${
+                autoXrayEnabled
+                  ? xrayStatus?.running ? 'text-emerald-400 animate-pulse' : 'text-indigo-400'
+                  : proxyStatus?.is_alive ? 'text-emerald-400' : proxyUrl.trim() ? 'text-rose-400' : 'text-slate-500'
+              }`} />
+              <span>
+                {autoXrayEnabled ? (
+                  xrayStatus?.running ? (
+                    <>Auto-Xray: <strong className="text-emerald-300">{xrayStatus.active_node?.name?.slice(0, 15) || 'Active'} ({xrayStatus.active_node?.latency_ms ?? '?'}ms)</strong></>
+                  ) : (
+                    <>Auto-Xray: <strong className="text-indigo-300">Standby ({xrayStatus?.quality_nodes_count || 0} node)</strong></>
+                  )
+                ) : isLoadingProxyStatus ? (
+                  'Đang kiểm tra...'
+                ) : proxyStatus?.is_alive ? (
+                  <>Proxy: <strong className="text-emerald-300">Online</strong></>
+                ) : proxyUrl.trim() ? (
+                  <>Proxy: <strong className="text-rose-300">Offline (Kill-Switch)</strong></>
+                ) : (
+                  <>Mạng: <strong className="text-slate-300">Direct IP</strong></>
+                )}
+              </span>
+            </div>
+          )}
+
           {/* Concurrency badge */}
           <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-slate-300">
             <Zap className="w-3.5 h-3.5 text-amber-400" />
@@ -1688,8 +1925,13 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                         type="text"
                         value={outputDir}
                         onChange={(e) => {
-                          setOutputDir(e.target.value);
+                          const val = e.target.value;
+                          setOutputDir(val);
                           setDirValidation(null);
+                          if (val.trim()) {
+                            localStorage.setItem('sls_custom_output_dir', val.trim());
+                            localStorage.setItem('sls_output_dir', val.trim());
+                          }
                         }}
                         onBlur={(e) => handleValidateDirectory(e.target.value)}
                         placeholder="uploads hoặc D:\Phim\..."
@@ -1946,12 +2188,246 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                     />
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                    <span>{taskStatus.message || 'Đang bóc tách và giải mã luồng video...'}</span>
-                    <span className="font-bold text-emerald-400">{(taskStatus.progress_percent || 0).toFixed(1)}%</span>
+                    <span className="truncate max-w-[70%]">{taskStatus.message || 'Đang bóc tách và giải mã luồng video...'}</span>
+                    <div className="flex items-center gap-2.5">
+                      {taskStatus.speed_mbps !== undefined && taskStatus.speed_mbps > 0 && (
+                        <span className="text-cyan-400 font-semibold flex items-center gap-1">
+                          <Activity className="w-3 h-3 text-cyan-400" />
+                          {taskStatus.speed_mbps} MB/s
+                        </span>
+                      )}
+                      <span className="font-bold text-emerald-400">{(taskStatus.progress_percent || 0).toFixed(1)}%</span>
+                    </div>
                   </div>
                 </div>
               </div>
             )}
+
+            {/* THÔNG BÁO KẾT NỐI MẠNG: IP TRỰC TIẾP HOẶC PROXY */}
+            {networkMode === 'direct' ? (
+              <div className="p-3 bg-amber-950/40 border border-amber-500/40 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 text-amber-200 animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>
+                    Chế độ: <strong>⚡ Tải Trực Tiếp (Direct Connection)</strong>. Đang dùng đường truyền mạng nhà để tải với tốc độ gốc tối đa, không qua proxy, 0% RAM.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleNetworkMode('proxy')}
+                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-xs transition shadow cursor-pointer active:scale-95"
+                  title="Bấm để kích hoạt Auto-Xray vượt chặn và bảo vệ IP"
+                >
+                  🌐 Gạt Sang Dùng Proxy
+                </button>
+              </div>
+            ) : (
+              Boolean(proxyUrl.trim() && proxyStatus && !proxyStatus.is_alive) && (
+                autoXrayEnabled && (proxyUrl.includes('10809') || proxyUrl.includes('10808') || proxyStatus?.is_standby) ? (
+                  <div className="p-3 bg-indigo-950/60 border border-indigo-500/40 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 text-indigo-200 animate-in fade-in">
+                    <div className="flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <span>
+                        Động cơ Auto-Xray đang ở <strong>Chế Độ Chờ (Standby)</strong>: Cổng {proxyUrl.includes('10808') ? '10808' : '10809'} sẽ tự động kích hoạt khi bạn bấm Bắt Đầu Tải (0% RAM lúc nhàn rỗi).
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 bg-emerald-950 border border-emerald-700/60 text-emerald-300 rounded font-mono font-bold text-[11px]">
+                        ⚡ Node sẵn sàng: {xrayStatus?.active_node?.latency_ms || 43}ms
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProxyUrl('');
+                          localStorage.setItem('sls_proxy_url', '');
+                          setProxyTestResult(null);
+                          loadProxyStatus('');
+                        }}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] transition cursor-pointer"
+                        title="Auto-Xray vẫn tự động hoạt động ngầm kể cả khi ô URL Proxy trống"
+                      >
+                        Dọn dẹp ô URL Proxy
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-950/70 border border-amber-600/70 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 text-amber-200 animate-in fade-in">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        Proxy <strong>{proxyUrl}</strong> đang offline (Chưa bật v2rayN/Clash). Kill-Switch đang chặn để không rò rỉ IP.
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleNetworkMode('direct')}
+                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs transition shadow cursor-pointer active:scale-95"
+                      >
+                        ⚡ Chuyển Sang Tải Trực Tiếp (Không Cần Proxy)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('settings')}
+                        className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition cursor-pointer"
+                      >
+                        Cài Đặt Proxy
+                      </button>
+                    </div>
+                  </div>
+                )
+              )
+            )}
+
+            {/* Giám Sát Băng Thông & Log Tunnel Realtime (Lấy cảm hứng từ ProxyRouter WPF) */}
+            <div className="p-4 bg-slate-900/90 border border-slate-800 rounded-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2">
+                  {Boolean(proxyPoolStatus?.is_active || (isDownloading && (proxyPoolStatus?.active_leases ?? 0) > 0)) ? (
+                    <>
+                      <Activity className="w-4 h-4 text-cyan-400 animate-pulse" />
+                      <span className="text-xs font-bold text-slate-200">Giám Sát Băng Thông & Tunnel Realtime</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono font-semibold flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping inline-block" />
+                        Đang Tải (Active)
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                      <span className="text-xs font-bold text-slate-300">Giám Sát Băng Thông & Tunnel</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-mono font-medium">
+                        Chế Độ Chờ (Chỉ chạy khi tải)
+                      </span>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-4 text-xs font-mono">
+                  <div className="flex items-center gap-1 text-slate-300">
+                    <span className="text-slate-500">Tốc độ:</span>
+                    <span className="font-bold text-cyan-400 text-sm">
+                      {proxyPoolStatus?.total_speed_mbps ?? 0} MB/s
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 text-slate-300">
+                    <span className="text-slate-500">Dung lượng:</span>
+                    <span className="font-semibold text-emerald-400">
+                      {(((proxyPoolStatus?.total_bytes_transferred ?? 0) / (1024 * 1024))).toFixed(1)} MB
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 text-slate-300">
+                    <span className="text-slate-500">Luồng thuê:</span>
+                    <span className="font-semibold text-indigo-400">
+                      {proxyPoolStatus?.active_leases ?? 0}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTunnelConsole(!showTunnelConsole)}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] flex items-center gap-1.5 transition"
+                  >
+                    <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>{showTunnelConsole ? 'Ẩn Console' : 'Mở Console Log'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Thông báo cách ly an toàn khi không tải */}
+              {!Boolean(proxyPoolStatus?.is_active || (isDownloading && (proxyPoolStatus?.active_leases ?? 0) > 0)) && (
+                <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      <strong className="text-slate-300">Cơ chế cách ly an toàn:</strong> Chức năng Proxy ở trạng thái chờ và chỉ kết nối khi bắt đầu tải video. Tuyệt đối không can thiệp mạng máy tính hay các tính năng dịch thuật/TTS.
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-500/80 shrink-0 border border-emerald-900/60 bg-emerald-950/40 px-2 py-0.5 rounded">
+                    Zero System Leak
+                  </span>
+                </div>
+              )}
+
+              {/* Danh sách Proxy Nodes trong Pool */}
+              {proxyPoolStatus?.nodes && proxyPoolStatus.nodes.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                  {proxyPoolStatus.nodes.map((node) => (
+                    <div
+                      key={node.url}
+                      className="p-2.5 bg-slate-950 rounded-lg border border-slate-800 flex flex-col justify-between text-xs space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between font-mono">
+                        <span className="truncate max-w-[150px] text-slate-200 font-semibold" title={node.url}>
+                          {node.url}
+                        </span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                          !node.is_alive
+                            ? 'bg-rose-950 text-rose-400 border border-rose-800'
+                            : (proxyPoolStatus?.is_active || isDownloading)
+                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}>
+                          {!node.is_alive ? 'Down' : (proxyPoolStatus?.is_active || isDownloading) ? 'Active' : 'Standby'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                        <span>Độ trễ: {node.latency_ms ? `${node.latency_ms}ms` : '-'}</span>
+                        <span className="text-cyan-400 font-bold">{node.speed_mbps} MB/s</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono border-t border-slate-900 pt-1">
+                        <span>{node.total_served} request</span>
+                        <span className="text-slate-400">{(node.bytes_transferred / (1024 * 1024)).toFixed(1)} MB</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[11px] text-slate-500 font-mono flex items-center justify-between px-1">
+                  <span>Proxy Pool: {proxyUrl.trim() ? `Đang dùng proxy cố định (${proxyUrl})` : 'Chưa cấu hình proxy (Đang dùng Direct IP)'}</span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('direct')}
+                    className="text-indigo-400 hover:text-indigo-300 underline"
+                  >
+                    Cài đặt Proxy
+                  </button>
+                </div>
+              )}
+
+              {/* Live Tunnel Terminal Console */}
+              {showTunnelConsole && (
+                <div className="rounded-lg bg-black/95 border border-slate-800 p-3 font-mono text-[11px] space-y-1.5 max-h-52 overflow-y-auto shadow-inner">
+                  <div className="flex items-center justify-between text-[10px] text-slate-500 pb-1.5 border-b border-slate-900">
+                    <span className="flex items-center gap-1.5">
+                      <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                      TUNNEL REALTIME LOGS ({proxyPoolStatus?.tunnel_logs?.length ?? 0} sự kiện gần nhất)
+                    </span>
+                    <span className="text-slate-600">Auto-scrolling</span>
+                  </div>
+                  {(!proxyPoolStatus?.tunnel_logs || proxyPoolStatus.tunnel_logs.length === 0) ? (
+                    <div className="text-slate-600 py-3 text-center italic">
+                      Chưa có lưu lượng qua tunnel. Khi khởi động tải video, các sự kiện lease/release và lưu lượng proxy sẽ hiển thị trực tiếp tại đây...
+                    </div>
+                  ) : (
+                    proxyPoolStatus.tunnel_logs.slice(-30).map((log, lIdx) => (
+                      <div key={lIdx} className="flex items-start gap-2 leading-tight">
+                        <span className="text-slate-600 shrink-0">[{log.time_str || '00:00:00'}]</span>
+                        <span className="text-indigo-400 shrink-0 font-bold">[{log.task}]</span>
+                        <span className="text-slate-500 shrink-0">({log.proxy.split('@').pop() || log.proxy})</span>
+                        <span className={
+                          log.level === 'error'
+                            ? 'text-rose-400 font-semibold'
+                            : log.level === 'warn'
+                            ? 'text-amber-400'
+                            : 'text-emerald-400'
+                        }>
+                          {log.message}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Danh Sách Hàng Đợi */}
             {queueTasks.length === 0 ? (
@@ -2382,6 +2858,205 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                 </div>
               </div>
 
+              {/* CHẾ ĐỘ KẾT NỐI MẠNG CHÍNH (GẠT QUA GẠT LẠI) */}
+              <div className="p-5 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      Chế Độ Kết Nối Mạng Khi Tải Phim
+                    </h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Gạt qua gạt lại giữa tải trực tiếp bằng mạng gốc hoặc dùng Proxy vượt tường lửa
+                    </p>
+                  </div>
+
+                  {/* Nút gạt chính */}
+                  <div className="flex items-center p-1 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold select-none shadow-inner">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleNetworkMode('direct')}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg transition cursor-pointer ${
+                        networkMode === 'direct'
+                          ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500/50 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Zap className={`w-4 h-4 ${networkMode === 'direct' ? 'text-amber-400 animate-pulse' : 'text-slate-500'}`} />
+                      <span>⚡ Dùng IP Trực Tiếp</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleToggleNetworkMode('proxy')}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg transition cursor-pointer ${
+                        networkMode === 'proxy'
+                          ? 'bg-indigo-600 text-white font-bold border border-indigo-500 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Shield className={`w-4 h-4 ${networkMode === 'proxy' ? 'text-indigo-200' : 'text-slate-500'}`} />
+                      <span>🌐 Dùng Proxy (Auto-Xray)</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 text-xs leading-relaxed">
+                  {networkMode === 'direct' ? (
+                    <div className="flex items-center gap-2 text-amber-300">
+                      <Zap className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        <strong>Đang chọn IP Trực Tiếp:</strong> Tải video trực tiếp bằng mạng gia đình với tốc độ tối đa không giới hạn, không khởi chạy proxy ngầm, 0% RAM.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-indigo-300">
+                      <Shield className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <span>
+                        <strong>Đang chọn Dùng Proxy:</strong> Tự động kích hoạt động cơ Auto-Xray ngầm khi tải để vượt chặn IP và bảo vệ kết nối ẩn danh an toàn.
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* CẤU HÌNH AUTO-XRAY ENGINE (ZERO-SETUP & CHẤT LƯỢNG CAO) */}
+              <div className="p-5 bg-slate-900 border border-indigo-500/30 rounded-2xl shadow-xl space-y-4">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-950 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+                      <Zap className="w-4 h-4 text-indigo-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        Động Cơ Auto-Xray Nhúng Sẵn (Zero-Setup)
+                        <span className="px-2 py-0.5 rounded-full bg-indigo-950 border border-indigo-500/40 text-[10px] font-bold text-indigo-300">
+                          Tự Động Hóa 100%
+                        </span>
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        Tự chạy Xray-core portable ngầm không cửa sổ, chỉ lọc node siêu tốc (&lt; 800ms)
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Toggle bật/tắt Auto-Xray */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleToggleAutoXray(!autoXrayEnabled)}
+                      className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition ${
+                        autoXrayEnabled
+                          ? 'bg-emerald-950 border-emerald-500 text-emerald-300 shadow-sm'
+                          : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <CheckCircle2 className={`w-3.5 h-3.5 ${autoXrayEnabled ? 'text-emerald-400' : 'text-slate-500'}`} />
+                      <span>{autoXrayEnabled ? 'Đang Bật Auto-Xray' : 'Đã Tắt Auto-Xray'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Trạng thái tiến trình & Node đang dùng */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                    <div className="text-[11px] text-slate-400 flex items-center justify-between">
+                      <span>Trạng Thái Tiến Trình:</span>
+                      <span className={`font-semibold px-2 py-0.5 rounded text-[10px] ${
+                        xrayStatus?.running
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-700'
+                          : 'bg-slate-900 text-slate-400 border border-slate-800'
+                      }`}>
+                        {xrayStatus?.running ? '● Đang Chạy Ngầm (Active)' : '○ Chế Độ Chờ (Standby)'}
+                      </span>
+                    </div>
+
+                    <div className="text-xs text-slate-300">
+                      Cổng Inbound: <code className="font-mono text-indigo-300">127.0.0.1:{xrayStatus?.http_port || 10809} (HTTP)</code> / <code className="font-mono text-indigo-300">{xrayStatus?.socks_port || 10808} (SOCKS5)</code>
+                    </div>
+
+                    <div className="text-[11px] text-slate-500">
+                      Vòng đời: Tự kích hoạt khi tải video và tự giải phóng về 0 RAM khi xong việc.
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                    <div className="text-[11px] text-slate-400 flex items-center justify-between">
+                      <span>Node Nhanh Nhất Hiện Tại:</span>
+                      {xrayStatus?.active_node?.latency_ms && (
+                        <span className="font-bold text-emerald-400 text-xs font-mono">
+                          ⚡ {xrayStatus.active_node.latency_ms} ms
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="text-xs font-bold text-white truncate">
+                      {xrayStatus?.active_node?.name || (xrayStatus?.quality_nodes && xrayStatus.quality_nodes.length > 0 ? xrayStatus.quality_nodes[0].name : 'Chưa kích hoạt node')}
+                    </div>
+
+                    <div className="text-[11px] text-slate-400 flex items-center justify-between">
+                      <span>Giao thức: <strong className="text-slate-200 uppercase">{(xrayStatus?.active_node?.protocol || (xrayStatus?.quality_nodes?.[0]?.protocol ?? 'VLESS')).toLowerCase() === 'trojan' ? 'HTTPS (Trojan)' : (xrayStatus?.active_node?.protocol || (xrayStatus?.quality_nodes?.[0]?.protocol ?? 'VLESS'))}</strong></span>
+                      <span>Máy chủ: <code className="font-mono text-slate-300">{xrayStatus?.active_node?.host || (xrayStatus?.quality_nodes?.[0]?.host ?? 'Auto')}</code></span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Danh Sách Node Chất Lượng Đã Sàng Lọc */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                      Danh Sách Node Chất Lượng Cao Đã Sàng Lọc (&lt; 800ms): <strong>{xrayStatus?.quality_nodes?.length || 0} node</strong>
+                    </span>
+
+                    <button
+                      onClick={handleRefreshXrayNodes}
+                      disabled={isRefreshingXray}
+                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow transition disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingXray ? 'animate-spin' : ''}`} />
+                      <span>{isRefreshingXray ? 'Đang Đo Ping...' : 'Quét & Chọn Node Nhanh Nhất'}</span>
+                    </button>
+                  </div>
+
+                  {(!xrayStatus?.quality_nodes || xrayStatus.quality_nodes.length === 0) ? (
+                    <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-center text-xs text-slate-500">
+                      Chưa có node nào trong bộ nhớ đệm. Nhấn "Quét & Chọn Node Nhanh Nhất" để tự động tải và đo đạc.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-48 overflow-y-auto p-1">
+                      {xrayStatus.quality_nodes.slice(0, 9).map((n, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => handleSwitchXrayNode(n.name)}
+                          className={`p-2.5 rounded-lg border text-xs cursor-pointer transition flex items-center justify-between gap-2 ${
+                            xrayStatus.active_node?.name === n.name
+                              ? 'bg-indigo-950/80 border-indigo-500 text-white shadow-sm'
+                              : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
+                          }`}
+                          title={`Bấm để chuyển sang node ${n.name}`}
+                        >
+                          <div className="min-w-0">
+                            <div className="font-bold truncate text-[11px]">{n.name}</div>
+                            <div className="text-[10px] text-slate-500 uppercase">
+                              {n.protocol.toLowerCase() === 'trojan' ? 'HTTPS (Trojan)' : n.protocol} • {n.host.slice(0, 15)}
+                            </div>
+                          </div>
+                          <span className={`font-mono text-[11px] font-bold shrink-0 ${
+                            (n.latency_ms || 999) < 200
+                              ? 'text-emerald-400'
+                              : (n.latency_ms || 999) < 500
+                              ? 'text-amber-400'
+                              : 'text-rose-400'
+                          }`}>
+                            {n.latency_ms ? `${n.latency_ms}ms` : 'Timeout'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* CẤU HÌNH PROXY & ĐỘ TRỄ MẠNG */}
               <div className="p-5 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-4">
                 <div className="flex items-center justify-between">
@@ -2392,10 +3067,34 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                 </div>
 
                 <p className="text-xs text-slate-400">
-                  Định tuyến qua HTTP, HTTPS hoặc SOCKS5 Proxy cho Bilibili, YouTube và dịch vụ mạng.
+                  Định tuyến qua HTTP, HTTPS hoặc SOCKS5 Proxy cho các nguồn bị chặn vùng. <span className="text-emerald-400 font-medium">Chỉ kích hoạt trong tiến trình tải video, hoàn toàn không can thiệp mạng máy tính hay dịch thuật.</span>
                 </p>
 
                 <div className="space-y-3">
+                {autoXrayEnabled && (
+                  <div className="p-2.5 bg-indigo-950/40 border border-indigo-500/30 rounded-xl text-xs text-indigo-300 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <span>
+                        <strong>Auto-Xray đang BẬT:</strong> Hệ thống tự động định tuyến ngầm qua node chất lượng cao. Bạn có thể để trống ô URL Proxy bên dưới.
+                      </span>
+                    </div>
+                    {Boolean(proxyUrl.trim()) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProxyUrl('');
+                          localStorage.setItem('sls_proxy_url', '');
+                          setProxyTestResult(null);
+                          loadProxyStatus('');
+                        }}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-semibold transition shrink-0 cursor-pointer"
+                      >
+                        Xóa ô Proxy thủ công
+                      </button>
+                    )}
+                  </div>
+                )}
                   <div className="space-y-1">
                     <label className="text-xs text-slate-300 font-semibold">URL Proxy:</label>
                     <div className="flex gap-2">
@@ -2409,11 +3108,82 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                       <button
                         onClick={handleTestProxy}
                         disabled={isTestingProxy}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition disabled:opacity-50"
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition disabled:opacity-50 cursor-pointer"
                       >
                         {isTestingProxy ? 'Đang đo...' : 'Kiểm Tra'}
                       </button>
                     </div>
+
+                    {/* Gợi ý chọn nhanh Proxy hoặc Tắt Proxy */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px]">
+                      <span className="text-slate-500 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-amber-400" />
+                        Gợi ý:
+                      </span>
+                      {[
+                        { label: '⚡ v2rayN (10809)', val: 'http://127.0.0.1:10809' },
+                        { label: '⚡ Clash (7890)', val: 'http://127.0.0.1:7890' },
+                      ].map((item) => (
+                        <button
+                          key={item.val}
+                          type="button"
+                          onClick={() => {
+                            setProxyUrl(item.val);
+                            localStorage.setItem('sls_proxy_url', item.val);
+                            loadProxyStatus(item.val);
+                          }}
+                          className={`px-2 py-0.5 rounded border transition font-mono ${
+                            proxyUrl === item.val
+                              ? 'bg-indigo-950 border-indigo-500 text-indigo-300'
+                              : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                      {proxyUrl.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProxyUrl('');
+                            localStorage.setItem('sls_proxy_url', '');
+                            setProxyTestResult(null);
+                            loadProxyStatus('');
+                          }}
+                          className="px-2 py-0.5 rounded bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/40 transition"
+                        >
+                          ✕ Dùng mạng trực tiếp (Tắt Proxy)
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Danh sách Proxy tự động phát hiện trên máy */}
+                    {proxyStatus?.detected_local_proxies && proxyStatus.detected_local_proxies.length > 0 && (
+                      <div className="p-3 bg-indigo-950/40 border border-indigo-700/40 rounded-xl text-xs space-y-1.5 mt-2">
+                        <div className="text-indigo-300 font-semibold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Phát hiện Proxy đang chạy sẵn trên máy (Local):</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {proxyStatus.detected_local_proxies.map((dp) => (
+                            <button
+                              key={dp.url}
+                              type="button"
+                              onClick={() => {
+                                setProxyUrl(dp.url);
+                                localStorage.setItem('sls_proxy_url', dp.url);
+                                loadProxyStatus(dp.url);
+                              }}
+                              className="px-2.5 py-1 bg-indigo-900/80 hover:bg-indigo-800 text-indigo-100 rounded-lg border border-indigo-600/60 font-mono text-[11px] flex items-center gap-1.5 transition"
+                            >
+                              <Zap className="w-3.5 h-3.5 text-amber-400" />
+                              <span>{dp.name} ({dp.url})</span>
+                              <span className="text-[10px] text-emerald-300 ml-1">✓ Dùng ngay</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {proxyTestResult && (
@@ -2422,10 +3192,13 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                         ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300'
                         : 'bg-rose-950/60 border-rose-700/60 text-rose-300'
                     }`}>
-                      {proxyTestResult.ok ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                      {proxyTestResult.ok ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
                       <div>
                         {proxyTestResult.ok ? (
-                          <span>Kết nối tốt! IP: {proxyTestResult.ip} | Độ trễ: <strong>{proxyTestResult.latency_ms} ms</strong></span>
+                          <div>
+                            <div>Kết nối tốt! IP: <strong>{proxyTestResult.ip}</strong> | Độ trễ: <strong>{proxyTestResult.latency_ms} ms</strong></div>
+                            {proxyTestResult.note && <div className="text-[11px] text-emerald-400/90 mt-0.5">{proxyTestResult.note}</div>}
+                          </div>
                         ) : (
                           <span>Lỗi proxy: {proxyTestResult.error}</span>
                         )}
@@ -2451,6 +3224,41 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                     <div className="text-[10px] text-slate-500">
                       Điều tiết tốc độ request tránh lỗi quá tải (HTTP 429).
                     </div>
+                  </div>
+
+                  {/* Tùy chọn Tiết kiệm dữ liệu Proxy (Bypass CDN) */}
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={cdnDirectBypass}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setCdnDirectBypass(val);
+                          localStorage.setItem('sls_cdn_direct_bypass', String(val));
+                        }}
+                        className="mt-1 w-4 h-4 rounded border-slate-700 bg-slate-900 text-amber-500 accent-amber-500 focus:ring-0 cursor-pointer"
+                      />
+                      <div className="space-y-1">
+                        <div className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                          <span>Tiết kiệm băng thông Proxy (Bypass CDN)</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800">
+                            Tùy chọn nâng cao
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Chỉ định tuyến các API lấy token & giải mã qua Proxy. Luồng tải file video lớn (.mp4) sẽ đi trực tiếp bằng IP mạng nhà để tiết kiệm dung lượng proxy tính theo GB.
+                        </p>
+                        {cdnDirectBypass && (
+                          <div className="p-2.5 rounded-lg bg-amber-950/60 border border-amber-800/60 text-[11px] text-amber-300 flex items-start gap-1.5 mt-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
+                            <span>
+                              <strong>Cảnh báo lộ IP:</strong> Bạn đang kích hoạt chế độ tiết kiệm GB. Địa chỉ IP mạng nhà sẽ gửi trực tiếp đến CDN khi tải video. Hãy tắt chế độ này nếu bạn muốn bảo vệ tuyệt đối danh tính (Zero-Leak).
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </label>
                   </div>
                 </div>
               </div>

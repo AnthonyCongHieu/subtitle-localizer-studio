@@ -5,6 +5,7 @@ import {
   HardwareInfoResponse,
   TestTranslationResult,
   GeminiPoolStatus,
+  GroqPoolStatus,
 } from '../../api/client';
 import {
   PresetProfile,
@@ -39,7 +40,73 @@ import {
   Search,
   Check,
   Copy,
+  AlertTriangle,
+  Flame,
+  Wand2,
+  Square,
 } from 'lucide-react';
+
+const DEFAULT_TTS_CATALOG: Record<string, Array<{
+  voice_id: string;
+  display_name: string;
+  lang: string;
+  gender: string;
+  description: string;
+  tags: string[];
+}>> = {
+  edge: [
+    { voice_id: 'vi-VN-NamMinhNeural', display_name: 'Nam Minh (Truyền cảm)', lang: 'vi', gender: 'male', description: 'Giọng nam trầm ấm, phát âm chuẩn đài tiếng nói, phù hợp phim kịch tính và truyện ngắn.', tags: ['Nam truyền cảm', 'Chuẩn đài', 'Kịch tính'] },
+    { voice_id: 'vi-VN-HoaiMyNeural', display_name: 'Hoài My (Dịu dàng)', lang: 'vi', gender: 'female', description: 'Giọng nữ trong trẻo, nhẹ nhàng, tự nhiên, phù hợp vlog đời sống, tâm lý và ẩm thực.', tags: ['Nữ dịu dàng', 'Đời sống', 'Tâm lý'] },
+    { voice_id: 'en-US-JennyNeural', display_name: 'Jenny (US Expressive)', lang: 'en', gender: 'female', description: 'Standard American female voice with lifelike warmth and clarity.', tags: ['American', 'Conversational', 'Warm'] },
+    { voice_id: 'en-US-GuyNeural', display_name: 'Guy (US Broadcast)', lang: 'en', gender: 'male', description: 'Professional American male broadcast voice for news, explainers and recaps.', tags: ['American', 'News', 'Professional'] },
+    { voice_id: 'en-US-AriaNeural', display_name: 'Aria (US Dynamic)', lang: 'en', gender: 'female', description: 'Dynamic, clear American female narrator suited for energetic storytelling.', tags: ['Dynamic', 'Narrator', 'Clear'] },
+    { voice_id: 'en-US-ChristopherNeural', display_name: 'Christopher (US Deep)', lang: 'en', gender: 'male', description: 'Deep and soothing American male storytelling voice.', tags: ['Deep', 'Storytelling', 'Soothing'] },
+    { voice_id: 'en-GB-RyanNeural', display_name: 'Ryan (British Classic)', lang: 'en', gender: 'male', description: 'Classic British English male voice for documentary and literature.', tags: ['British', 'Classic', 'Documentary'] },
+    { voice_id: 'en-GB-SoniaNeural', display_name: 'Sonia (British Elegant)', lang: 'en', gender: 'female', description: 'Elegant and articulate British female voice.', tags: ['British', 'Elegant', 'Articulate'] },
+  ],
+  capcut: [
+    { voice_id: 'BV075_streaming', display_name: 'Thanh Niên Tự Tin', lang: 'vi', gender: 'male', description: 'Giọng nam năng động, tự tin, phát âm chuẩn, phù hợp review phim và truyện tranh.', tags: ['Nam sôi nổi', 'Review phim', 'TikTok Hot'] },
+    { voice_id: 'BV074_streaming', display_name: 'Cô Gái Hoạt Ngôn', lang: 'vi', gender: 'female', description: 'Giọng nữ hoạt bát, tươi sáng, biểu cảm tốt, rất cuốn hút người xem.', tags: ['Nữ trẻ trung', 'Kể chuyện', 'TikTok Hot'] },
+    { voice_id: 'BV421_vivn_streaming', display_name: 'Nhỏ Ngọt Ngào', lang: 'vi', gender: 'female', description: 'Giọng nữ nhẹ nhàng, ngọt ngào, ấm áp, phù hợp tâm sự, vlog và tóm tắt phim tình cảm.', tags: ['Nữ ngọt ngào', 'Tâm sự', 'Truyền cảm'] },
+    { voice_id: 'BV562_streaming', display_name: 'Mai (Thuyết Minh)', lang: 'vi', gender: 'female', description: 'Giọng nữ thanh lịch, phát âm chuẩn đài truyền hình, thuyết minh tài liệu chuyên nghiệp.', tags: ['Nữ thanh lịch', 'Thuyết minh', 'Chuẩn đài'] },
+    { voice_id: 'vi_female_huong', display_name: 'Giọng Nữ Phổ Thông (Hương)', lang: 'vi', gender: 'female', description: 'Giọng nữ phổ thông miền Bắc, rõ ràng, dễ nghe, phù hợp tin tức tổng hợp.', tags: ['Nữ phổ thông', 'Tin tức', 'Miền Bắc'] },
+    { voice_id: 'BV560_streaming', display_name: 'Alex Đại Đế', lang: 'vi', gender: 'male', description: 'Giọng nam trầm ấm, quyền uy, cực kỳ phù hợp phim hành động, khoa học viễn tưởng.', tags: ['Nam trầm', 'Hành động', 'Kịch tính'] },
+    { voice_id: 'BV075_streaming_vibrato_dsp', display_name: 'Việt Méo (Hài Hước)', lang: 'vi', gender: 'male', description: 'Giọng rung ngân độc lạ, hài hước, giải trí cao độ cho meme và clip ngắn.', tags: ['Hài hước', 'Parody', 'Độc lạ'] },
+    { voice_id: 'BV074_streaming_dsp', display_name: 'Giọng Bé Nhí Nhảnh', lang: 'vi', gender: 'female', description: 'Giọng trẻ em dễ thương, ngộ nghĩnh, dùng cho nội dung thiếu nhi hoạt hình.', tags: ['Trẻ em', 'Hoạt hình', 'Dễ thương'] },
+    { voice_id: 'multi_female_peiqi_uranus_bigtts', display_name: 'Giọng Gái Mới Lớn', lang: 'vi', gender: 'female', description: 'Giọng nữ trẻ trung, điệu đà, phong cách Gen Z năng động.', tags: ['Gen Z', 'Điệu đà', 'Nữ sinh'] },
+    { voice_id: 'multi_female_tianmeijieshuo_uranus_bigtts', display_name: 'Nữ Thuyết Minh Ngọt Ngào', lang: 'vi', gender: 'female', description: 'Giọng nữ thuyết minh chuyên nghiệp cho các phim ngắn, drama gia đình.', tags: ['Thuyết minh', 'Drama', 'Kể chuyện'] },
+    { voice_id: 'ICL_en_male_philosopher_dsp', display_name: 'Narrator (Cinematic Deep)', lang: 'en', gender: 'male', description: 'Deep, authoritative cinematic narrator voice. Perfect for movie recaps and documentaries.', tags: ['Cinematic', 'Deep', 'Narrator'] },
+    { voice_id: 'DiT_en_female_jessie', display_name: 'Jessie (TikTok Viral)', lang: 'en', gender: 'female', description: 'The iconic, upbeat viral female TikTok voice recognized worldwide.', tags: ['TikTok Iconic', 'Viral', 'Upbeat'] },
+    { voice_id: 'en_male_deadpool', display_name: 'Deadpool (Witty & Comic)', lang: 'en', gender: 'male', description: 'Sarcastic, humorous, energetic voice full of attitude and personality.', tags: ['Comic', 'Sarcastic', 'Hero'] },
+    { voice_id: 'en_female_emotional_moon_bigtts', display_name: 'Emotional Drama', lang: 'en', gender: 'female', description: 'Highly expressive female voice with dramatic nuances and emotional range.', tags: ['Emotional', 'Drama', 'Storytelling'] },
+    { voice_id: 'en_female_soothing_mars_bigtts', display_name: 'Female Teacher (Soothing)', lang: 'en', gender: 'female', description: 'Warm, gentle, clear and soothing educational storytelling voice.', tags: ['Soothing', 'Warm', 'Educational'] },
+    { voice_id: 'en_us_002', display_name: 'EN US Standard Male', lang: 'en', gender: 'male', description: 'Clean, broadcast-grade standard American male voice.', tags: ['Standard', 'Broadcast', 'American'] },
+    { voice_id: 'en_female_sherry', display_name: 'Sherry (Natural Chat)', lang: 'en', gender: 'female', description: 'Casual, friendly conversational American female voice.', tags: ['Casual', 'Friendly', 'Natural'] },
+  ],
+  gemini: [
+    { voice_id: 'Puck', display_name: 'Puck (Upbeat & Energetic)', lang: 'all', gender: 'male', description: 'Giọng nam vui tươi, hoạt náo, tràn đầy năng lượng, phù hợp giải trí và vlog ngắn.', tags: ['Vui tươi', 'Sôi nổi', 'Hoạt náo'] },
+    { voice_id: 'Kore', display_name: 'Kore (Firm & Decisive)', lang: 'all', gender: 'female', description: 'Giọng nữ đanh thép, quyết đoán, rõ ràng, phù hợp bài giảng và phóng sự tin tức.', tags: ['Quyết đoán', 'Rõ ràng', 'Phóng sự'] },
+    { voice_id: 'Zephyr', display_name: 'Zephyr (Bright & Friendly)', lang: 'all', gender: 'female', description: 'Giọng nữ tươi sáng, thân thiện, mang lại cảm giác ấm áp và gần gũi.', tags: ['Tươi sáng', 'Thân thiện', 'Tự nhiên'] },
+    { voice_id: 'Fenrir', display_name: 'Fenrir (Excitable & Bold)', lang: 'all', gender: 'male', description: 'Giọng nam phấn khích, hào hứng, tạo kịch tính cho phim hành động và thể thao.', tags: ['Hào hứng', 'Kịch tính', 'Hành động'] },
+    { voice_id: 'Aoede', display_name: 'Aoede (Breezy & Relaxed)', lang: 'all', gender: 'female', description: 'Giọng nữ phóng khoáng, thư giãn, êm ả, phù hợp nội dung du lịch và ẩm thực.', tags: ['Thư giãn', 'Phóng khoáng', 'Du lịch'] },
+    { voice_id: 'Sulafat', display_name: 'Sulafat (Warm Storyteller)', lang: 'all', gender: 'female', description: 'Giọng nữ ấm áp, truyền cảm, hoàn hảo cho kể chuyện và tóm tắt tiểu thuyết.', tags: ['Ấm áp', 'Kể chuyện', 'Truyền cảm'] },
+    { voice_id: 'Charon', display_name: 'Charon (Informative & Steady)', lang: 'all', gender: 'male', description: 'Giọng nam trầm ổn, chuẩn mực chuyên gia, thích hợp thuyết minh tài liệu khoa học.', tags: ['Trầm ổn', 'Tài liệu', 'Khoa học'] },
+    { voice_id: 'Enceladus', display_name: 'Enceladus (Breathy & Mysterious)', lang: 'all', gender: 'male', description: 'Giọng nam thì thầm, hơi thở bí ẩn, thích hợp phim kinh dị, trinh thám.', tags: ['Thì thầm', 'Bí ẩn', 'Trinh thám'] },
+    { voice_id: 'Leda', display_name: 'Leda (Youthful & Casual)', lang: 'all', gender: 'female', description: 'Giọng nữ thanh thiếu niên trẻ trung, đối thoại tự nhiên hàng ngày.', tags: ['Trẻ trung', 'Gen Z', 'Hàng ngày'] },
+    { voice_id: 'Orus', display_name: 'Orus (Authoritative Deep)', lang: 'all', gender: 'male', description: 'Giọng nam quyền lực, trầm vang, phong thái lãnh đạo và giới thiệu phim điện ảnh.', tags: ['Quyền lực', 'Trầm vang', 'Trailer Phim'] },
+    { voice_id: 'Despina', display_name: 'Despina (Smooth Narrator)', lang: 'all', gender: 'female', description: 'Giọng nữ mượt mà, phát âm lưu loát, chuẩn audiobook chuyên nghiệp.', tags: ['Mượt mà', 'Audiobook', 'Chuyên nghiệp'] },
+    { voice_id: 'Algenib', display_name: 'Algenib (Gravelly & Gritty)', lang: 'all', gender: 'male', description: 'Giọng nam khàn gai góc, phong trần, đậm chất nhân vật điện ảnh cổ điển.', tags: ['Khàn', 'Gai góc', 'Điện ảnh'] },
+  ],
+};
+
+const GEMINI_STYLE_PRESETS = [
+  { id: 'dramatic', label: '🎬 Kịch Tính', desc: 'Cao trào, dồn dập, phim điện ảnh giật gân' },
+  { id: 'cheerful', label: '😄 Vui Tươi', desc: 'Năng động, tươi sáng, hài hước, hoạt hình' },
+  { id: 'whisper', label: '🤫 Thì Thầm', desc: 'Bí ẩn, chậm rãi, phim kinh dị / trinh thám' },
+  { id: 'serious', label: '🎙️ Trang Trọng', desc: 'Trầm ổn, chuyên nghiệp, tin tức & phóng sự' },
+  { id: 'emotional', label: '💔 Xúc Động', desc: 'Nghẹn ngào, lắng đọng, tâm lý xã hội sâu sắc' },
+  { id: 'natural', label: '☕ Tự Nhiên', desc: 'Gần gũi, đời thường, vlog & review đời sống' },
+];
 
 interface GlobalSettingsViewProps {
   presets: PresetProfile[];
@@ -66,18 +133,24 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
   const [settings, setSettings] = useState<GlobalPipelineSettings>({
     ocr: {
       mode: 'local',
-      local_engine: 'rapidocr',
+      local_engine: 'hybrid',
       api_provider: 'gemini',
-      capcut_api_endpoint: 'https://edit-api-sg.capcut.com',
+      capcut_api_endpoint: 'https://editor-api-sg.capcutapi.com',
       capcut_session_token: '',
+      capcut_mode: 'cloud_api',
+      groq_api_key: '',
+      groq_model: 'whisper-large-v3',
       method: 'ocr',
       engine: 'rapidocr',
       default_source_lang: 'auto',
-      sample_fps: 2.0,
-      diff_threshold: 3.5,
+      sample_fps: 2.5,
+      diff_threshold: 2.5,
       enable_gap_rescue: true,
       enable_roi_tightening: true,
-      whisper_model: 'medium',
+      hybrid_whisper_model: 'small',
+      hybrid_confidence_threshold: 0.65,
+      hybrid_rescue_missing: true,
+      whisper_model: 'small',
       whisper_device: 'cuda',
       whisper_compute_type: 'float16',
       whisper_vad_filter: true,
@@ -90,12 +163,21 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
       provider: 'gemini',
       target_language: 'vi',
       gemini_model: 'gemini-2.5-flash',
+      local_model: 'qwen2.5:7b-instruct',
+      local_endpoint: 'http://localhost:11434',
       batch_size: 35,
       prompt_tone: 'dramatic',
       use_glossary: true,
     },
+
     dubbing: {
+      provider: 'edge',
+      mode: 'single',
       voice: 'vi-VN-NamMinhNeural',
+      voice_male: 'vi-VN-NamMinhNeural',
+      voice_female: 'vi-VN-HoaiMyNeural',
+      auto_detect_speakers: true,
+      gemini_prompt_style: 'dramatic',
       rate: '+0%',
       pitch: '+0Hz',
       ducking_volume: 0.25,
@@ -116,7 +198,22 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
   const [testTransResult, setTestTransResult] = useState<TestTranslationResult | null>(null);
   const [isTranslatingTest, setIsTranslatingTest] = useState(false);
 
-  // Live Test Dubbing State
+  // Live Test Dubbing & Multi-Provider State
+  const [ttsCatalog, setTtsCatalog] = useState<Record<string, Array<{
+    voice_id: string;
+    display_name: string;
+    lang: string;
+    gender: string;
+    description: string;
+    tags: string[];
+    resource_id?: string;
+  }>>>(DEFAULT_TTS_CATALOG);
+  const [ttsLangFilter, setTtsLangFilter] = useState<'all' | 'vi' | 'en' | 'zh' | 'ja' | 'ko' | 'other'>('all');
+  const [ttsGenderFilter, setTtsGenderFilter] = useState<'all' | 'male' | 'female'>('all');
+  const [ttsSearchQuery, setTtsSearchQuery] = useState<string>('');
+  const [activeVoicePreviewing, setActiveVoicePreviewing] = useState<string | null>(null);
+  const [playingPreviewVoice, setPlayingPreviewVoice] = useState<string | null>(null);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const [testDubbingText, setTestDubbingText] = useState('Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio.');
   const [isDubbingTest, setIsDubbingTest] = useState(false);
 
@@ -155,15 +252,18 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     setIsTestingCapCut(true);
     setCapcutTestResult(null);
     try {
+      const ep =
+        !settings.ocr.capcut_api_endpoint || settings.ocr.capcut_api_endpoint.includes('edit-api-sg.capcut.com')
+          ? 'https://editor-api-sg.capcutapi.com'
+          : settings.ocr.capcut_api_endpoint;
       const res = await apiClient.testCapCutConnection({
-        endpoint: settings.ocr.capcut_api_endpoint || 'https://edit-api-sg.capcut.com',
-        session_token: settings.ocr.capcut_session_token || '',
+        endpoint: ep,
       });
       setCapcutTestResult(res);
     } catch (err: any) {
       setCapcutTestResult({
         ok: false,
-        endpoint: settings.ocr.capcut_api_endpoint || 'https://edit-api-sg.capcut.com',
+        endpoint: 'https://editor-api-sg.capcutapi.com',
         latency_ms: 0,
         message: `Lỗi kết nối máy chủ CapCut: ${err?.message || 'Không phản hồi'}`,
       });
@@ -172,10 +272,148 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     }
   };
 
+
+  // Groq Cloud Connection Test State
+  const [isTestingGroq, setIsTestingGroq] = useState(false);
+  const [groqTestResult, setGroqTestResult] = useState<{
+    ok: boolean;
+    latency_ms: number;
+    message: string;
+    models_count?: number;
+  } | null>(null);
+
+  const handleTestGroqConnection = async () => {
+    setIsTestingGroq(true);
+    setGroqTestResult(null);
+    try {
+      const res = await apiClient.testGroqConnection({
+        api_key: settings.ocr.groq_api_key || '',
+      });
+      setGroqTestResult(res);
+    } catch (err: any) {
+      setGroqTestResult({
+        ok: false,
+        latency_ms: 0,
+        message: `Lỗi kết nối máy chủ Groq: ${err?.message || 'Không phản hồi'}`,
+      });
+    } finally {
+      setIsTestingGroq(false);
+    }
+  };
+
+  // Local LLM (Qwen 2.5) Connection Test State
+  const [isTestingLocalLlm, setIsTestingLocalLlm] = useState(false);
+  const [localLlmTestResult, setLocalLlmTestResult] = useState<{
+    ok: boolean;
+    latency_ms: number;
+    message: string;
+    models: string[];
+    has_target_model: boolean;
+  } | null>(null);
+
+  const handleTestLocalLlm = async () => {
+    setIsTestingLocalLlm(true);
+    setLocalLlmTestResult(null);
+    try {
+      const res = await apiClient.testLocalLlmConnection({
+        endpoint: settings.translation.local_endpoint || 'http://localhost:11434',
+        model: settings.translation.local_model || 'qwen2.5:7b-instruct',
+      });
+      setLocalLlmTestResult(res);
+    } catch (err: any) {
+      setLocalLlmTestResult({
+        ok: false,
+        latency_ms: 0,
+        message: `Lỗi kết nối máy chủ Local LLM: ${err?.message || 'Không phản hồi'}`,
+        models: [],
+        has_target_model: false,
+      });
+    } finally {
+      setIsTestingLocalLlm(false);
+    }
+  };
+
+  const [isStartingLocalLlm, setIsStartingLocalLlm] = useState(false);
+
+  const handleStartLocalLlm = async () => {
+    setIsStartingLocalLlm(true);
+    try {
+      const res = await apiClient.startLocalLlm();
+      alert(res.message);
+      await handleTestLocalLlm();
+    } catch (err: any) {
+      alert(`Lỗi khởi động Ollama: ${err?.message || 'Không thành công'}`);
+    } finally {
+      setIsStartingLocalLlm(false);
+    }
+  };
+
+
+  // Groq Key Pool State
+  const [groqPoolStatus, setGroqPoolStatus] = useState<GroqPoolStatus | null>(null);
+  const [groqPoolInputKeys, setGroqPoolInputKeys] = useState<string>('');
+  const [isVerifyingGroqPool, setIsVerifyingGroqPool] = useState(false);
+  const [isSavingGroqPoolKeys, setIsSavingGroqPoolKeys] = useState(false);
+  const [groqPoolKeyFilter, setGroqPoolKeyFilter] = useState<'all' | 'usable' | 'cooldown'>('all');
+  const [groqPoolSearchQuery, setGroqPoolSearchQuery] = useState('');
+  const [copiedGroqKeyIndex, setCopiedGroqKeyIndex] = useState<number | null>(null);
+  const [activeGroqPoolSubTab, setActiveGroqPoolSubTab] = useState<'list' | 'input'>('list');
+
+  const loadGroqPool = async () => {
+    try {
+      const res = await apiClient.getGroqPoolStatus();
+      setGroqPoolStatus(res);
+    } catch (err) {
+      console.warn('Could not load Groq Pool status:', err);
+    }
+  };
+
+  const handleSaveGroqPoolKeys = async () => {
+    const lines = groqPoolInputKeys
+      .split('\n')
+      .map((k) => k.trim())
+      .filter((k) => k.length > 5);
+    if (lines.length === 0) return;
+    setIsSavingGroqPoolKeys(true);
+    try {
+      const res = await apiClient.saveGroqPool(lines);
+      setGroqPoolStatus(res.pool_status);
+      setGroqPoolInputKeys('');
+      setActiveGroqPoolSubTab('list');
+    } catch (err: any) {
+      alert(`Lỗi khi lưu keys: ${err.message}`);
+    } finally {
+      setIsSavingGroqPoolKeys(false);
+    }
+  };
+
+  const handleVerifyAllGroqKeys = async () => {
+    setIsVerifyingGroqPool(true);
+    try {
+      const res = await apiClient.verifyGroqKeys();
+      setGroqPoolStatus(res.pool_status);
+    } catch (err: any) {
+      alert(`Lỗi khi kiểm tra keys: ${err.message}`);
+    } finally {
+      setIsVerifyingGroqPool(false);
+    }
+  };
+
+  const handleDeleteSingleGroqKey = async (idx: number) => {
+    if (!confirm('Bạn có chắc muốn xoá API Key này khỏi Groq Pool?')) return;
+    try {
+      const res = await apiClient.deleteGroqKey(idx);
+      setGroqPoolStatus(res.pool_status);
+    } catch (err: any) {
+      alert(`Lỗi khi xoá key: ${err.message}`);
+    }
+  };
+
   useEffect(() => {
     loadPipelineSettings();
     loadHardwareInfo();
     loadGeminiPool();
+    loadGroqPool();
   }, []);
 
   const loadGeminiPool = async () => {
@@ -275,9 +513,13 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
         target_lang: 'vi',
         provider: settings.translation.provider,
         gemini_model: settings.translation.gemini_model,
+        local_model: settings.translation.local_model || 'qwen2.5:7b-instruct',
+        local_endpoint: settings.translation.local_endpoint || 'http://localhost:11434',
+        auto_fallback: settings.translation.auto_fallback ?? true,
         prompt_tone: settings.translation.prompt_tone,
         use_glossary: settings.translation.use_glossary,
       });
+
       setTestTransResult(res);
     } catch (err: any) {
       setTestTransResult({
@@ -291,25 +533,121 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     }
   };
 
+  const loadTTSCatalog = async () => {
+    try {
+      const res = await apiClient.getTTSCatalog();
+      if (res && Object.keys(res).length > 0) {
+        setTtsCatalog(res);
+      }
+    } catch (err) {
+      console.warn('Could not load TTS catalog:', err);
+    }
+  };
+
+  const stopCurrentAudio = () => {
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current.currentTime = 0;
+      activeAudioRef.current = null;
+    }
+    setPlayingPreviewVoice(null);
+    setActiveVoicePreviewing(null);
+  };
+
+  useEffect(() => {
+    loadPipelineSettings();
+    loadHardwareInfo();
+    loadTTSCatalog();
+
+    return () => {
+      stopCurrentAudio();
+    };
+  }, []);
+
   // Run live test TTS
-  const handleTestDubbing = async () => {
+  const handleTestDubbing = async (overrideVoice?: string, overrideProvider?: string) => {
     if (!testDubbingText.trim()) return;
+    const v = overrideVoice || settings.dubbing.voice;
+    const p = overrideProvider || settings.dubbing.provider || 'edge';
+
+    // If already playing or generating this voice, clicking acts as Stop
+    if (playingPreviewVoice === v || activeVoicePreviewing === v) {
+      stopCurrentAudio();
+      return;
+    }
+
+    // Stop any previous audio playback immediately to avoid overlap
+    stopCurrentAudio();
+
+    setActiveVoicePreviewing(v);
     setIsDubbingTest(true);
     try {
       const blob = await apiClient.testDubbing({
         text: testDubbingText.trim(),
-        voice: settings.dubbing.voice,
+        provider: p,
+        voice: v,
         rate: settings.dubbing.rate,
         pitch: settings.dubbing.pitch,
+        prompt_style: settings.dubbing.gemini_prompt_style || 'dramatic',
       });
+
+      // Singleton Audio Playback
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      audio.play();
+      activeAudioRef.current = audio;
+      setPlayingPreviewVoice(v);
+
+      audio.onended = () => {
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+          setPlayingPreviewVoice(null);
+        }
+      };
+
+      audio.onerror = () => {
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+          setPlayingPreviewVoice(null);
+        }
+      };
+
+      await audio.play();
     } catch (err: any) {
-      alert(`Không thể tạo giọng đọc thử nghiệm: ${err?.message}`);
+      if (err?.name !== 'AbortError') {
+        alert(`Không thể tạo giọng đọc thử nghiệm (${p}/${v}): ${err?.message}`);
+      }
     } finally {
       setIsDubbingTest(false);
+      setActiveVoicePreviewing(null);
     }
+  };
+
+  const handleSelectDubbingProvider = (newProvider: 'edge' | 'capcut' | 'gemini') => {
+    let defaultVoice = 'vi-VN-NamMinhNeural';
+    let defaultMale = 'vi-VN-NamMinhNeural';
+    let defaultFemale = 'vi-VN-HoaiMyNeural';
+
+    if (newProvider === 'capcut') {
+      defaultVoice = 'BV075_streaming';
+      defaultMale = 'BV075_streaming';
+      defaultFemale = 'BV074_streaming';
+    } else if (newProvider === 'gemini') {
+      defaultVoice = 'Puck';
+      defaultMale = 'Puck';
+      defaultFemale = 'Kore';
+    }
+
+    setSettings({
+      ...settings,
+      dubbing: {
+        ...settings.dubbing,
+        provider: newProvider,
+        voice: defaultVoice,
+        voice_male: defaultMale,
+        voice_female: defaultFemale,
+        gemini_prompt_style: settings.dubbing.gemini_prompt_style || 'dramatic',
+      },
+    });
   };
 
   // Preset operations
@@ -610,7 +948,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
         </div>
 
         {/* Nội Dung Chi Tiết (Khung Giữa Rộng Rãi) */}
-        <div className="flex-1 min-h-0 overflow-y-auto p-6 lg:p-8 space-y-6 max-w-5xl">
+        <div className="flex-1 min-h-0 overflow-y-auto p-6 lg:p-8 space-y-6">
           {/* ================= TAB 1: 2 MASTER MODES (LOCAL VS API) ================= */}
           {activeTab === 'ocr' && (
             <div className="space-y-6 animate-in fade-in duration-150">
@@ -624,216 +962,107 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                 </p>
               </div>
 
-              {/* BỘ CHỌN 2 MASTER MODE: LOCAL VS API */}
-              <div>
-                <label className="text-xs font-bold text-slate-200 block mb-2.5">
-                  Chọn Chế Độ Trích Xuất Phụ Đề (Master Mode):
-                </label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* MASTER MODE 1: CHẠY CỤC BỘ (MODE LOCAL) */}
-                  <div
-                    onClick={() => {
-                      const curEngine = settings.ocr.local_engine || 'rapidocr';
-                      setSettings({
-                        ...settings,
-                        ocr: {
-                          ...settings.ocr,
-                          mode: 'local',
-                          local_engine: curEngine,
-                          method: curEngine === 'whisper' ? 'asr_whisper' : curEngine === 'demux' ? 'demux_stream' : 'ocr',
-                        },
-                      });
-                    }}
-                    className={`p-5 rounded-2xl border cursor-pointer transition flex flex-col justify-between gap-3 ${
-                      (settings.ocr.mode === 'local' || !settings.ocr.mode)
-                        ? 'bg-gradient-to-br from-indigo-950/80 via-slate-900 to-indigo-950/40 border-indigo-500 text-white ring-2 ring-indigo-500/50 shadow-xl'
-                        : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
+              {/* BỘ CHỌN 2 MASTER MODE: LOCAL VS API (COMPACT & CLEAN) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* MASTER MODE 1: LOCAL */}
+                <div
+                  onClick={() => {
+                    setSettings({
+                      ...settings,
+                      ocr: {
+                        ...settings.ocr,
+                        mode: 'local',
+                        local_engine: 'hybrid',
+                        method: 'ocr',
+                      },
+                    });
+                  }}
+                  className={`p-3.5 rounded-xl border cursor-pointer transition flex items-center justify-between gap-3 ${
+                    (settings.ocr.mode === 'local' || !settings.ocr.mode)
+                      ? 'bg-indigo-950/80 border-indigo-500 text-white ring-1 ring-indigo-500/60 shadow-md'
+                      : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">🖥️</span>
                     <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-xl">🖥️</span>
-                          <div>
-                            <span className="font-black text-sm text-white tracking-wide">MODE LOCAL</span>
-                            <span className="block text-[10px] text-indigo-300 font-mono">Chạy Cục Bộ (Tối Đa Phần Cứng)</span>
-                          </div>
-                        </div>
-                        <span className="px-2.5 py-0.5 rounded-full bg-indigo-950 border border-indigo-500/60 text-indigo-300 text-[10px] font-mono font-bold">
-                          100% Offline • 0đ
+                      <div className="font-bold text-xs text-white flex items-center gap-2">
+                        <span>Mode Local (Offline)</span>
+                        <span className="px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 text-[9px] font-mono border border-purple-700/50 font-bold">
+                          Hybrid DualFusion
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-300 leading-relaxed">
-                        Khai thác tối đa phần cứng máy bạn (<strong>NVIDIA GeForce RTX 3050 Laptop GPU + 16 CPU Cores</strong>). Tốc độ cao nhất (~140 FPS), bảo mật 100% không upload video lên mạng, không tốn chi phí API.
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 text-[10px] font-mono text-indigo-300 bg-indigo-950/60 px-3 py-1.5 rounded-lg border border-indigo-800/40">
-                      <span>✓ RapidOCR ONNX CUDA</span>
-                      <span>•</span>
-                      <span>✓ Faster-Whisper</span>
-                      <span>•</span>
-                      <span>✓ FFmpeg Demux</span>
-                    </div>
-                  </div>
-
-                  {/* MASTER MODE 2: ĐÁM MÂY (MODE API) */}
-                  <div
-                    onClick={() => {
-                      const curProv = settings.ocr.api_provider || 'gemini';
-                      setSettings({
-                        ...settings,
-                        ocr: {
-                          ...settings.ocr,
-                          mode: 'api',
-                          api_provider: curProv,
-                          method: curProv === 'capcut' ? 'asr_whisper' : 'vlm_gemini',
-                        },
-                      });
-                    }}
-                    className={`p-5 rounded-2xl border cursor-pointer transition flex flex-col justify-between gap-3 ${
-                      settings.ocr.mode === 'api'
-                        ? 'bg-gradient-to-br from-amber-950/80 via-slate-900 to-purple-950/40 border-amber-500 text-white ring-2 ring-amber-500/50 shadow-xl'
-                        : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-xl">☁️</span>
-                          <div>
-                            <span className="font-black text-sm text-white tracking-wide">MODE API</span>
-                            <span className="block text-[10px] text-amber-300 font-mono">Đám Mây (Cloud AI Big Tech)</span>
-                          </div>
-                        </div>
-                        <span className="px-2.5 py-0.5 rounded-full bg-amber-950 border border-amber-500/60 text-amber-300 text-[10px] font-mono font-bold">
-                          Cloud Engine • 0% VRAM
-                        </span>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        RapidOCR ONNX + Whisper RAM-Pipe (RTX 3050 CUDA)
                       </div>
-                      <p className="text-[11px] text-slate-300 leading-relaxed">
-                        Tận dụng hạ tầng đám mây siêu mạnh của <strong>Google Gemini</strong> (AI nhìn hình hiểu cốt truyện) hoặc <strong>ByteDance CapCut</strong> (Nhận diện giọng nói TikTok/Douyin cực chuẩn tiếng Việt, Trung, Anh).
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 text-[10px] font-mono text-amber-300 bg-amber-950/60 px-3 py-1.5 rounded-lg border border-amber-800/40">
-                      <span>✓ Google Gemini 2.5 Flash</span>
-                      <span>•</span>
-                      <span>✓ CapCut ByteDance ASR</span>
                     </div>
                   </div>
+                  <span className="px-2.5 py-1 rounded-full bg-indigo-950 border border-indigo-500/50 text-indigo-300 text-[10px] font-mono font-bold shrink-0">
+                    100% Offline • 0đ
+                  </span>
+                </div>
+
+                {/* MASTER MODE 2: ĐÁM MÂY (MODE API) */}
+                <div
+                  onClick={() => {
+                    const curProv = settings.ocr.api_provider || 'gemini';
+                    setSettings({
+                      ...settings,
+                      ocr: {
+                        ...settings.ocr,
+                        mode: 'api',
+                        api_provider: curProv,
+                        method: curProv === 'capcut' ? 'asr_whisper' : 'vlm_gemini',
+                      },
+                    });
+                  }}
+                  className={`p-3.5 rounded-xl border cursor-pointer transition flex items-center justify-between gap-3 ${
+                    settings.ocr.mode === 'api'
+                      ? 'bg-amber-950/80 border-amber-500 text-white ring-1 ring-amber-500/60 shadow-md'
+                      : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">☁️</span>
+                    <div>
+                      <div className="font-bold text-xs text-white flex items-center gap-1.5">
+                        <span>Mode Cloud API</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 font-bold">Mặc định ưu tiên</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        ByteDance CapCut Cloud ASR / Gemini VLM / Groq
+                      </div>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-amber-950 border border-amber-500/50 text-amber-300 text-[10px] font-mono font-bold shrink-0">
+                    Cloud AI • 0% VRAM
+                  </span>
                 </div>
               </div>
 
-              {/* BỘ CHỌN ĐỘNG CƠ CON (SUB-ENGINE CHO MODE TƯƠNG ỨNG) */}
-              {(settings.ocr.mode === 'local' || !settings.ocr.mode) ? (
-                <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-900/50 space-y-3 animate-in fade-in">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
-                      <span>🖥️</span>
-                      <span>Chọn Động Cơ Cục Bộ Trong Mode Local:</span>
-                    </label>
-                    <span className="text-[10px] text-emerald-400 font-mono font-semibold">100% Cục Bộ Trên Máy</span>
-                  </div>
+              {/* Tự động Fallback về Local khi Cloud lỗi */}
+              <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 flex items-center justify-between text-xs">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.ocr.auto_fallback ?? true}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        ocr: { ...settings.ocr, auto_fallback: e.target.checked },
+                      })
+                    }
+                    className="rounded accent-emerald-500 cursor-pointer"
+                  />
+                  <span className="text-slate-300 font-medium">
+                    🛡️ Cứu hộ tự động (Auto-Failover): Tự động chuyển sang Local Hybrid (GPU RTX 3050 + Whisper) nếu Cloud API gặp sự cố hoặc mất mạng
+                  </span>
+                </label>
+                <span className="text-[10px] text-emerald-400 font-mono font-bold shrink-0 ml-2">Luôn sẵn sàng</span>
+              </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {/* Sub-engine 1: RapidOCR ONNX */}
-                    <div
-                      onClick={() =>
-                        setSettings({
-                          ...settings,
-                          ocr: {
-                            ...settings.ocr,
-                            local_engine: 'rapidocr',
-                            method: 'ocr',
-                          },
-                        })
-                      }
-                      className={`p-3.5 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
-                        (settings.ocr.local_engine === 'rapidocr' || !settings.ocr.local_engine)
-                          ? 'bg-indigo-950/90 border-indigo-400 text-white ring-1 ring-indigo-400 shadow-md'
-                          : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="font-bold text-xs flex items-center gap-1.5">
-                          <span>🏎️</span>
-                          <span>RapidOCR ONNX</span>
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[9px] font-mono border border-emerald-700/50">
-                          Khuyên dùng
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-slate-400">
-                        Quét điểm ảnh hardsub trên video qua CUDA GPU (~140 FPS). Chuẩn xác và tốc độ số 1 cho video có chữ sẵn.
-                      </p>
-                    </div>
-
-                    {/* Sub-engine 2: Faster-Whisper */}
-                    <div
-                      onClick={() =>
-                        setSettings({
-                          ...settings,
-                          ocr: {
-                            ...settings.ocr,
-                            local_engine: 'whisper',
-                            method: 'asr_whisper',
-                          },
-                        })
-                      }
-                      className={`p-3.5 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
-                        settings.ocr.local_engine === 'whisper'
-                          ? 'bg-indigo-950/90 border-indigo-400 text-white ring-1 ring-indigo-400 shadow-md'
-                          : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="font-bold text-xs flex items-center gap-1.5">
-                          <span>🎙️</span>
-                          <span>Faster-Whisper</span>
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-300 text-[9px] font-mono border border-indigo-700/50">
-                          RTX 3050 CUDA
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-slate-400">
-                        Nghe âm thanh giọng nói nhân vật bằng OpenAI Whisper FP16. Dùng khi video không có chữ hoặc chữ bị mờ.
-                      </p>
-                    </div>
-
-                    {/* Sub-engine 3: Demux */}
-                    <div
-                      onClick={() =>
-                        setSettings({
-                          ...settings,
-                          ocr: {
-                            ...settings.ocr,
-                            local_engine: 'demux',
-                            method: 'demux_stream',
-                          },
-                        })
-                      }
-                      className={`p-3.5 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
-                        settings.ocr.local_engine === 'demux'
-                          ? 'bg-indigo-950/90 border-indigo-400 text-white ring-1 ring-indigo-400 shadow-md'
-                          : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="font-bold text-xs flex items-center gap-1.5">
-                          <span>⚡</span>
-                          <span>FFmpeg Demux</span>
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 text-[9px] font-mono border border-cyan-700/50">
-                          0.1s tức thì
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-slate-400">
-                        Bóc tách luồng phụ đề softsub đóng gói sẵn trong file MKV/MP4 (Netflix, Anime, YouTube) mà không cần quét AI.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
+              {/* BỘ CHỌN SUB-ENGINE KHI Ở MODE API */}
+              {settings.ocr.mode === 'api' && (
                 /* Sub-engine chooser for Mode API */
                 <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-900/50 space-y-3 animate-in fade-in">
                   <div className="flex items-center justify-between">
@@ -844,7 +1073,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                     <span className="text-[10px] text-amber-400 font-mono font-semibold">Đám Mây Trực Tuyến</span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {/* API Provider 1: Google Gemini */}
                     <div
                       onClick={() =>
@@ -869,15 +1098,15 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                           <span>Google Gemini API</span>
                         </span>
                         <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 text-[9px] font-mono border border-amber-700/50">
-                          VLM 2.5 Flash (Key Pool)
+                          VLM 2.5 Flash
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-300 leading-relaxed">
-                        AI thị giác video đa phương thức. Vừa nhìn hình vừa hiểu cốt truyện, đọc chuẩn chữ thư pháp/uốn lượn cổ trang và tự lọc sạch logo rác. Tự động xoay tua 43 keys.
+                        AI thị giác video đa phương thức. Vừa nhìn hình vừa hiểu cốt truyện, đọc chuẩn chữ thư pháp và tự động xoay tua 43 keys.
                       </p>
                     </div>
 
-                    {/* API Provider 2: CapCut Cloud API */}
+                    {/* API Provider 2: CapCut Cloud AI */}
                     <div
                       onClick={() =>
                         setSettings({
@@ -891,21 +1120,53 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                       }
                       className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
                         settings.ocr.api_provider === 'capcut'
-                          ? 'bg-amber-950/90 border-amber-400 text-white ring-1 ring-amber-400 shadow-md'
+                          ? 'bg-purple-950/90 border-purple-400 text-white ring-1 ring-purple-400 shadow-md'
                           : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-2">
                         <span className="font-bold text-xs flex items-center gap-1.5">
                           <span className="text-base">🎵</span>
-                          <span>CapCut Cloud API</span>
+                          <span>CapCut Cloud AI</span>
                         </span>
                         <span className="px-2 py-0.5 rounded bg-purple-950 text-purple-300 text-[9px] font-mono border border-purple-700/50">
-                          ByteDance Volcano Engine
+                          Miễn Phí • No Login
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-300 leading-relaxed">
-                        Công nghệ nhận diện giọng nói (ASR) của CapCut / TikTok. Chuẩn âm điệu đối thoại phim ảnh, hỗ trợ xuất sắc Tiếng Việt (vi-VN), Tiếng Trung (zh-CN), Tiếng Anh (en-US).
+                        Trích xuất phụ đề tự động trực tiếp từ hạ tầng đám mây ByteDance AI. Nhanh, chuẩn xác từng microsecond, hoàn toàn miễn phí và không cần tài khoản.
+                      </p>
+                    </div>
+
+                    {/* API Provider 3: Groq Cloud Whisper */}
+                    <div
+                      onClick={() =>
+                        setSettings({
+                          ...settings,
+                          ocr: {
+                            ...settings.ocr,
+                            api_provider: 'groq',
+                            method: 'asr_whisper',
+                          },
+                        })
+                      }
+                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                        settings.ocr.api_provider === 'groq'
+                          ? 'bg-emerald-950/90 border-emerald-400 text-white ring-1 ring-emerald-400 shadow-md'
+                          : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-bold text-xs flex items-center gap-1.5">
+                          <Zap className="w-4 h-4 text-emerald-400" />
+                          <span>Groq Whisper Cloud</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[9px] font-mono border border-emerald-700/50">
+                          Large-v3 • 0.5s
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-relaxed">
+                        Chíp chuyên dụng LPU siêu tốc (~250x realtime). Độ chính xác Whisper Large-v3 cao nhất thế giới, miễn phí 2,000 req/ngày.
                       </p>
                     </div>
                   </div>
@@ -1088,296 +1349,186 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
 
               {/* ================= KHU VỰC CẤU HÌNH CHI TIẾT TƯƠNG ỨNG TỪNG LỰA CHỌN ================= */}
 
-              {/* 1. CHI TIẾT KHI CHỌN MODE LOCAL: RAPIDOCR */}
-              {(settings.ocr.mode === 'local' || !settings.ocr.mode) && (settings.ocr.local_engine === 'rapidocr' || !settings.ocr.local_engine) && (
-                <div className="space-y-4 animate-in fade-in">
-                  <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                    <label className="text-xs font-bold text-slate-200 block">Động Cơ OCR (OCR Engine):</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <label
-                        onClick={() => setSettings({ ...settings, ocr: { ...settings.ocr, engine: 'rapidocr' } })}
-                        className={`p-4 rounded-xl border cursor-pointer transition flex flex-col gap-1.5 ${
-                          settings.ocr.engine === 'rapidocr'
-                            ? 'bg-indigo-950/60 border-indigo-500 text-white ring-1 ring-indigo-500/50'
-                            : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-xs">RapidOCR ONNX (Khuyên dùng)</span>
-                          <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 text-[10px] font-mono border border-emerald-700/50">
-                            100% Local GPU
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Chạy mô hình PP-OCRv4 tối ưu qua ONNX Runtime. Tốc độ ~10ms/frame trên GPU NVIDIA RTX 3050 (CUDA).
-                        </p>
-                      </label>
-
-                      <label
-                        onClick={() => setSettings({ ...settings, ocr: { ...settings.ocr, engine: 'paddle' } })}
-                        className={`p-4 rounded-xl border cursor-pointer transition flex flex-col gap-1.5 ${
-                          settings.ocr.engine === 'paddle'
-                            ? 'bg-indigo-950/60 border-indigo-500 text-white ring-1 ring-indigo-500/50'
-                            : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-xs">PaddleOCR Adapter (Baidu)</span>
-                          <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-mono border border-slate-700">
-                            Local Python
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Thư viện PaddlePaddle gốc. Chuẩn xác cao cho chữ Hán cổ trang phức tạp, chữ viết dọc.
-                        </p>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Tần suất lấy mẫu FPS & Ngưỡng sai khác */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-bold text-slate-200">Tần Suất Lấy Mẫu Frame (Sample FPS):</label>
-                        <span className="font-mono font-bold text-indigo-400 text-xs px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800">
-                          {settings.ocr.sample_fps} FPS
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min="1.0"
-                        max="4.0"
-                        step="0.5"
-                        value={settings.ocr.sample_fps}
-                        onChange={(e) =>
-                          setSettings({ ...settings, ocr: { ...settings.ocr, sample_fps: parseFloat(e.target.value) } })
-                        }
-                        className="w-full accent-indigo-500 cursor-pointer"
-                      />
-                      <div className="flex justify-between text-[11px] text-slate-500 font-mono">
-                        <span>1.0 FPS (Nhanh)</span>
-                        <span>2.0 FPS (Mặc định)</span>
-                        <span>4.0 FPS (Tỷ mỷ)</span>
-                      </div>
-                    </div>
-
-                    <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-bold text-slate-200">Ngưỡng Lọc Frame Trùng (Diff Threshold):</label>
-                        <span className="font-mono font-bold text-indigo-400 text-xs px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800">
-                          {settings.ocr.diff_threshold}
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min="1.0"
-                        max="6.0"
-                        step="0.5"
-                        value={settings.ocr.diff_threshold}
-                        onChange={(e) =>
-                          setSettings({ ...settings, ocr: { ...settings.ocr, diff_threshold: parseFloat(e.target.value) } })
-                        }
-                        className="w-full accent-indigo-500 cursor-pointer"
-                      />
-                      <div className="flex justify-between text-[11px] text-slate-500 font-mono">
-                        <span>1.0 (Quét dày)</span>
-                        <span>3.5 (Cân bằng)</span>
-                        <span>6.0 (Bỏ qua nhiều)</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Gap-Rescue & ROI Tightening */}
-                  <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                    <div className="text-xs font-bold text-slate-200">Tính Năng Tự Động Hóa Thông Minh:</div>
-                    <div className="space-y-3">
-                      <label className="flex items-start gap-3.5 cursor-pointer p-3 rounded-xl bg-slate-950 border border-slate-800/80 hover:bg-slate-950/80 transition">
-                        <input
-                          type="checkbox"
-                          checked={settings.ocr.enable_gap_rescue}
-                          onChange={(e) =>
-                            setSettings({ ...settings, ocr: { ...settings.ocr, enable_gap_rescue: e.target.checked } })
-                          }
-                          className="mt-1 rounded accent-indigo-500 cursor-pointer"
-                        />
-                        <div>
-                          <div className="text-xs font-bold text-white">Auto Gap-Rescue (Cứu phụ đề chớp nhoáng)</div>
-                          <div className="text-[11px] text-slate-400 mt-0.5">
-                            Tự động rà soát khoảng trống giữa các câu và quét sâu để không bỏ sót câu phụ đề mờ hoặc hiển thị quá nhanh.
-                          </div>
-                        </div>
-                      </label>
-
-                      <label className="flex items-start gap-3.5 cursor-pointer p-3 rounded-xl bg-slate-950 border border-slate-800/80 hover:bg-slate-950/80 transition">
-                        <input
-                          type="checkbox"
-                          checked={settings.ocr.enable_roi_tightening}
-                          onChange={(e) =>
-                            setSettings({ ...settings, ocr: { ...settings.ocr, enable_roi_tightening: e.target.checked } })
-                          }
-                          className="mt-1 rounded accent-indigo-500 cursor-pointer"
-                        />
-                        <div>
-                          <div className="text-xs font-bold text-white">Smart ROI Tightening (Tự co gọn khung che)</div>
-                          <div className="text-[11px] text-slate-400 mt-0.5">
-                            Tự động bóp gọn khung che mờ theo kích thước chữ thực tế, tránh che lấn vào nhân vật hay bối cảnh video.
-                          </div>
-                        </div>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* 2. CHI TIẾT KHI CHỌN MODE LOCAL: FASTER-WHISPER */}
-              {(settings.ocr.mode === 'local' || !settings.ocr.mode) && settings.ocr.local_engine === 'whisper' && (
+              {/* CẤU HÌNH MODE LOCAL: HYBRID DUALFUSION (COMPACT & CLEAN) */}
+              {(settings.ocr.mode === 'local' || !settings.ocr.mode) && (
                 <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4 animate-in fade-in">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <div>
-                      <h4 className="text-xs font-bold text-white flex items-center gap-2">
-                        <Mic className="w-4 h-4 text-emerald-400" />
-                        <span>Cấu Hình OpenAI Faster-Whisper (ASR Speech-to-Text)</span>
-                      </h4>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Tách âm thanh và nhận diện giọng nói nhân vật chuẩn xác từng timecode trên GPU NVIDIA.
-                      </p>
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                    <div className="text-xs font-bold text-white flex items-center gap-2">
+                      <span className="text-base">⚙️</span>
+                      <span>Tinh Chỉnh Động Cơ Cục Bộ (Hybrid DualFusion)</span>
                     </div>
-                    <span className="px-2.5 py-1 rounded-full bg-emerald-950 border border-emerald-700/60 text-emerald-300 text-[10px] font-mono font-bold">
-                      GPU 6GB Tối Ưu
+                    <span className="text-[10px] text-purple-300 font-mono font-semibold bg-purple-950/60 px-2.5 py-0.5 rounded-full border border-purple-800/50">
+                      RapidOCR + Whisper Small (VRAM ~1.6GB • Tối Thượng Chất Lượng)
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                    <div>
-                      <label className="font-semibold text-slate-300 block mb-1.5">Phiên Bản Mô Hình Whisper:</label>
-                      <select
-                        value={settings.ocr.whisper_model || 'medium'}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            ocr: { ...settings.ocr, whisper_model: e.target.value as any },
-                          })
-                        }
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
-                      >
-                        <option value="medium">Whisper Medium (~2.2GB VRAM - Cân bằng tuyệt đối, khuyên dùng)</option>
-                        <option value="large-v3">Whisper Large-v3 (~3.8GB VRAM - Chuẩn xác cao nhất thế giới)</option>
-                        <option value="small">Whisper Small (~1.0GB VRAM - Siêu nhanh)</option>
-                        <option value="base">Whisper Base (~500MB VRAM - Cực nhẹ)</option>
-                      </select>
-                    </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* CỘT 1: THỊ GIÁC (RAPIDOCR) */}
+                    <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                      <div className="text-xs font-bold text-indigo-300 flex items-center gap-1.5 border-b border-slate-800/60 pb-1.5">
+                        <span>👁️</span>
+                        <span>Kênh Thị Giác (RapidOCR GPU)</span>
+                      </div>
 
-                    <div>
-                      <label className="font-semibold text-slate-300 block mb-1.5">Bộ Xử Lý & Kiểu Tính Toán:</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <select
-                          value={settings.ocr.whisper_device || 'cuda'}
-                          onChange={(e) =>
-                            setSettings({
-                              ...settings,
-                              ocr: { ...settings.ocr, whisper_device: e.target.value as any },
-                            })
-                          }
-                          className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
-                        >
-                          <option value="cuda">GPU NVIDIA (CUDA)</option>
-                          <option value="cpu">CPU Đa Luồng</option>
-                        </select>
+                      <div className="space-y-3 pt-1">
+                        <div>
+                          <div className="flex items-center justify-between text-xs mb-1">
+                            <span className="text-slate-300">Tần suất lấy mẫu:</span>
+                            <span className="font-mono font-bold text-indigo-400 bg-indigo-950 px-2 py-0.5 rounded border border-indigo-800/60 text-[11px]">
+                              {settings.ocr.sample_fps} FPS
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min="1.0"
+                            max="4.0"
+                            step="0.5"
+                            value={settings.ocr.sample_fps}
+                            onChange={(e) =>
+                              setSettings({ ...settings, ocr: { ...settings.ocr, sample_fps: parseFloat(e.target.value) } })
+                            }
+                            className="w-full accent-indigo-500 cursor-pointer"
+                          />
+                        </div>
 
-                        <select
-                          value={settings.ocr.whisper_compute_type || 'float16'}
-                          onChange={(e) =>
-                            setSettings({
-                              ...settings,
-                              ocr: { ...settings.ocr, whisper_compute_type: e.target.value as any },
-                            })
-                          }
-                          className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
-                        >
-                          <option value="float16">FP16 (Tốc độ tối đa)</option>
-                          <option value="int8_float16">INT8-FP16 (Tiết kiệm VRAM)</option>
-                          <option value="int8">INT8 (CPU Quantized)</option>
-                        </select>
+                        <div>
+                          <div className="flex items-center justify-between text-xs mb-1">
+                            <span className="text-slate-300">Ngưỡng lọc frame trùng:</span>
+                            <span className="font-mono font-bold text-indigo-400 bg-indigo-950 px-2 py-0.5 rounded border border-indigo-800/60 text-[11px]">
+                              {settings.ocr.diff_threshold}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min="1.0"
+                            max="6.0"
+                            step="0.5"
+                            value={settings.ocr.diff_threshold}
+                            onChange={(e) =>
+                              setSettings({ ...settings, ocr: { ...settings.ocr, diff_threshold: parseFloat(e.target.value) } })
+                            }
+                            className="w-full accent-indigo-500 cursor-pointer"
+                          />
+                        </div>
+
+                        <div className="space-y-2 pt-1 border-t border-slate-800/50">
+                          <label className="flex items-center gap-2.5 cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={settings.ocr.enable_gap_rescue}
+                              onChange={(e) =>
+                                setSettings({ ...settings, ocr: { ...settings.ocr, enable_gap_rescue: e.target.checked } })
+                              }
+                              className="rounded accent-indigo-500 cursor-pointer"
+                            />
+                            <span className="text-slate-200">Cứu phụ đề chớp nhoáng (Auto Gap-Rescue)</span>
+                          </label>
+
+                          <label className="flex items-center gap-2.5 cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={settings.ocr.enable_roi_tightening}
+                              onChange={(e) =>
+                                setSettings({ ...settings, ocr: { ...settings.ocr, enable_roi_tightening: e.target.checked } })
+                              }
+                              className="rounded accent-indigo-500 cursor-pointer"
+                            />
+                            <span className="text-slate-200">Tự co gọn khung che theo chữ (Smart ROI)</span>
+                          </label>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="pt-2 border-t border-slate-800/80">
-                    <label className="flex items-center gap-2.5 cursor-pointer text-xs">
-                      <input
-                        type="checkbox"
-                        checked={settings.ocr.whisper_vad_filter ?? true}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            ocr: { ...settings.ocr, whisper_vad_filter: e.target.checked },
-                          })
-                        }
-                        className="rounded accent-emerald-500 cursor-pointer"
-                      />
-                      <span className="text-slate-300 font-medium">
-                        Bật Silero VAD (Voice Activity Detection - Tự động loại bỏ khoảng lặng & nhạc nền không lời)
-                      </span>
-                    </label>
-                  </div>
-                </div>
-              )}
+                    {/* CỘT 2: ÂM THANH & DUNG HỢP (WHISPER RAM-PIPE) */}
+                    <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                      <div className="text-xs font-bold text-purple-300 flex items-center gap-1.5 border-b border-slate-800/60 pb-1.5">
+                        <span>🎙️</span>
+                        <span>Kênh Âm Thanh & Dung Hợp (Whisper RAM-Pipe)</span>
+                      </div>
 
-              {/* 3. CHI TIẾT KHI CHỌN MODE LOCAL: DEMUX SOFTSUB */}
-              {(settings.ocr.mode === 'local' || !settings.ocr.mode) && settings.ocr.local_engine === 'demux' && (
-                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4 animate-in fade-in">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <div>
-                      <h4 className="text-xs font-bold text-white flex items-center gap-2">
-                        <Download className="w-4 h-4 text-cyan-400" />
-                        <span>Cấu Hình Bóc Tách Luồng Phụ Đề Mềm (FFmpeg Demuxer)</span>
-                      </h4>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Tự động rà soát container video (MP4/MKV) và xuất trực tiếp file phụ đề mà không cần chạy mô hình AI.
-                      </p>
-                    </div>
-                    <span className="px-2.5 py-1 rounded-full bg-cyan-950 border border-cyan-700/60 text-cyan-300 text-[10px] font-mono font-bold">
-                      Tốc độ: 0.1s
-                    </span>
-                  </div>
+                      <div className="space-y-3 pt-1">
+                        <div>
+                          <label className="block text-xs text-slate-300 mb-1">Mô hình Faster-Whisper:</label>
+                          <select
+                            value={settings.ocr.hybrid_whisper_model || settings.ocr.whisper_model || 'small'}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                ocr: {
+                                  ...settings.ocr,
+                                  hybrid_whisper_model: e.target.value as any,
+                                  whisper_model: e.target.value as any,
+                                },
+                              })
+                            }
+                            className="w-full bg-slate-900 border border-slate-700/80 rounded-lg p-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500"
+                          >
+                            <option value="small">Whisper Small (~244MB - Tối Thượng Chất Lượng • Khuyên dùng)</option>
+                            <option value="medium">Whisper Medium (~769MB • Cần ~2.5GB VRAM)</option>
+                            <option value="large-v3">Whisper Large-v3 (~3.1GB • Cần ~5GB VRAM - Cực nặng)</option>
+                            <option value="base">Whisper Base (~74MB - Cân bằng tốc độ)</option>
+                            <option value="tiny">Whisper Tiny (~39MB - Siêu tốc)</option>
+                          </select>
+                        </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                    <div>
-                      <label className="font-semibold text-slate-300 block mb-1.5">Ngôn Ngữ Phụ Đề Ưu Tiên Bóc:</label>
-                      <select
-                        value={settings.ocr.demux_stream_lang || 'auto'}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            ocr: { ...settings.ocr, demux_stream_lang: e.target.value },
-                          })
-                        }
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
-                      >
-                        <option value="auto">Tự động (Ưu tiên Tiếng Trung -&gt; Tiếng Anh -&gt; Track đầu tiên)</option>
-                        <option value="zh">Tiếng Trung (chi / zho / cmn)</option>
-                        <option value="en">Tiếng Anh (eng)</option>
-                        <option value="vi">Tiếng Việt (vie)</option>
-                      </select>
-                    </div>
+                        <div>
+                          <div className="flex items-center justify-between text-xs mb-1">
+                            <span className="text-slate-300">Ngưỡng tin cậy cứu câu thoại:</span>
+                            <span className="font-mono font-bold text-purple-400 bg-purple-950 px-2 py-0.5 rounded border border-purple-800/60 text-[11px]">
+                              {(settings.ocr.hybrid_confidence_threshold ?? 0.65).toFixed(2)}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0.50"
+                            max="0.95"
+                            step="0.05"
+                            value={settings.ocr.hybrid_confidence_threshold ?? 0.65}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                ocr: {
+                                  ...settings.ocr,
+                                  hybrid_confidence_threshold: parseFloat(e.target.value),
+                                },
+                              })
+                            }
+                            className="w-full accent-purple-500 cursor-pointer"
+                          />
+                        </div>
 
-                    <div className="flex items-center pt-5">
-                      <label className="flex items-center gap-2.5 cursor-pointer text-xs">
-                        <input
-                          type="checkbox"
-                          checked={settings.ocr.demux_fallback_to_ocr ?? true}
-                          onChange={(e) =>
-                            setSettings({
-                              ...settings,
-                              ocr: { ...settings.ocr, demux_fallback_to_ocr: e.target.checked },
-                            })
-                          }
-                          className="rounded accent-cyan-500 cursor-pointer"
-                        />
-                        <span className="text-slate-300 font-medium">
-                          Tự động chuyển sang RapidOCR (Fallback) nếu video không chứa track sub mềm nào
-                        </span>
-                      </label>
+                        <div className="space-y-2 pt-1 border-t border-slate-800/50">
+                          <label className="flex items-center gap-2.5 cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={settings.ocr.hybrid_rescue_missing ?? true}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  ocr: { ...settings.ocr, hybrid_rescue_missing: e.target.checked },
+                                })
+                              }
+                              className="rounded accent-purple-500 cursor-pointer"
+                            />
+                            <span className="text-slate-200">Tự cứu câu thoại bị sót (+14.3% số câu)</span>
+                          </label>
+
+                          <label className="flex items-center gap-2.5 cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={settings.ocr.demux_fallback_to_ocr ?? true}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  ocr: { ...settings.ocr, demux_fallback_to_ocr: e.target.checked },
+                                })
+                              }
+                              className="rounded accent-purple-500 cursor-pointer"
+                            />
+                            <span className="text-slate-200">Tự bóc tách phụ đề mềm nếu có (0.1s tức thì)</span>
+                          </label>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1409,8 +1560,9 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-amber-500"
                         disabled
                       >
-                        <option value="gemini">Google Gemini 2.5 Flash Multimodal (Khuyên dùng)</option>
+                        <option value="gemini">Google Gemini 2.5 / 3.8 Flash Multimodal (Khuyên dùng)</option>
                       </select>
+
                     </div>
 
                     <div>
@@ -1448,116 +1600,539 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                 </div>
               )}
 
-              {/* 5. CHI TIẾT KHI CHỌN MODE API: CAPCUT CLOUD API */}
+              {/* 5. CHI TIẾT KHI CHỌN MODE API: CAPCUT CLOUD AI */}
               {settings.ocr.mode === 'api' && settings.ocr.api_provider === 'capcut' && (
                 <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4 animate-in fade-in">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                     <div>
                       <h4 className="text-xs font-bold text-white flex items-center gap-2">
                         <span className="text-base">🎵</span>
-                        <span>Cấu Hình CapCut Cloud API (ByteDance Volcano Engine ASR)</span>
+                        <span>Cấu Hình CapCut Cloud AI (ByteDance Volcano Engine)</span>
                       </h4>
                       <p className="text-[11px] text-slate-400 mt-0.5">
-                        Tích hợp theo tài liệu nghiên cứu <code className="text-purple-300 font-mono">docs/CAPCUT_API_RESEARCH.md</code> (edit-api-sg.capcut.com).
+                        Kết nối trực tiếp hạ tầng đám mây ByteDance Singapore (<code className="text-purple-300 font-mono">editor-api-sg.capcutapi.com</code>).
                       </p>
                     </div>
                     <span className="px-2.5 py-1 rounded-full bg-purple-950 border border-purple-700/60 text-purple-300 text-[10px] font-mono font-bold">
-                      TikTok / CapCut Engine
+                      Trực Tiếp • Không Cần Tài Khoản
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                    <div>
-                      <label className="font-semibold text-slate-300 block mb-1.5">CapCut API Endpoint URL:</label>
-                      <input
-                        type="text"
-                        value={settings.ocr.capcut_api_endpoint || 'https://edit-api-sg.capcut.com'}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            ocr: { ...settings.ocr, capcut_api_endpoint: e.target.value },
-                          })
-                        }
-                        placeholder="https://edit-api-sg.capcut.com hoặc http://127.0.0.1:5500"
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-purple-500 font-mono text-[11px]"
-                      />
-                      <div className="text-[10px] text-slate-500 mt-1">
-                        Mặc định máy chủ Singapore của ByteDance hoặc Local Proxy Server.
+                  {/* Thẻ thông tin hoạt động tối giản */}
+                  <div className="p-4 rounded-xl bg-slate-950 border border-purple-900/40 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                      <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 font-semibold mb-0.5">CƠ CHẾ KẾT NỐI</div>
+                        <div className="font-bold text-white flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Guest Device Identity</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-1">Không cần tài khoản / Cookie</div>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 font-semibold mb-0.5">HẠ TẦNG LƯU TRỮ VOD</div>
+                        <div className="font-bold text-white flex items-center gap-1.5">
+                          <Zap className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                          <span>AWS SigV4 Pure Python</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-1">Tự động nén & upload 16kHz</div>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80">
+                        <div className="text-[10px] text-slate-400 font-semibold mb-0.5">ĐỘ CHUẨN XÁC ASR</div>
+                        <div className="font-bold text-white flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>ByteDance Auto Caption</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-1">Chuẩn xác từng từ & microsecond</div>
                       </div>
                     </div>
 
+                    {/* Cụm Kiểm Tra Kết Nối CapCut Cloud */}
+                    <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-purple-950/20 border border-purple-900/30 p-3 rounded-lg">
+                      <div className="text-xs">
+                        <div className="font-bold text-purple-300 flex items-center gap-1.5">
+                          <span>📡</span>
+                          <span>Trạng Thái Kết Nối Máy Chủ ByteDance:</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          Kiểm tra thông tuyến và xác thực VOD token tới cụm máy chủ CapCut AI Singapore.
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleTestCapCutConnection}
+                        disabled={isTestingCapCut}
+                        className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 cursor-pointer shrink-0"
+                      >
+                        {isTestingCapCut ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Đang kiểm tra...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="w-3.5 h-3.5" />
+                            <span>Kiểm Tra Kết Nối (Ping)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Hiển thị kết quả kiểm tra CapCut Cloud */}
+                    {capcutTestResult && (
+                      <div
+                        className={`p-3 rounded-lg text-xs font-mono border flex items-center justify-between animate-in fade-in ${
+                          capcutTestResult.ok
+                            ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300'
+                            : 'bg-rose-950/60 border-rose-700/60 text-rose-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          {capcutTestResult.ok ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                          )}
+                          <span className="truncate">{capcutTestResult.message}</span>
+                        </div>
+                        {capcutTestResult.latency_ms && (
+                          <div className="font-mono text-[10px] bg-slate-950/80 px-2 py-1 rounded border border-slate-800 shrink-0 ml-2">
+                            Độ trễ: {capcutTestResult.latency_ms}ms
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 6. CHI TIẾT KHI CHỌN MODE API: GROQ CLOUD WHISPER LPU */}
+              {settings.ocr.mode === 'api' && settings.ocr.api_provider === 'groq' && (
+                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4 animate-in fade-in">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                     <div>
-                      <label className="font-semibold text-slate-300 block mb-1.5">Session Token / Cookie (Tùy chọn):</label>
-                      <input
-                        type="password"
-                        value={settings.ocr.capcut_session_token || ''}
+                      <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                        <Zap className="w-4 h-4 text-emerald-400" />
+                        <span>Cấu Hình Groq Cloud ASR (Whisper Large-v3 LPU Siêu Tốc)</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Tốc độ siêu tốc ~250x-300x realtime (xử lý 1 tập phim 10 phút chỉ trong ~2 giây). Mô hình OpenAI Whisper Large-v3 nguyên bản.
+                      </p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-emerald-950 border border-emerald-700/60 text-emerald-300 text-[10px] font-mono font-bold">
+                      2,000 Req / Ngày Miễn Phí
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 text-xs">
+                    <div>
+                      <label className="font-semibold text-slate-300 block mb-1.5">Phiên Bản Whisper LPU:</label>
+                      <select
+                        value={settings.ocr.groq_model || 'whisper-large-v3'}
                         onChange={(e) =>
                           setSettings({
                             ...settings,
-                            ocr: { ...settings.ocr, capcut_session_token: e.target.value },
+                            ocr: { ...settings.ocr, groq_model: e.target.value as any },
                           })
                         }
-                        placeholder="Để trống nếu dùng chế độ Sandbox/Local Proxy..."
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-purple-500 font-mono text-[11px]"
-                      />
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="whisper-large-v3">Whisper Large-v3 (Độ chuẩn xác cao nhất thế giới • Khuyên dùng)</option>
+                        <option value="whisper-large-v3-turbo">Whisper Large-v3 Turbo (Tối ưu tốc độ phản hồi cực đoan)</option>
+                      </select>
                       <div className="text-[10px] text-slate-500 mt-1">
-                        Mã xác thực tài khoản CapCut Web hoặc Device ID.
+                        Chạy trực tiếp trên cụm chip bán dẫn Groq LPU không cần GPU của bạn.
                       </div>
                     </div>
                   </div>
 
-                  {/* Cụm Kiểm Tra Kết Nối CapCut */}
-                  <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-purple-950/20 border border-purple-900/40 p-3.5 rounded-xl">
+                  {/* Groq Key Pool Management Panel */}
+                  <div className="p-4 rounded-xl bg-slate-950/80 border border-emerald-900/50 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Key className="w-4 h-4 text-emerald-400" />
+                          <h4 className="text-xs font-bold text-white">Groq API Key Pool & Tự Động Xoay Tua</h4>
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300 text-[10px] font-mono">
+                            Round-Robin & Cooldown 429
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          Tự động phân phối tải qua nhiều keys. Khi một key dính HTTP 429, hệ thống tự chuyển sang key tiếp theo và cách ly tạm thời.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleVerifyAllGroqKeys}
+                          disabled={isVerifyingGroqPool || (groqPoolStatus?.total_keys || 0) === 0}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow cursor-pointer"
+                          title="Ping kiểm tra trạng thái tất cả các Groq keys trong pool"
+                        >
+                          <Sparkles className={`w-3.5 h-3.5 ${isVerifyingGroqPool ? 'animate-spin text-amber-300' : ''}`} />
+                          <span>{isVerifyingGroqPool ? 'Đang kiểm tra...' : 'Kiểm Tra Tất Cả Keys'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={loadGroqPool}
+                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                          title="Tải lại trạng thái pool"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 4 Chỉ Số Thông Lượng Groq Pool */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                      <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 block font-medium">Tổng số Keys</span>
+                        <span className="text-base font-bold text-white font-mono">
+                          {groqPoolStatus?.total_keys || 0}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-900 border border-emerald-900/40 text-center">
+                        <span className="text-[10px] text-emerald-400 block font-medium">Khả Dụng</span>
+                        <span className="text-base font-bold text-emerald-300 font-mono">
+                          {groqPoolStatus?.active_keys || 0}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-900 border border-amber-900/40 text-center">
+                        <span className="text-[10px] text-amber-400 block font-medium">Đang Nghỉ (429)</span>
+                        <span className="text-base font-bold text-amber-300 font-mono">
+                          {groqPoolStatus?.cooldown_keys || 0}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-900 border border-cyan-900/40 text-center">
+                        <span className="text-[10px] text-cyan-400 block font-medium">Quota Ước Tính</span>
+                        <span className="text-base font-bold text-cyan-300 font-mono">
+                          {((groqPoolStatus?.active_keys || 0) * 2000).toLocaleString()}{' '}
+                          <span className="text-[10px] font-normal text-slate-400">Req/ngày</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Sub-tabs: Danh sách Keys vs Nhập Hàng Loạt */}
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setActiveGroqPoolSubTab('list')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                            activeGroqPoolSubTab === 'list'
+                              ? 'bg-emerald-600 text-white shadow'
+                              : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                          }`}
+                        >
+                          <Key className="w-3.5 h-3.5" />
+                          <span>Danh Sách Keys ({groqPoolStatus?.total_keys || 0})</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setActiveGroqPoolSubTab('input')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                            activeGroqPoolSubTab === 'input'
+                              ? 'bg-emerald-600 text-white shadow'
+                              : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                          }`}
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>Thêm / Cập Nhật Keys</span>
+                        </button>
+                      </div>
+
+                      {activeGroqPoolSubTab === 'list' && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setGroqPoolKeyFilter('all')}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer ${
+                              groqPoolKeyFilter === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-300'
+                            }`}
+                          >
+                            Tất cả ({groqPoolStatus?.total_keys || 0})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setGroqPoolKeyFilter('usable')}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer ${
+                              groqPoolKeyFilter === 'usable'
+                                ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700/50'
+                                : 'text-slate-400 hover:text-emerald-400'
+                            }`}
+                          >
+                            Khả dụng ({groqPoolStatus?.active_keys || 0})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setGroqPoolKeyFilter('cooldown')}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer ${
+                              groqPoolKeyFilter === 'cooldown'
+                                ? 'bg-amber-900/60 text-amber-300 border border-amber-700/50'
+                                : 'text-slate-400 hover:text-amber-400'
+                            }`}
+                          >
+                            Đang nghỉ ({groqPoolStatus?.cooldown_keys || 0})
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Sub-tab 1: Danh Sách Keys */}
+                    {activeGroqPoolSubTab === 'list' && (
+                      <div className="space-y-2">
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            value={groqPoolSearchQuery}
+                            onChange={(e) => setGroqPoolSearchQuery(e.target.value)}
+                            placeholder="Tìm kiếm theo đuôi key..."
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500"
+                          />
+                        </div>
+
+                        <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                          {(!groqPoolStatus?.items || groqPoolStatus.items.length === 0) ? (
+                            <div className="text-center py-6 border border-dashed border-slate-800 rounded-xl">
+                              <Key className="w-8 h-8 text-slate-600 mx-auto mb-2 opacity-50" />
+                              <p className="text-xs text-slate-400">Chưa có API key nào trong Groq Key Pool.</p>
+                              <div className="flex items-center justify-center gap-3 mt-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveGroqPoolSubTab('input')}
+                                  className="text-xs font-semibold text-emerald-400 hover:underline cursor-pointer"
+                                >
+                                  + Thêm Key Ngay
+                                </button>
+                                <span className="text-slate-600">•</span>
+                                <a
+                                  href="https://console.groq.com/keys"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs text-slate-400 hover:text-emerald-300 hover:underline flex items-center gap-1"
+                                >
+                                  <span>Lấy key miễn phí (console.groq.com)</span>
+                                  <span>↗</span>
+                                </a>
+                              </div>
+                            </div>
+                          ) : (
+                            (groqPoolStatus.items || [])
+                              .filter((item) => {
+                                if (groqPoolKeyFilter === 'usable' && !item.is_usable) return false;
+                                if (groqPoolKeyFilter === 'cooldown' && item.status !== 'cooldown') return false;
+                                if (groqPoolSearchQuery.trim()) {
+                                  return item.masked_key.toLowerCase().includes(groqPoolSearchQuery.toLowerCase());
+                                }
+                                return true;
+                              })
+                              .map((item, idx) => (
+                                <div
+                                  key={idx}
+                                  className={`p-2.5 rounded-xl border flex items-center justify-between text-xs transition ${
+                                    item.status === 'cooldown'
+                                      ? 'bg-amber-950/20 border-amber-900/40'
+                                      : !item.is_usable
+                                      ? 'bg-rose-950/20 border-rose-900/40'
+                                      : 'bg-slate-900 border-slate-800/80 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="font-mono text-[10px] text-slate-500 w-5 text-right">
+                                      #{idx + 1}
+                                    </span>
+                                    <span className="font-mono text-slate-200 font-medium truncate">
+                                      {item.masked_key}
+                                    </span>
+                                    {item.latency_ms !== undefined && item.latency_ms > 0 && (
+                                      <span className="text-[10px] text-slate-500 font-mono">
+                                        ({item.latency_ms}ms)
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(item.masked_key);
+                                        setCopiedGroqKeyIndex(idx);
+                                        setTimeout(() => setCopiedGroqKeyIndex(null), 1500);
+                                      }}
+                                      className="p-1 text-slate-500 hover:text-slate-300 transition cursor-pointer"
+                                      title="Copy masked key"
+                                    >
+                                      {copiedGroqKeyIndex === idx ? (
+                                        <Check className="w-3 h-3 text-emerald-400" />
+                                      ) : (
+                                        <Copy className="w-3 h-3" />
+                                      )}
+                                    </button>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {item.status === 'cooldown' ? (
+                                      <span className="px-2 py-0.5 rounded-full bg-amber-950 border border-amber-800 text-amber-300 text-[10px] font-mono">
+                                        Nghỉ {item.remaining_seconds}s
+                                      </span>
+                                    ) : item.is_usable ? (
+                                      <span className="px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300 text-[10px] font-mono">
+                                        Khả dụng
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded-full bg-rose-950 border border-rose-800 text-rose-300 text-[10px] font-mono">
+                                        {item.status_label || 'Lỗi'}
+                                      </span>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteSingleGroqKey(item.index)}
+                                      className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition cursor-pointer"
+                                      title="Xoá Key khỏi Pool"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Sub-tab 2: Nhập Hàng Loạt */}
+                    {activeGroqPoolSubTab === 'input' && (
+                      <div className="space-y-3">
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label className="text-xs font-semibold text-slate-300">
+                              Dán danh sách Groq API Keys (Mỗi dòng một key):
+                            </label>
+                            <a
+                              href="https://console.groq.com/keys"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[10px] text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-1"
+                            >
+                              <span>Tạo key tại console.groq.com/keys</span>
+                              <span>↗</span>
+                            </a>
+                          </div>
+                          <textarea
+                            rows={4}
+                            value={groqPoolInputKeys}
+                            onChange={(e) => setGroqPoolInputKeys(e.target.value)}
+                            placeholder={"gsk_1234567890abcdef...\ngsk_abcdef1234567890..."}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 font-mono text-xs text-slate-200 focus:outline-none focus:border-emerald-500 resize-none"
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400">
+                            Số keys phát hiện:{' '}
+                            <span className="font-bold text-emerald-300 font-mono">
+                              {
+                                groqPoolInputKeys
+                                  .split('\n')
+                                  .map((k) => k.trim())
+                                  .filter((k) => k.length > 5).length
+                              }
+                            </span>
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={handleSaveGroqPoolKeys}
+                            disabled={
+                              isSavingGroqPoolKeys ||
+                              groqPoolInputKeys
+                                .split('\n')
+                                .map((k) => k.trim())
+                                .filter((k) => k.length > 5).length === 0
+                            }
+                            className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-50 text-white text-xs font-bold transition shadow cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>{isSavingGroqPoolKeys ? 'Đang lưu...' : 'Lưu Danh Sách Keys'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Cụm Kiểm Tra Thử Nghiệm 1 Key Riêng Lẻ */}
+                  <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950/60 border border-slate-800/80 p-3.5 rounded-xl">
                     <div className="text-xs">
-                      <div className="font-bold text-purple-300 flex items-center gap-1.5">
-                        <span>📡</span>
-                        <span>Kiểm Tra Trạng Thái Kết Nối Máy Chủ CapCut:</span>
+                      <div className="font-bold text-slate-200 flex items-center gap-1.5">
+                        <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Kiểm Tra Nhanh 1 API Key Riêng Lẻ:</span>
                       </div>
                       <div className="text-[11px] text-slate-400 mt-0.5">
-                        Gửi gói tin ping kiểm tra thông tuyến và đo độ trễ mạng (latency) tới hạ tầng ByteDance.
+                        Xác thực API Key cụ thể và đo độ trễ đường truyền tới cụm máy chủ Groq.
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={handleTestCapCutConnection}
-                      disabled={isTestingCapCut}
-                      className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 cursor-pointer shrink-0"
-                    >
-                      {isTestingCapCut ? (
-                        <>
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>Đang kiểm tra...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Zap className="w-3.5 h-3.5" />
-                          <span>Kiểm Tra Kết Nối (Ping)</span>
-                        </>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <input
+                        type="password"
+                        value={settings.ocr.groq_api_key || ''}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            ocr: { ...settings.ocr, groq_api_key: e.target.value },
+                          })
+                        }
+                        placeholder="gsk_..."
+                        className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-[11px] w-48"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleTestGroqConnection}
+                        disabled={isTestingGroq || !settings.ocr.groq_api_key}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 cursor-pointer shrink-0"
+                      >
+                        {isTestingGroq ? (
+                          <>
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            <span>Kiểm tra...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="w-3 h-3 text-emerald-400" />
+                            <span>Test Key</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Hiển thị kết quả kiểm tra CapCut */}
-                  {capcutTestResult && (
+                  {/* Hiển thị kết quả kiểm tra Groq */}
+                  {groqTestResult && (
                     <div
-                      className={`p-3.5 rounded-xl border text-xs flex items-center justify-between animate-in fade-in ${
-                        capcutTestResult.ok
+                      className={`p-3 rounded-xl border text-xs flex items-center justify-between animate-in fade-in ${
+                        groqTestResult.ok
                           ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300'
                           : 'bg-rose-950/60 border-rose-700/60 text-rose-300'
                       }`}
                     >
                       <div className="flex items-center gap-2">
-                        {capcutTestResult.ok ? (
+                        {groqTestResult.ok ? (
                           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                         ) : (
                           <span className="text-base shrink-0">⚠️</span>
                         )}
-                        <span>{capcutTestResult.message}</span>
+                        <span>{groqTestResult.message}</span>
                       </div>
-                      <div className="font-mono text-[10px] bg-slate-950/80 px-2 py-1 rounded border border-slate-800 shrink-0 ml-2">
-                        Độ trễ: {capcutTestResult.latency_ms}ms
-                      </div>
+                      {groqTestResult.latency_ms > 0 && (
+                        <div className="font-mono text-[10px] bg-slate-950/80 px-2 py-1 rounded border border-slate-800 shrink-0 ml-2">
+                          Độ trễ: {groqTestResult.latency_ms}ms
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1567,480 +2142,588 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
 
           {/* ================= TAB 2: DỊCH THUẬT AI ================= */}
           {activeTab === 'translation' && (
-            <div className="space-y-6 animate-in fade-in duration-150">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <Languages className="w-5 h-5 text-amber-400" />
-                    <span>2. Cấu Hình Động Cơ Dịch Thuật (Translation Engine)</span>
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Sử dụng Google Gemini AI kèm xoay tua Key Pool hoặc dịch máy dự phòng tự động.
-                  </p>
-                </div>
-
-                {onOpenKeyPool && (
-                  <button
-                    onClick={onOpenKeyPool}
-                    className="px-3.5 py-1.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
-                  >
-                    <Key className="w-3.5 h-3.5" />
-                    <span>Quản Lý Keys Pool</span>
-                  </button>
-                )}
+            <div className="space-y-5 animate-in fade-in duration-150">
+              {/* ── Header ── */}
+              <div className="pb-4 border-b border-slate-800/60">
+                <h3 className="text-base font-bold text-white flex items-center gap-2.5">
+                  <div className="p-1.5 rounded-lg bg-amber-500/15">
+                    <Languages className="w-4.5 h-4.5 text-amber-400" />
+                  </div>
+                  Động Cơ Dịch Thuật
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-1 ml-9">
+                  Chọn engine dịch chính, cấu hình văn phong và quản lý API keys.
+                </p>
               </div>
 
-              {/* Chọn Nhà Cung Cấp Dịch */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <label
+              {/* ── Mode Selector ── */}
+              <div className="grid grid-cols-2 gap-3">
+                {/* API Mode */}
+                <button
+                  type="button"
                   onClick={() => setSettings({ ...settings, translation: { ...settings.translation, provider: 'gemini' } })}
-                  className={`p-4 rounded-xl border cursor-pointer transition flex flex-col gap-1.5 ${
+                  className={`group relative p-4 rounded-xl border-2 text-left transition-all duration-200 cursor-pointer ${
                     settings.translation.provider === 'gemini'
-                      ? 'bg-amber-950/60 border-amber-500 text-white ring-1 ring-amber-500/50'
-                      : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 text-slate-300'
+                      ? 'bg-amber-500/8 border-amber-500/70 shadow-lg shadow-amber-500/5'
+                      : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs flex items-center gap-1.5">
+                  {settings.translation.provider === 'gemini' && (
+                    <div className="absolute top-3 right-3">
+                      <CheckCircle2 className="w-4.5 h-4.5 text-amber-400" />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2.5 mb-2">
+                    <div className={`p-2 rounded-lg ${settings.translation.provider === 'gemini' ? 'bg-amber-500/20' : 'bg-slate-800'}`}>
                       <Sparkles className="w-4 h-4 text-amber-400" />
-                      <span>Google Gemini AI (Khuyên dùng)</span>
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white">Google Gemini AI</div>
+                      <div className="text-[10px] text-slate-500 font-mono">Cloud API</div>
+                    </div>
+                  </div>
+                  <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                    Dịch theo ngữ cảnh, xưng hô chuẩn xác, văn phong điện ảnh.
+                  </p>
+                  <div className="mt-2.5 flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300/80 text-[9px] font-mono border border-amber-800/30">
+                      {geminiPoolStatus?.active_keys || 0} keys
                     </span>
-                    <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 text-[10px] font-mono border border-amber-700/50">
-                      Chuẩn Phim
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400/80 text-[9px] font-semibold border border-emerald-800/30">
+                      Mặc định
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Dịch theo ngữ cảnh câu chuyện, xưng hô nhân vật chuẩn xác (mẹ/con, anh/em), văn phong tự nhiên.
-                  </p>
-                </label>
+                </button>
 
-                <label
-                  onClick={() => setSettings({ ...settings, translation: { ...settings.translation, provider: 'google_web' } })}
-                  className={`p-4 rounded-xl border cursor-pointer transition flex flex-col gap-1.5 ${
-                    settings.translation.provider === 'google_web'
-                      ? 'bg-amber-950/60 border-amber-500 text-white ring-1 ring-amber-500/50'
-                      : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 text-slate-300'
+                {/* Local Mode */}
+                <button
+                  type="button"
+                  onClick={() => setSettings({ ...settings, translation: { ...settings.translation, provider: 'local' } })}
+                  className={`group relative p-4 rounded-xl border-2 text-left transition-all duration-200 cursor-pointer ${
+                    settings.translation.provider === 'local' || settings.translation.provider === 'local_model'
+                      ? 'bg-cyan-500/8 border-cyan-500/70 shadow-lg shadow-cyan-500/5'
+                      : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs">Google Translate Web (deep-translator)</span>
-                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-mono border border-slate-700">
-                      Miễn phí 100%
+                  {(settings.translation.provider === 'local' || settings.translation.provider === 'local_model') && (
+                    <div className="absolute top-3 right-3">
+                      <CheckCircle2 className="w-4.5 h-4.5 text-cyan-400" />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2.5 mb-2">
+                    <div className={`p-2 rounded-lg ${(settings.translation.provider === 'local' || settings.translation.provider === 'local_model') ? 'bg-cyan-500/20' : 'bg-slate-800'}`}>
+                      <Cpu className="w-4 h-4 text-cyan-400" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white">Qwen 2.5 Local</div>
+                      <div className="text-[10px] text-slate-500 font-mono">Ollama • Offline</div>
+                    </div>
+                  </div>
+                  <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                    Mô hình mã nguồn mở, chạy 100% cục bộ trên GPU.
+                  </p>
+                  <div className="mt-2.5 flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300/80 text-[9px] font-mono border border-cyan-800/30">
+                      RTX 3050
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-mono border border-slate-700/50">
+                      Riêng tư 100%
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Không cần API key. Thích hợp làm dự phòng khi toàn bộ API Keys trong pool đều bận hoặc hết hạn ngạch.
-                  </p>
-                </label>
+                </button>
               </div>
 
-              {/* Các tùy chọn chi tiết của Gemini AI */}
+              {/* ── Engine Configuration (conditional on selected mode) ── */}
               {settings.translation.provider === 'gemini' && (
-                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-xs font-semibold text-slate-300 block mb-1.5">Phiên Bản Gemini Model:</label>
-                      <select
-                        value={settings.translation.gemini_model}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            translation: { ...settings.translation, gemini_model: e.target.value },
-                          })
-                        }
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-amber-500"
-                      >
-                        <option value="gemini-2.5-flash">Gemini 2.5 Flash (Mới nhất, siêu nhanh & thông minh)</option>
-                        <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                        <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                      </select>
+                <div className="rounded-xl bg-slate-900/60 border border-slate-800/80 overflow-hidden animate-in fade-in duration-200">
+                  <div className="px-5 py-3 bg-slate-800/30 border-b border-slate-800/60 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span className="text-xs font-bold text-slate-200">Cấu Hình Gemini</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {(geminiPoolStatus?.active_keys || 0) * 15} RPM tối đa
+                    </span>
+                  </div>
+                  <div className="p-5">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block mb-1.5">Model</label>
+                        <select
+                          value={settings.translation.gemini_model}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              translation: { ...settings.translation, gemini_model: e.target.value },
+                            })
+                          }
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-amber-500/60 transition"
+                        >
+                          <option value="gemini-3.8-flash">Gemini 3.8 Flash — Mới nhất, tư duy sâu</option>
+                          <option value="gemini-3.7-flash">Gemini 3.7 Flash — Logic mạnh</option>
+                          <option value="gemini-2.5-flash">Gemini 2.5 Flash — Ổn định, siêu nhanh</option>
+                          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                          <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                        </select>
+                      </div>
+                      <div className="flex items-end">
+                        <div className="w-full p-3 rounded-lg bg-amber-950/15 border border-amber-900/20 text-[11px] text-amber-300/80 leading-relaxed">
+                          <span className="font-semibold">⚡ {geminiPoolStatus?.active_keys || 0} keys</span> hoạt động • Phân bổ 15 RPM/key • Tự cách ly 60s khi quá tải
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(settings.translation.provider === 'local' || settings.translation.provider === 'local_model') && (
+                <div className="rounded-xl bg-slate-900/60 border border-slate-800/80 overflow-hidden animate-in fade-in duration-200">
+                  <div className="px-5 py-3 bg-slate-800/30 border-b border-slate-800/60 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                      <span className="text-xs font-bold text-slate-200">Cấu Hình Local LLM</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono">Offline • Không cần mạng</span>
+                  </div>
+                  <div className="p-5 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block mb-1.5">Model</label>
+                        <select
+                          value={settings.translation.local_model || 'qwen2.5:7b-instruct'}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              translation: { ...settings.translation, local_model: e.target.value },
+                            })
+                          }
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-cyan-500/60 transition"
+                        >
+                          <option value="qwen2.5:7b-instruct">qwen2.5:7b — Khuyên dùng (VRAM ~4.5 GB)</option>
+                          <option value="qwen2.5:3b-instruct">qwen2.5:3b — Siêu nhẹ (VRAM ~2.2 GB)</option>
+                          <option value="qwen2.5:14b-instruct">qwen2.5:14b — Cao cấp (Cần GPU lớn)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block mb-1.5">Endpoint</label>
+                        <input
+                          type="text"
+                          value={settings.translation.local_endpoint || 'http://localhost:11434'}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              translation: { ...settings.translation, local_endpoint: e.target.value },
+                            })
+                          }
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-500/60 transition"
+                          placeholder="http://localhost:11434"
+                        />
+                      </div>
                     </div>
 
+                    {/* Connection Controls */}
+                    <div className="flex items-center justify-between p-3 rounded-lg bg-slate-950/80 border border-slate-800/60">
+                      <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                        <span>💡</span>
+                        <code className="text-cyan-300/80 font-mono px-1 py-0.5 bg-slate-900 rounded text-[10px]">ollama run qwen2.5:7b</code>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleStartLocalLlm}
+                          disabled={isStartingLocalLlm}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[11px] font-semibold flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
+                        >
+                          {isStartingLocalLlm ? <RefreshCw className="w-3 h-3 animate-spin" /> : <span>🚀</span>}
+                          <span>{isStartingLocalLlm ? 'Đang bật...' : 'Khởi động'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleTestLocalLlm}
+                          disabled={isTestingLocalLlm}
+                          className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
+                        >
+                          {isTestingLocalLlm ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                          <span>{isTestingLocalLlm ? 'Đang ping...' : 'Ping'}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Connection result */}
+                    {localLlmTestResult && (
+                      <div className={`p-3 rounded-lg border text-xs flex items-center justify-between animate-in fade-in ${
+                        localLlmTestResult.ok
+                          ? 'bg-emerald-950/40 border-emerald-800/40 text-emerald-300'
+                          : 'bg-amber-950/40 border-amber-800/40 text-amber-300'
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          {localLlmTestResult.ok
+                            ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            : <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          }
+                          <div>
+                            <div>{localLlmTestResult.message}</div>
+                            {localLlmTestResult.models.length > 0 && (
+                              <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                                Models: {localLlmTestResult.models.slice(0, 5).join(', ')}
+                                {localLlmTestResult.models.length > 5 ? ` (+${localLlmTestResult.models.length - 5})` : ''}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <span className="font-mono text-[10px] text-slate-500 shrink-0 ml-2">{localLlmTestResult.latency_ms}ms</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Translation Options (always visible) ── */}
+              <div className="rounded-xl bg-slate-900/60 border border-slate-800/80 overflow-hidden">
+                <div className="px-5 py-3 bg-slate-800/30 border-b border-slate-800/60">
+                  <span className="text-xs font-bold text-slate-200">Tùy Chọn Dịch Thuật</span>
+                </div>
+                <div className="p-5 space-y-4">
+                  <div className="grid grid-cols-3 gap-4">
+                    {/* Tone */}
                     <div>
-                      <label className="text-xs font-semibold text-slate-300 block mb-1.5">Phong Cách Kịch Bản (Tone):</label>
+                      <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block mb-1.5">Phong cách</label>
                       <select
                         value={settings.translation.prompt_tone}
                         onChange={(e) =>
                           setSettings({
                             ...settings,
-                            translation: {
-                              ...settings.translation,
-                              prompt_tone: e.target.value as any,
-                            },
+                            translation: { ...settings.translation, prompt_tone: e.target.value as any },
                           })
                         }
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-amber-500"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-amber-500/60 transition"
                       >
-                        <option value="dramatic">Kịch tính, điện ảnh (Phim truyền hình / Tiểu phẩm)</option>
-                        <option value="daily">Đời thường, tự nhiên, gần gũi</option>
-                        <option value="humorous">Hài hước, dí dỏm, tiếng lóng giới trẻ</option>
-                        <option value="literal">Sát nghĩa gốc (Tài liệu / Bản tin)</option>
+                        <option value="dramatic">Kịch tính, điện ảnh</option>
+                        <option value="daily">Đời thường, tự nhiên</option>
+                        <option value="humorous">Hài hước, dí dỏm</option>
+                        <option value="literal">Sát nghĩa gốc</option>
                       </select>
                     </div>
-                  </div>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
-                    <label className="flex items-center gap-2.5 cursor-pointer text-xs">
-                      <input
-                        type="checkbox"
-                        checked={settings.translation.use_glossary}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            translation: { ...settings.translation, use_glossary: e.target.checked },
-                          })
-                        }
-                        className="rounded accent-amber-500 cursor-pointer"
-                      />
-                      <span className="text-slate-300 font-medium">
-                        Áp dụng Từ điển tiếng lóng & khẩu ngữ Trung-Việt (打车, 换平台, 小姐姐, 破防...)
-                      </span>
-                    </label>
-                    <span className="text-[11px] font-mono text-slate-500">Mẻ 35 câu/lần</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Quản Lý Gemini Key Pool Toàn Diện (Tích hợp trong Tab, không cần Popup) */}
-              {settings.translation.provider === 'gemini' && (
-                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
-                        <Key className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-bold text-white flex items-center gap-2">
-                          <span>Gemini Key Pool (Xoay Tua Tự Động & Chống Quá Tải)</span>
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-950 border border-indigo-700/50 text-indigo-300 font-mono">
-                            Round-Robin
-                          </span>
-                        </h4>
-                        <p className="text-[11px] text-slate-400">
-                          Tự động phân bổ 15 RPM qua từng key, cách ly tạm thời 60s khi gặp 429
-                        </p>
-                      </div>
+                    {/* Glossary toggle */}
+                    <div className="flex items-end">
+                      <label className="flex items-center gap-2.5 cursor-pointer w-full p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition text-xs">
+                        <input
+                          type="checkbox"
+                          checked={settings.translation.use_glossary}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              translation: { ...settings.translation, use_glossary: e.target.checked },
+                            })
+                          }
+                          className="rounded accent-amber-500 cursor-pointer"
+                        />
+                        <span className="text-slate-300 font-medium leading-tight">
+                          Từ điển tiếng lóng Trung-Việt
+                        </span>
+                      </label>
                     </div>
 
+                    {/* Auto-failover toggle */}
+                    <div className="flex items-end">
+                      <label className="flex items-center gap-2.5 cursor-pointer w-full p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition text-xs">
+                        <input
+                          type="checkbox"
+                          checked={settings.translation.auto_fallback ?? true}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              translation: { ...settings.translation, auto_fallback: e.target.checked },
+                            })
+                          }
+                          className="rounded accent-emerald-500 cursor-pointer"
+                        />
+                        <span className="text-slate-300 font-medium leading-tight">
+                          Cứu hộ tự động (Failover)
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Cascade info bar */}
+                  <div className="px-3.5 py-2.5 rounded-lg bg-slate-950/60 border border-slate-800/50 text-[10.5px] text-slate-500 flex items-center gap-2">
+                    <span className="text-amber-400/70">🛡️</span>
+                    <span>
+                      <span className="text-slate-400 font-medium">Cascade Fallback:</span> Mode đã chọn → Mode còn lại → Google Translate Web
+                    </span>
+                    <span className="ml-auto text-slate-600 font-mono shrink-0">35 câu/mẻ</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Gemini Key Pool (only when Gemini selected) ── */}
+              {settings.translation.provider === 'gemini' && (
+                <div className="rounded-xl bg-slate-900/60 border border-slate-800/80 overflow-hidden">
+                  {/* Pool header */}
+                  <div className="px-5 py-3 bg-slate-800/30 border-b border-slate-800/60 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <Key className="w-3.5 h-3.5 text-amber-400" />
+                      <span className="text-xs font-bold text-slate-200">Gemini Key Pool</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-950/80 border border-indigo-800/40 text-indigo-300 font-mono">
+                        Round-Robin
+                      </span>
+                    </div>
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={handleVerifyAllKeys}
                         disabled={isVerifyingPool || (geminiPoolStatus?.total_keys || 0) === 0}
-                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow cursor-pointer"
-                        title="Ping kiểm tra trạng thái tất cả các keys trong pool"
+                        className="px-2.5 py-1 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 disabled:opacity-50 text-white text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer"
                       >
-                        <Sparkles className={`w-3.5 h-3.5 ${isVerifyingPool ? 'animate-spin text-amber-300' : ''}`} />
-                        <span>{isVerifyingPool ? 'Đang kiểm tra...' : 'Kiểm Tra Tất Cả Keys'}</span>
+                        <Sparkles className={`w-3 h-3 ${isVerifyingPool ? 'animate-spin' : ''}`} />
+                        <span>{isVerifyingPool ? 'Checking...' : 'Verify All'}</span>
                       </button>
-
                       <button
                         type="button"
                         onClick={loadGeminiPool}
-                        className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
-                        title="Tải lại trạng thái pool"
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" />
+                        <RefreshCw className="w-3 h-3" />
                       </button>
                     </div>
                   </div>
 
-                  {/* 4 Chỉ Số Thông Lượng */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-center">
-                      <span className="text-[10px] text-slate-400 block font-medium">Tổng số Keys</span>
-                      <span className="text-base font-bold text-white font-mono">
-                        {geminiPoolStatus?.total_keys || 0}
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-950 border border-emerald-900/40 text-center">
-                      <span className="text-[10px] text-emerald-400 block font-medium">Khả Dụng</span>
-                      <span className="text-base font-bold text-emerald-300 font-mono">
-                        {geminiPoolStatus?.active_keys || 0}
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-950 border border-amber-900/40 text-center">
-                      <span className="text-[10px] text-amber-400 block font-medium">Đang Nghỉ (429)</span>
-                      <span className="text-base font-bold text-amber-300 font-mono">
-                        {geminiPoolStatus?.cooldown_keys || 0}
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-950 border border-cyan-900/40 text-center">
-                      <span className="text-[10px] text-cyan-400 block font-medium">Thông Lượng Tối Đa</span>
-                      <span className="text-base font-bold text-cyan-300 font-mono">
-                        {(geminiPoolStatus?.active_keys || 0) * 15} <span className="text-[10px] font-normal text-slate-400">RPM</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Sub-tabs: Danh sách Keys vs Nhập Hàng Loạt */}
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setActivePoolSubTab('list')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                          activePoolSubTab === 'list'
-                            ? 'bg-amber-600 text-white shadow'
-                            : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                        }`}
-                      >
-                        <Key className="w-3.5 h-3.5" />
-                        <span>Danh Sách Keys ({geminiPoolStatus?.total_keys || 0})</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setActivePoolSubTab('input')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                          activePoolSubTab === 'input'
-                            ? 'bg-amber-600 text-white shadow'
-                            : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
-                        }`}
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        <span>Thêm / Cập Nhật Keys</span>
-                      </button>
+                  <div className="p-5 space-y-4">
+                    {/* Stats row */}
+                    <div className="grid grid-cols-4 gap-2">
+                      <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/60 text-center">
+                        <div className="text-[9px] text-slate-500 font-medium uppercase tracking-wider">Total</div>
+                        <div className="text-sm font-bold text-white font-mono mt-0.5">{geminiPoolStatus?.total_keys || 0}</div>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-slate-950/80 border border-emerald-900/30 text-center">
+                        <div className="text-[9px] text-emerald-500 font-medium uppercase tracking-wider">Active</div>
+                        <div className="text-sm font-bold text-emerald-400 font-mono mt-0.5">{geminiPoolStatus?.active_keys || 0}</div>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-slate-950/80 border border-amber-900/30 text-center">
+                        <div className="text-[9px] text-amber-500 font-medium uppercase tracking-wider">Cooldown</div>
+                        <div className="text-sm font-bold text-amber-400 font-mono mt-0.5">{geminiPoolStatus?.cooldown_keys || 0}</div>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-slate-950/80 border border-cyan-900/30 text-center">
+                        <div className="text-[9px] text-cyan-500 font-medium uppercase tracking-wider">Throughput</div>
+                        <div className="text-sm font-bold text-cyan-400 font-mono mt-0.5">
+                          {(geminiPoolStatus?.active_keys || 0) * 15}
+                          <span className="text-[9px] text-slate-500 font-normal ml-0.5">rpm</span>
+                        </div>
+                      </div>
                     </div>
 
+                    {/* Sub-tabs */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 p-0.5 rounded-lg bg-slate-950/80">
+                        <button
+                          type="button"
+                          onClick={() => setActivePoolSubTab('list')}
+                          className={`px-3 py-1.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                            activePoolSubTab === 'list'
+                              ? 'bg-amber-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Keys ({geminiPoolStatus?.total_keys || 0})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActivePoolSubTab('input')}
+                          className={`px-3 py-1.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                            activePoolSubTab === 'input'
+                              ? 'bg-amber-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Thêm Keys
+                        </button>
+                      </div>
+
+                      {activePoolSubTab === 'list' && (
+                        <div className="flex items-center gap-1">
+                          {(['all', 'usable', 'cooldown'] as const).map((f) => (
+                            <button
+                              key={f}
+                              type="button"
+                              onClick={() => setPoolKeyFilter(f)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
+                                poolKeyFilter === f
+                                  ? f === 'usable' ? 'bg-emerald-900/50 text-emerald-300' : f === 'cooldown' ? 'bg-amber-900/50 text-amber-300' : 'bg-slate-700 text-white'
+                                  : 'text-slate-500 hover:text-slate-300'
+                              }`}
+                            >
+                              {f === 'all' ? `Tất cả (${geminiPoolStatus?.total_keys || 0})` : f === 'usable' ? `Active (${geminiPoolStatus?.active_keys || 0})` : `Rest (${geminiPoolStatus?.cooldown_keys || 0})`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Key list */}
                     {activePoolSubTab === 'list' && (
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setPoolKeyFilter('all')}
-                          className={`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer ${
-                            poolKeyFilter === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-300'
-                          }`}
-                        >
-                          Tất cả ({geminiPoolStatus?.total_keys || 0})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPoolKeyFilter('usable')}
-                          className={`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer ${
-                            poolKeyFilter === 'usable' ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700/50' : 'text-slate-400 hover:text-emerald-400'
-                          }`}
-                        >
-                          Khả dụng ({geminiPoolStatus?.active_keys || 0})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPoolKeyFilter('cooldown')}
-                          className={`px-2 py-0.5 rounded text-[11px] font-medium transition cursor-pointer ${
-                            poolKeyFilter === 'cooldown' ? 'bg-amber-900/60 text-amber-300 border border-amber-700/50' : 'text-slate-400 hover:text-amber-400'
-                          }`}
-                        >
-                          Đang nghỉ ({geminiPoolStatus?.cooldown_keys || 0})
-                        </button>
+                      <div className="space-y-2">
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-slate-600 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            value={poolSearchQuery}
+                            onChange={(e) => setPoolSearchQuery(e.target.value)}
+                            placeholder="Tìm key..."
+                            className="w-full bg-slate-950/80 border border-slate-800/60 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-amber-500/60 transition"
+                          />
+                        </div>
+
+                        <div className="max-h-52 overflow-y-auto space-y-1 pr-0.5 scrollbar-thin">
+                          {(!geminiPoolStatus?.items || geminiPoolStatus.items.length === 0) ? (
+                            <div className="text-center py-8">
+                              <Key className="w-6 h-6 text-slate-700 mx-auto mb-2" />
+                              <p className="text-[11px] text-slate-500">Chưa có key nào.</p>
+                              <button type="button" onClick={() => setActivePoolSubTab('input')} className="mt-1.5 text-[11px] font-semibold text-amber-400 hover:underline cursor-pointer">
+                                + Thêm key
+                              </button>
+                            </div>
+                          ) : (
+                            (geminiPoolStatus.items || [])
+                              .filter((item) => {
+                                if (poolKeyFilter === 'usable' && !item.is_usable) return false;
+                                if (poolKeyFilter === 'cooldown' && item.status !== 'cooldown') return false;
+                                if (poolSearchQuery.trim()) return item.masked_key.toLowerCase().includes(poolSearchQuery.toLowerCase());
+                                return true;
+                              })
+                              .map((item, idx) => (
+                                <div
+                                  key={idx}
+                                  className={`px-3 py-2 rounded-lg border flex items-center justify-between text-xs transition ${
+                                    item.status === 'cooldown' ? 'bg-amber-950/15 border-amber-900/30'
+                                    : !item.is_usable ? 'bg-rose-950/15 border-rose-900/30'
+                                    : 'bg-slate-950/60 border-slate-800/50 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="font-mono text-[9px] text-slate-600 w-4 text-right">#{idx + 1}</span>
+                                    <span className="font-mono text-[11px] text-slate-300 truncate">{item.masked_key}</span>
+                                    {item.latency_ms !== undefined && item.latency_ms > 0 && (
+                                      <span className="text-[9px] text-slate-600 font-mono">({item.latency_ms}ms)</span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(item.masked_key);
+                                        setCopiedKeyIndex(idx);
+                                        setTimeout(() => setCopiedKeyIndex(null), 1500);
+                                      }}
+                                      className="p-0.5 text-slate-600 hover:text-slate-300 transition cursor-pointer"
+                                    >
+                                      {copiedKeyIndex === idx ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                                    </button>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {item.status === 'cooldown' ? (
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300 text-[9px] font-mono border border-amber-800/30">
+                                        Rest {item.remaining_seconds}s
+                                      </span>
+                                    ) : item.is_usable ? (
+                                      <span className="px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 text-[9px] font-mono border border-emerald-800/30">OK</span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-400 text-[9px] font-mono border border-rose-800/30">
+                                        {item.status_label || 'Err'}
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteSingleKey(idx)}
+                                      className="p-1 rounded text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 transition cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Add keys */}
+                    {activePoolSubTab === 'input' && (
+                      <div className="space-y-3">
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label className="text-[11px] font-semibold text-slate-400">Dán API Keys (mỗi dòng 1 key)</label>
+                            <span className="text-[10px] text-slate-600">Google AI Studio</span>
+                          </div>
+                          <textarea
+                            rows={4}
+                            value={poolInputKeys}
+                            onChange={(e) => setPoolInputKeys(e.target.value)}
+                            placeholder="AIzaSy...&#10;AIzaSy...&#10;AIzaSy..."
+                            className="w-full bg-slate-950/80 border border-slate-800/60 rounded-lg p-3 font-mono text-xs text-slate-200 focus:outline-none focus:border-amber-500/60 resize-none transition"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-slate-500">
+                            Phát hiện: <span className="font-bold text-amber-300 font-mono">
+                              {poolInputKeys.split('\n').map((k) => k.trim()).filter((k) => k.length > 5).length}
+                            </span> keys
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleSavePoolKeys}
+                            disabled={isSavingPoolKeys || poolInputKeys.split('\n').map((k) => k.trim()).filter((k) => k.length > 5).length === 0}
+                            className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-[11px] font-bold transition shadow cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Save className="w-3 h-3" />
+                            <span>{isSavingPoolKeys ? 'Saving...' : 'Lưu Keys'}</span>
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
-
-                  {/* Sub-tab 1: Danh Sách Keys */}
-                  {activePoolSubTab === 'list' && (
-                    <div className="space-y-2">
-                      <div className="relative">
-                        <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="text"
-                          value={poolSearchQuery}
-                          onChange={(e) => setPoolSearchQuery(e.target.value)}
-                          placeholder="Tìm kiếm theo đuôi key..."
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-amber-500"
-                        />
-                      </div>
-
-                      <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
-                        {(!geminiPoolStatus?.items || geminiPoolStatus.items.length === 0) ? (
-                          <div className="text-center py-6 border border-dashed border-slate-800 rounded-xl">
-                            <Key className="w-8 h-8 text-slate-600 mx-auto mb-2 opacity-50" />
-                            <p className="text-xs text-slate-400">Chưa có API key nào trong Pool.</p>
-                            <button
-                              type="button"
-                              onClick={() => setActivePoolSubTab('input')}
-                              className="mt-2 text-xs font-semibold text-amber-400 hover:underline cursor-pointer"
-                            >
-                              + Thêm Key Ngay
-                            </button>
-                          </div>
-                        ) : (
-                          (geminiPoolStatus.items || [])
-                            .filter((item) => {
-                              if (poolKeyFilter === 'usable' && !item.is_usable) return false;
-                              if (poolKeyFilter === 'cooldown' && item.status !== 'cooldown') return false;
-                              if (poolSearchQuery.trim()) {
-                                return item.masked_key.toLowerCase().includes(poolSearchQuery.toLowerCase());
-                              }
-                              return true;
-                            })
-                            .map((item, idx) => (
-                              <div
-                                key={idx}
-                                className={`p-2.5 rounded-xl border flex items-center justify-between text-xs transition ${
-                                  item.status === 'cooldown'
-                                    ? 'bg-amber-950/20 border-amber-900/40'
-                                    : !item.is_usable
-                                    ? 'bg-rose-950/20 border-rose-900/40'
-                                    : 'bg-slate-950 border-slate-800/80 hover:border-slate-700'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span className="font-mono text-[10px] text-slate-500 w-5 text-right">
-                                    #{idx + 1}
-                                  </span>
-                                  <span className="font-mono text-slate-200 font-medium truncate">
-                                    {item.masked_key}
-                                  </span>
-                                  {item.latency_ms !== undefined && item.latency_ms > 0 && (
-                                    <span className="text-[10px] text-slate-500 font-mono">
-                                      ({item.latency_ms}ms)
-                                    </span>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(item.masked_key);
-                                      setCopiedKeyIndex(idx);
-                                      setTimeout(() => setCopiedKeyIndex(null), 1500);
-                                    }}
-                                    className="p-1 text-slate-500 hover:text-slate-300 transition cursor-pointer"
-                                    title="Copy masked key"
-                                  >
-                                    {copiedKeyIndex === idx ? (
-                                      <Check className="w-3 h-3 text-emerald-400" />
-                                    ) : (
-                                      <Copy className="w-3 h-3" />
-                                    )}
-                                  </button>
-                                </div>
-
-                                <div className="flex items-center gap-2 shrink-0">
-                                  {item.status === 'cooldown' ? (
-                                    <span className="px-2 py-0.5 rounded-full bg-amber-950 border border-amber-800 text-amber-300 text-[10px] font-mono">
-                                      Nghỉ {item.remaining_seconds}s
-                                    </span>
-                                  ) : item.is_usable ? (
-                                    <span className="px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300 text-[10px] font-mono">
-                                      Khả dụng
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded-full bg-rose-950 border border-rose-800 text-rose-300 text-[10px] font-mono">
-                                      {item.status_label || 'Lỗi'}
-                                    </span>
-                                  )}
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteSingleKey(idx)}
-                                    className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition cursor-pointer"
-                                    title="Xoá Key khỏi Pool"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Sub-tab 2: Nhập Hàng Loạt */}
-                  {activePoolSubTab === 'input' && (
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-semibold text-slate-300">
-                            Dán danh sách API Keys (Mỗi dòng một key):
-                          </label>
-                          <span className="text-[10px] text-slate-500">
-                            Hỗ trợ dán nhiều key cùng lúc từ Google AI Studio
-                          </span>
-                        </div>
-                        <textarea
-                          rows={5}
-                          value={poolInputKeys}
-                          onChange={(e) => setPoolInputKeys(e.target.value)}
-                          placeholder="AIzaSy...\nAIzaSy...\nAIzaSy..."
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-xs text-slate-200 focus:outline-none focus:border-amber-500 resize-none"
-                        />
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-slate-400">
-                          Số keys phát hiện:{' '}
-                          <span className="font-bold text-amber-300 font-mono">
-                            {
-                              poolInputKeys
-                                .split('\n')
-                                .map((k) => k.trim())
-                                .filter((k) => k.length > 5).length
-                            }
-                          </span>
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={handleSavePoolKeys}
-                          disabled={
-                            isSavingPoolKeys ||
-                            poolInputKeys
-                              .split('\n')
-                              .map((k) => k.trim())
-                              .filter((k) => k.length > 5).length === 0
-                          }
-                          className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 active:scale-95 disabled:opacity-50 text-white text-xs font-bold transition shadow cursor-pointer flex items-center gap-1.5"
-                        >
-                          <Save className="w-3.5 h-3.5" />
-                          <span>{isSavingPoolKeys ? 'Đang lưu...' : 'Lưu Danh Sách Keys'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
 
-              {/* Khối Thử Nghiệm Dịch Tức Thì (Live Test) */}
-              <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Thử Nghiệm Dịch Trực Tiếp (Live Test)</span>
-                  </span>
+              {/* ── Live Test (compact) ── */}
+              <div className="rounded-xl bg-slate-900/60 border border-slate-800/80 overflow-hidden">
+                <div className="px-5 py-3 bg-slate-800/30 border-b border-slate-800/60 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Play className="w-3.5 h-3.5 text-amber-400" />
+                    <span className="text-xs font-bold text-slate-200">Dịch Thử Trực Tiếp</span>
+                  </div>
                   <button
                     type="button"
                     onClick={handleTestTranslation}
                     disabled={isTranslatingTest}
-                    className="px-3 py-1 rounded bg-amber-600 hover:bg-amber-500 active:scale-95 text-white font-bold text-xs transition disabled:opacity-50 flex items-center gap-1 shadow cursor-pointer"
+                    className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold flex items-center gap-1 transition disabled:opacity-50 cursor-pointer"
                   >
-                    <Play className="w-3 h-3 fill-white" />
-                    <span>{isTranslatingTest ? 'Đang dịch...' : 'Dịch thử ngay'}</span>
+                    {isTranslatingTest ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                    <span>{isTranslatingTest ? 'Đang dịch...' : 'Dịch thử'}</span>
                   </button>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div>
-                    <span className="text-[11px] text-slate-400 block mb-1">Câu gốc tiếng Trung:</span>
-                    <input
-                      type="text"
-                      value={testText}
-                      onChange={(e) => setTestText(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100 font-sans text-xs focus:outline-none focus:border-amber-500"
-                      placeholder="Nhập câu tiếng Trung..."
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[11px] text-slate-400">Kết quả tiếng Việt:</span>
-                      {testTransResult && (
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          {testTransResult.provider_used} ({testTransResult.latency_ms}ms)
-                        </span>
-                      )}
+                <div className="p-5">
+                  <div className="grid grid-cols-2 gap-4 text-xs">
+                    <div>
+                      <label className="text-[11px] text-slate-500 block mb-1">Câu gốc (Trung)</label>
+                      <input
+                        type="text"
+                        value={testText}
+                        onChange={(e) => setTestText(e.target.value)}
+                        className="w-full bg-slate-950/80 border border-slate-800/60 rounded-lg p-2.5 text-slate-100 text-xs focus:outline-none focus:border-amber-500/60 transition"
+                        placeholder="Nhập câu tiếng Trung..."
+                      />
                     </div>
-                    <div className="w-full bg-slate-950/90 border border-slate-800 rounded-lg p-2.5 text-cyan-300 font-medium text-xs min-h-[40px] flex items-center">
-                      {testTransResult ? testTransResult.translated : <span className="text-slate-500 italic">Bấm "Dịch thử ngay" để xem...</span>}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] text-slate-500">Kết quả (Việt)</label>
+                        {testTransResult && (
+                          <span className="text-[9px] text-slate-600 font-mono">
+                            {testTransResult.provider_used} • {testTransResult.latency_ms}ms
+                          </span>
+                        )}
+                      </div>
+                      <div className="w-full bg-slate-950/60 border border-slate-800/60 rounded-lg p-2.5 text-cyan-300 font-medium text-xs min-h-[38px] flex items-center">
+                        {testTransResult ? testTransResult.translated : <span className="text-slate-600 italic text-[11px]">Kết quả hiển thị ở đây...</span>}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2049,144 +2732,860 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
           )}
 
           {/* ================= TAB 3: GIỌNG ĐỌC TTS & ÂM THANH ================= */}
-          {activeTab === 'dubbing' && (
-            <div className="space-y-6 animate-in fade-in duration-150">
-              <div className="border-b border-slate-800 pb-3">
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Mic className="w-5 h-5 text-emerald-400" />
-                  <span>3. Cấu Hình Giọng Đọc Thuyết Minh (Edge-TTS) & Âm Thanh</span>
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Tự động tạo giọng đọc tiếng Việt khớp timecode và hòa âm với nhạc nền (Audio Ducking).
-                </p>
-              </div>
+          {activeTab === 'dubbing' && (() => {
+            const currentProvider = (settings.dubbing.provider as 'edge' | 'capcut' | 'gemini') || 'edge';
+            const currentVoiceList = ttsCatalog[currentProvider] || DEFAULT_TTS_CATALOG[currentProvider] || [];
 
-              {/* Chọn Giọng Đọc */}
-              <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                <label className="text-xs font-bold text-slate-200 block">Giọng Đọc Microsoft Neural TTS:</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <label
-                    onClick={() => setSettings({ ...settings, dubbing: { ...settings.dubbing, voice: 'vi-VN-NamMinhNeural' } })}
-                    className={`p-4 rounded-xl border cursor-pointer transition flex flex-col gap-1.5 ${
-                      settings.dubbing.voice === 'vi-VN-NamMinhNeural'
-                        ? 'bg-emerald-950/60 border-emerald-500 text-white ring-1 ring-emerald-500/50'
-                        : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 text-slate-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs">Nam Minh (vi-VN-NamMinhNeural)</span>
-                      <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono border border-emerald-700/50">
-                        Nam truyền cảm
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Giọng nam trầm ấm, rõ ràng, phát âm chuẩn tiếng Việt, rất phù hợp phim kịch tính và truyện ngắn.
+            const countByLang = (langKey: 'all' | 'vi' | 'en' | 'zh' | 'ja' | 'ko' | 'other') => {
+              if (langKey === 'all') return currentVoiceList.length;
+              if (langKey === 'vi') return currentVoiceList.filter((v) => v.lang === 'vi' || v.lang === 'all').length;
+              if (langKey === 'en') return currentVoiceList.filter((v) => v.lang === 'en' || v.lang === 'all').length;
+              if (langKey === 'zh') return currentVoiceList.filter((v) => v.lang === 'zh' || v.lang.startsWith('zh')).length;
+              if (langKey === 'ja') return currentVoiceList.filter((v) => v.lang === 'ja').length;
+              if (langKey === 'ko') return currentVoiceList.filter((v) => v.lang === 'ko').length;
+              return currentVoiceList.filter(
+                (v) => !['vi', 'en', 'all'].includes(v.lang) && !v.lang.startsWith('zh') && v.lang !== 'ja' && v.lang !== 'ko'
+              ).length;
+            };
+
+            const filteredVoices = currentVoiceList.filter((v) => {
+              // Language filter
+              if (ttsLangFilter === 'vi' && !(v.lang === 'vi' || v.lang === 'all')) return false;
+              if (ttsLangFilter === 'en' && !(v.lang === 'en' || v.lang === 'all')) return false;
+              if (ttsLangFilter === 'zh' && !(v.lang === 'zh' || v.lang.startsWith('zh'))) return false;
+              if (ttsLangFilter === 'ja' && v.lang !== 'ja') return false;
+              if (ttsLangFilter === 'ko' && v.lang !== 'ko') return false;
+              if (ttsLangFilter === 'other' && (['vi', 'en', 'all'].includes(v.lang) || v.lang.startsWith('zh') || v.lang === 'ja' || v.lang === 'ko')) return false;
+
+              // Gender filter
+              if (ttsGenderFilter === 'male' && v.gender !== 'male' && v.gender !== 'neutral') return false;
+              if (ttsGenderFilter === 'female' && v.gender !== 'female' && v.gender !== 'neutral') return false;
+
+              // Search query
+              if (ttsSearchQuery.trim()) {
+                const q = ttsSearchQuery.toLowerCase();
+                const matchName = (v.display_name || '').toLowerCase().includes(q);
+                const matchId = (v.voice_id || '').toLowerCase().includes(q);
+                const matchDesc = (v.description || '').toLowerCase().includes(q);
+                const matchTags = (v.tags || []).some((t) => (t || '').toLowerCase().includes(q));
+                if (!matchName && !matchId && !matchDesc && !matchTags) return false;
+              }
+
+              return true;
+            });
+
+            const maleVoices = currentVoiceList.filter((v) => v.gender === 'male' || v.gender === 'neutral');
+            const femaleVoices = currentVoiceList.filter((v) => v.gender === 'female' || v.gender === 'neutral');
+
+            return (
+              <div className="space-y-6 animate-in fade-in duration-150">
+                {/* Header */}
+                <div className="pb-4 border-b border-slate-800/60 flex items-start justify-between flex-wrap gap-3">
+                  <div>
+                    <h3 className="text-base font-bold text-white flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-emerald-500/15">
+                        <Mic className="w-4.5 h-4.5 text-emerald-400" />
+                      </div>
+                      Động Cơ Thuyết Minh & Lồng Tiếng Đa Nền Tảng (Multi-Provider TTS)
+                    </h3>
+                    <p className="text-[11px] text-slate-400 mt-1 ml-9">
+                      Kết hợp Microsoft Edge-TTS, CapCut ByteDance Voice Studio và Google Gemini 3.1 Speech với cơ chế tự động dự phòng (failover).
                     </p>
-                  </label>
-
-                  <label
-                    onClick={() => setSettings({ ...settings, dubbing: { ...settings.dubbing, voice: 'vi-VN-HoaiMyNeural' } })}
-                    className={`p-4 rounded-xl border cursor-pointer transition flex flex-col gap-1.5 ${
-                      settings.dubbing.voice === 'vi-VN-HoaiMyNeural'
-                        ? 'bg-emerald-950/60 border-emerald-500 text-white ring-1 ring-emerald-500/50'
-                        : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 text-slate-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs">Hoài My (vi-VN-HoaiMyNeural)</span>
-                      <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono border border-emerald-700/50">
-                        Nữ dịu dàng
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Giọng nữ nhẹ nhàng, trong trẻo, phù hợp thể loại tâm lý xã hội, ẩm thực và đời sống.
-                    </p>
-                  </label>
-                </div>
-              </div>
-
-              {/* Tốc độ nói & Tỷ lệ giảm nhạc nền */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-200">Tốc Độ Đọc (Speech Rate):</label>
-                    <span className="font-mono font-bold text-emerald-400 text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-800">
-                      {settings.dubbing.rate}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-[11px] text-slate-400 font-mono flex items-center gap-1.5">
+                      <Volume2 className="w-3 h-3 text-emerald-400" />
+                      {currentVoiceList.length} giọng sẵn sàng
                     </span>
                   </div>
-                  <select
-                    value={settings.dubbing.rate}
-                    onChange={(e) =>
-                      setSettings({ ...settings, dubbing: { ...settings.dubbing, rate: e.target.value } })
-                    }
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-emerald-500"
-                  >
-                    <option value="-10%">-10% (Chậm rãi, lắng đọng)</option>
-                    <option value="+0%">+0% (Chuẩn tự nhiên)</option>
-                    <option value="+10%">+10% (Nhanh vừa, khớp thoại gấp)</option>
-                    <option value="+20%">+20% (Nhanh, cho câu dài)</option>
-                  </select>
                 </div>
 
-                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                {/* 1. BỘ CHỌN NỀN TẢNG TTS (PROVIDER SELECTOR) */}
+                <div className="space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-200">Dìm Nhạc Nền (Audio Ducking):</label>
-                    <span className="font-mono font-bold text-emerald-400 text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-800">
-                      {Math.round(settings.dubbing.ducking_volume * 100)}%
+                    <label className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span>1. Chọn Nền Tảng Giọng Đọc (TTS Provider):</span>
+                    </label>
+                    <span className="text-[10px] text-slate-500 font-mono">Tự động chuyển tiếp khi gặp sự cố mạng</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {/* Provider 1: Edge-TTS */}
+                    <button
+                      type="button"
+                      onClick={() => handleSelectDubbingProvider('edge')}
+                      className={`group relative p-4 rounded-xl border-2 text-left transition-all duration-200 cursor-pointer ${
+                        currentProvider === 'edge'
+                          ? 'bg-emerald-500/10 border-emerald-500/80 shadow-lg shadow-emerald-500/10'
+                          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
+                      }`}
+                    >
+                      {currentProvider === 'edge' && (
+                        <div className="absolute top-3 right-3">
+                          <CheckCircle2 className="w-4.5 h-4.5 text-emerald-400" />
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className={`p-2 rounded-lg ${currentProvider === 'edge' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}`}>
+                          <Zap className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-white">Microsoft Edge-TTS</div>
+                          <div className="text-[10px] text-emerald-400 font-mono">Neural Voice • Miễn Phí</div>
+                        </div>
+                      </div>
+                      <p className="text-[10.5px] text-slate-400 leading-relaxed mb-3">
+                        Tốc độ sinh âm cực nhanh, ổn định 100%, không cần API Key, chuẩn phát âm truyền cảm.
+                      </p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[9px] font-mono border border-emerald-800/40">
+                          Siêu Tốc & Ổn Định
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-mono border border-slate-700/50">
+                          {ttsCatalog.edge?.length || DEFAULT_TTS_CATALOG.edge.length} giọng
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Provider 2: CapCut */}
+                    <button
+                      type="button"
+                      onClick={() => handleSelectDubbingProvider('capcut')}
+                      className={`group relative p-4 rounded-xl border-2 text-left transition-all duration-200 cursor-pointer ${
+                        currentProvider === 'capcut'
+                          ? 'bg-cyan-500/10 border-cyan-500/80 shadow-lg shadow-cyan-500/10'
+                          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
+                      }`}
+                    >
+                      {currentProvider === 'capcut' && (
+                        <div className="absolute top-3 right-3">
+                          <CheckCircle2 className="w-4.5 h-4.5 text-cyan-400" />
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className={`p-2 rounded-lg ${currentProvider === 'capcut' ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-800 text-slate-400'}`}>
+                          <Flame className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-white">CapCut Voice Studio</div>
+                          <div className="text-[10px] text-cyan-400 font-mono">ByteDance Cloud • Trending</div>
+                        </div>
+                      </div>
+                      <p className="text-[10.5px] text-slate-400 leading-relaxed mb-3">
+                        Bộ sưu tập giọng hot TikTok: Thanh Niên Tự Tin, Nhỏ Ngọt Ngào, Mai, Jessie, Deadpool...
+                      </p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 text-[9px] font-mono border border-cyan-800/40">
+                          Viral TikTok / Short
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-mono border border-slate-700/50">
+                          {ttsCatalog.capcut?.length || DEFAULT_TTS_CATALOG.capcut.length} giọng
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Provider 3: Gemini */}
+                    <button
+                      type="button"
+                      onClick={() => handleSelectDubbingProvider('gemini')}
+                      className={`group relative p-4 rounded-xl border-2 text-left transition-all duration-200 cursor-pointer ${
+                        currentProvider === 'gemini'
+                          ? 'bg-purple-500/10 border-purple-500/80 shadow-lg shadow-purple-500/10'
+                          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
+                      }`}
+                    >
+                      {currentProvider === 'gemini' && (
+                        <div className="absolute top-3 right-3">
+                          <CheckCircle2 className="w-4.5 h-4.5 text-purple-400" />
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className={`p-2 rounded-lg ${currentProvider === 'gemini' ? 'bg-purple-500/20 text-purple-400' : 'bg-slate-800 text-slate-400'}`}>
+                          <Wand2 className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-white">Google Gemini Speech</div>
+                          <div className="text-[10px] text-purple-400 font-mono">Gemini 3.1 Flash • AI Biểu Cảm</div>
+                        </div>
+                      </div>
+                      <p className="text-[10.5px] text-slate-400 leading-relaxed mb-3">
+                        Tùy biến sắc thái cảm xúc (kịch tính, thì thầm, phấn khích), tận dụng cụm Key Pool 40+ keys.
+                      </p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 text-[9px] font-mono border border-purple-800/40">
+                          AI Cảm Xúc • Key Pool
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-mono border border-slate-700/50">
+                          {ttsCatalog.gemini?.length || DEFAULT_TTS_CATALOG.gemini.length} giọng
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. CẤU HÌNH GEMINI PROMPT STYLE (Nếu chọn Gemini) */}
+                {currentProvider === 'gemini' && (
+                  <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-900/40 space-y-3 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Wand2 className="w-4 h-4 text-purple-400" />
+                        <span className="text-xs font-bold text-purple-200">Sắc Thái Cảm Xúc AI (Gemini Speech Style Prompt)</span>
+                      </div>
+                      <span className="text-[10px] text-purple-400 font-mono">Mô hình: gemini-3.1-flash-tts-preview</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                      {GEMINI_STYLE_PRESETS.map((pst) => (
+                        <button
+                          key={pst.id}
+                          type="button"
+                          onClick={() =>
+                            setSettings({
+                              ...settings,
+                              dubbing: { ...settings.dubbing, gemini_prompt_style: pst.id },
+                            })
+                          }
+                          className={`p-2.5 rounded-lg border text-left transition cursor-pointer flex flex-col justify-between ${
+                            settings.dubbing.gemini_prompt_style === pst.id
+                              ? 'bg-purple-900/50 border-purple-400 text-white shadow'
+                              : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 text-slate-300'
+                          }`}
+                        >
+                          <div className="font-bold text-xs">{pst.label}</div>
+                          <div className="text-[9.5px] text-slate-400 mt-1 line-clamp-2">{pst.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="pt-1">
+                      <label className="text-[10.5px] text-slate-400 block mb-1">
+                        Tuỳ chỉnh câu lệnh sắc thái hoặc chỉ dẫn diễn đạt cho Gemini:
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.dubbing.gemini_prompt_style || 'dramatic'}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            dubbing: { ...settings.dubbing, gemini_prompt_style: e.target.value },
+                          })
+                        }
+                        placeholder="Nhập sắc thái mong muốn (ví dụ: dramatic, cinematic trailer, warm bedtime story...)"
+                        className="w-full bg-slate-950/80 border border-slate-800/80 rounded-lg p-2 text-xs text-purple-200 focus:outline-none focus:border-purple-500 font-mono"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. BỘ CHỌN 2 MODE: ĐƠN THOẠI (1 NGƯỜI) VS ĐA THOẠI (NHIỀU NGƯỜI PHÂN VAI) */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                    <Sliders className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>2. Chế Độ Lồng Tiếng:</span>
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Mode 1: Single Speaker */}
+                    <button
+                      type="button"
+                      onClick={() => setSettings({ ...settings, dubbing: { ...settings.dubbing, mode: 'single' } })}
+                      className={`group relative p-4 rounded-xl border-2 text-left transition-all duration-200 cursor-pointer ${
+                        (!settings.dubbing.mode || settings.dubbing.mode === 'single')
+                          ? 'bg-emerald-500/8 border-emerald-500/70 shadow-lg shadow-emerald-500/5'
+                          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
+                      }`}
+                    >
+                      {(!settings.dubbing.mode || settings.dubbing.mode === 'single') && (
+                        <div className="absolute top-3 right-3">
+                          <CheckCircle2 className="w-4.5 h-4.5 text-emerald-400" />
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className={`p-2 rounded-lg ${(!settings.dubbing.mode || settings.dubbing.mode === 'single') ? 'bg-emerald-500/20' : 'bg-slate-800'}`}>
+                          <Volume2 className="w-4 h-4 text-emerald-400" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-white">Lồng Tiếng 1 Người (Đơn Thoại)</div>
+                          <div className="text-[10px] text-slate-500 font-mono">Single Speaker • Review / Kể Chuyện</div>
+                        </div>
+                      </div>
+                      <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                        Sử dụng 1 giọng đọc duy nhất xuyên suốt video. Phù hợp cho tóm tắt phim, review, tin tức, đọc truyện.
+                      </p>
+                      <div className="mt-2.5 flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 text-[9px] font-mono border border-emerald-800/30">
+                          1 Giọng đọc chính
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-mono border border-slate-700/50">
+                          Mặc định ổn định
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Mode 2: Multi-Speaker */}
+                    <button
+                      type="button"
+                      onClick={() => setSettings({ ...settings, dubbing: { ...settings.dubbing, mode: 'multi' } })}
+                      className={`group relative p-4 rounded-xl border-2 text-left transition-all duration-200 cursor-pointer ${
+                        settings.dubbing.mode === 'multi'
+                          ? 'bg-purple-500/8 border-purple-500/70 shadow-lg shadow-purple-500/5'
+                          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
+                      }`}
+                    >
+                      {settings.dubbing.mode === 'multi' && (
+                        <div className="absolute top-3 right-3">
+                          <CheckCircle2 className="w-4.5 h-4.5 text-purple-400" />
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className={`p-2 rounded-lg ${settings.dubbing.mode === 'multi' ? 'bg-purple-500/20' : 'bg-slate-800'}`}>
+                          <Sparkles className="w-4 h-4 text-purple-400" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-white">Lồng Tiếng Nhiều Người (Phân Vai)</div>
+                          <div className="text-[10px] text-purple-400 font-mono">Multi-Speaker • Phim Truyền Hình</div>
+                        </div>
+                      </div>
+                      <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                        Tự động nhận diện nhân vật Nam/Nữ theo ngữ cảnh câu thoại. Thoại nam giọng Nam, thoại nữ giọng Nữ.
+                      </p>
+                      <div className="mt-2.5 flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 rounded bg-purple-950/80 text-purple-300 text-[9px] font-mono border border-purple-800/30">
+                          Đa nhân vật (Nam + Nữ)
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-950/60 text-indigo-300 text-[9px] font-semibold border border-indigo-800/30">
+                          AI Tự động phân vai
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4. BỘ LỌC & TÌM KIẾM GIỌNG ĐỌC */}
+                <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800/80 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2.5">
+                    {/* Language Tabs */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] font-bold text-slate-300 mr-1">Ngôn ngữ:</span>
+                      {[
+                        { id: 'all', label: 'Tất Cả', icon: '🌐' },
+                        { id: 'vi', label: 'Tiếng Việt', icon: '🇻🇳' },
+                        { id: 'en', label: 'English', icon: '🇬🇧' },
+                        { id: 'zh', label: 'Trung', icon: '🇨🇳' },
+                        { id: 'ja', label: 'Nhật', icon: '🇯🇵' },
+                        { id: 'ko', label: 'Hàn', icon: '🇰🇷' },
+                        { id: 'other', label: 'Khác', icon: '🌍' },
+                      ].map((tab) => {
+                        const count = countByLang(tab.id as any);
+                        if (count === 0 && tab.id !== 'all' && tab.id !== 'vi' && tab.id !== 'en') return null;
+                        return (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setTtsLangFilter(tab.id as any)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                              ttsLangFilter === tab.id
+                                ? 'bg-emerald-600 text-white font-bold shadow'
+                                : 'bg-slate-950/70 border border-slate-800/60 text-slate-400 hover:text-white hover:border-slate-700'
+                            }`}
+                          >
+                            <span>{tab.icon}</span>
+                            <span>{tab.label}</span>
+                            <span className={`text-[10px] px-1 rounded-full ${ttsLangFilter === tab.id ? 'bg-emerald-700/80 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                              {count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Gender Filter Buttons */}
+                    <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                      <span className="text-[10px] text-slate-500 px-1 font-medium">Giới tính:</span>
+                      <button
+                        type="button"
+                        onClick={() => setTtsGenderFilter('all')}
+                        className={`px-2 py-0.5 rounded text-[10.5px] font-medium transition cursor-pointer ${
+                          ttsGenderFilter === 'all'
+                            ? 'bg-slate-800 text-white font-bold'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Tất cả
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTtsGenderFilter('male')}
+                        className={`px-2 py-0.5 rounded text-[10.5px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                          ttsGenderFilter === 'male'
+                            ? 'bg-cyan-900/60 text-cyan-200 border border-cyan-700/50 font-bold'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <span>👨 Nam</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTtsGenderFilter('female')}
+                        className={`px-2 py-0.5 rounded text-[10.5px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                          ttsGenderFilter === 'female'
+                            ? 'bg-pink-900/60 text-pink-200 border border-pink-700/50 font-bold'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <span>👩 Nữ</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Search Bar + Active Playing Audio Indicator / Stop Button */}
+                  <div className="flex items-center justify-between gap-3 pt-1 border-t border-slate-800/60">
+                    <div className="relative flex-1 max-w-md">
+                      <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Tìm theo tên, ID, sắc thái, thể loại (review phim, kịch tính...)..."
+                        value={ttsSearchQuery}
+                        onChange={(e) => setTtsSearchQuery(e.target.value)}
+                        className="w-full pl-9 pr-8 py-1.5 bg-slate-950/90 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/60 transition"
+                      />
+                      {ttsSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setTtsSearchQuery('')}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {playingPreviewVoice && (
+                        <button
+                          type="button"
+                          onClick={stopCurrentAudio}
+                          className="px-2.5 py-1 rounded-lg bg-red-500/20 border border-red-500/50 text-red-300 text-xs font-medium hover:bg-red-500/30 flex items-center gap-1.5 animate-pulse cursor-pointer"
+                          title="Dừng âm thanh đang phát"
+                        >
+                          <Square className="w-3 h-3 fill-current" />
+                          <span>Dừng ({playingPreviewVoice})</span>
+                        </button>
+                      )}
+
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        Hiển thị <strong className="text-emerald-400">{filteredVoices.length}</strong> / {currentVoiceList.length} giọng ({currentProvider.toUpperCase()})
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. CẤU HÌNH GIỌNG ĐỌC THEO MODE */}
+                {(!settings.dubbing.mode || settings.dubbing.mode === 'single') ? (
+                  /* Single Speaker: Grid Voice Cards */
+                  <div className="rounded-xl bg-slate-900/60 border border-slate-800/80 overflow-hidden animate-in fade-in duration-150">
+                    <div className="px-5 py-3 bg-slate-800/30 border-b border-slate-800/60 flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-200">
+                        Chọn Giọng Đọc Chính ({currentProvider.toUpperCase()})
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        Đang chọn: <strong className="text-emerald-400">{settings.dubbing.voice}</strong>
+                      </span>
+                    </div>
+                    <div className="p-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                        {filteredVoices.map((v) => {
+                          const isSelected = settings.dubbing.voice === v.voice_id;
+                          return (
+                            <div
+                              key={v.voice_id}
+                              onClick={() => setSettings({ ...settings, dubbing: { ...settings.dubbing, voice: v.voice_id } })}
+                              className={`p-3.5 rounded-xl border cursor-pointer transition relative flex flex-col justify-between ${
+                                isSelected
+                                  ? currentProvider === 'capcut'
+                                    ? 'bg-cyan-950/40 border-cyan-500/80 text-white ring-1 ring-cyan-500/50 shadow-lg shadow-cyan-500/10'
+                                    : currentProvider === 'gemini'
+                                    ? 'bg-purple-950/40 border-purple-500/80 text-white ring-1 ring-purple-500/50 shadow-lg shadow-purple-500/10'
+                                    : 'bg-emerald-950/40 border-emerald-500/80 text-white ring-1 ring-emerald-500/50 shadow-lg shadow-emerald-500/10'
+                                  : 'bg-slate-950/80 border-slate-800/70 hover:border-slate-700 text-slate-300 hover:bg-slate-900/60'
+                              }`}
+                            >
+                              <div>
+                                <div className="flex items-start justify-between gap-2 mb-1.5">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-sm">{v.gender === 'female' ? '👩' : '👨'}</span>
+                                    <span className="font-bold text-xs text-white">{v.display_name}</span>
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border ${
+                                      v.lang === 'vi'
+                                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/40'
+                                        : v.lang === 'en'
+                                        ? 'bg-blue-950/80 text-blue-300 border-blue-800/40'
+                                        : 'bg-purple-950/80 text-purple-300 border-purple-800/40'
+                                    }`}>
+                                      {v.lang === 'vi' ? '🇻🇳 Việt' : v.lang === 'en' ? '🇬🇧 Eng' : '🌐 Đa ngữ'}
+                                    </span>
+                                  </div>
+                                  {isSelected && (
+                                    <CheckCircle2 className={`w-4 h-4 shrink-0 ${
+                                      currentProvider === 'capcut' ? 'text-cyan-400' : currentProvider === 'gemini' ? 'text-purple-400' : 'text-emerald-400'
+                                    }`} />
+                                  )}
+                                </div>
+
+                                <div className="text-[10px] text-slate-500 font-mono mb-1.5 truncate" title={v.voice_id}>
+                                  ID: {v.voice_id}
+                                </div>
+
+                                <p className="text-[11px] text-slate-400 leading-relaxed mb-2.5 line-clamp-2">
+                                  {v.description}
+                                </p>
+                              </div>
+
+                              <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  {v.tags.slice(0, 2).map((t, idx) => (
+                                    <span key={idx} className="px-1.5 py-0.5 rounded bg-slate-900 text-slate-400 text-[9px] border border-slate-800">
+                                      {t}
+                                    </span>
+                                  ))}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleTestDubbing(v.voice_id, currentProvider);
+                                  }}
+                                  disabled={isDubbingTest && activeVoicePreviewing !== v.voice_id}
+                                  className={`px-2 py-1 rounded text-[10px] font-medium transition flex items-center gap-1 shrink-0 ${
+                                    playingPreviewVoice === v.voice_id
+                                      ? 'bg-red-600 hover:bg-red-500 text-white animate-pulse shadow-md shadow-red-500/20 cursor-pointer'
+                                      : activeVoicePreviewing === v.voice_id
+                                      ? 'bg-emerald-600 text-white animate-pulse cursor-wait'
+                                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white cursor-pointer'
+                                  }`}
+                                  title={playingPreviewVoice === v.voice_id ? 'Dừng phát âm thanh' : 'Nghe thử giọng này'}
+                                >
+                                  {playingPreviewVoice === v.voice_id ? (
+                                    <>
+                                      <Square className="w-2.5 h-2.5 fill-current" />
+                                      <span>Dừng</span>
+                                    </>
+                                  ) : activeVoicePreviewing === v.voice_id ? (
+                                    <>
+                                      <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                                      <span>Đang tạo...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Play className="w-2.5 h-2.5 fill-current" />
+                                      <span>Nghe thử</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Multi-Speaker Voice Allocation */
+                  <div className="rounded-xl bg-slate-900/60 border border-purple-900/40 overflow-hidden animate-in fade-in duration-150">
+                    <div className="px-5 py-3 bg-purple-950/20 border-b border-purple-900/30 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                        <span className="text-xs font-bold text-purple-200">Phân Vai Giọng Đọc Đa Nhân Vật ({currentProvider.toUpperCase()})</span>
+                      </div>
+                      <span className="text-[10px] text-purple-400 font-mono">Tự động nhận vai Nam / Nữ</span>
+                    </div>
+                    <div className="p-5 space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Giọng Nam */}
+                        <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800/60 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                              <span>👨</span>
+                              <span>Vai Nam / Nhân Vật Nam:</span>
+                            </span>
+                            {(() => {
+                              const maleVoiceId = settings.dubbing.voice_male || currentVoiceList[0]?.voice_id;
+                              const isPlaying = playingPreviewVoice === maleVoiceId;
+                              const isPreviewing = activeVoicePreviewing === maleVoiceId;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => handleTestDubbing(maleVoiceId, currentProvider)}
+                                  disabled={isDubbingTest && !isPreviewing}
+                                  className={`px-2 py-0.5 rounded border text-[10px] flex items-center gap-1 cursor-pointer transition ${
+                                    isPlaying
+                                      ? 'bg-red-600/30 border-red-500 text-red-300 animate-pulse'
+                                      : isPreviewing
+                                      ? 'bg-cyan-900 border-cyan-500 text-white animate-pulse'
+                                      : 'bg-cyan-950 hover:bg-cyan-900 border-cyan-700/50 text-cyan-300'
+                                  }`}
+                                >
+                                  {isPlaying ? (
+                                    <Square className="w-2.5 h-2.5 fill-current" />
+                                  ) : (
+                                    <Play className="w-2.5 h-2.5 fill-current" />
+                                  )}
+                                  <span>{isPlaying ? 'Dừng' : isPreviewing ? 'Đang tạo...' : 'Nghe thử'}</span>
+                                </button>
+                              );
+                            })()}
+                          </div>
+                          <select
+                            value={settings.dubbing.voice_male || currentVoiceList[0]?.voice_id}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                dubbing: { ...settings.dubbing, voice_male: e.target.value },
+                              })
+                            }
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-cyan-500/60"
+                          >
+                            {(maleVoices.length > 0 ? maleVoices : currentVoiceList).map((mv) => (
+                              <option key={mv.voice_id} value={mv.voice_id}>
+                                {mv.display_name} ({mv.voice_id}) — {mv.lang.toUpperCase()}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="text-[10px] text-slate-500">
+                            Áp dụng cho thoại nam: anh, bố, chú, chàng trai, [Nam], v.v.
+                          </p>
+                        </div>
+
+                        {/* Giọng Nữ */}
+                        <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800/60 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-pink-300 flex items-center gap-1.5">
+                              <span>👩</span>
+                              <span>Vai Nữ / Nhân Vật Nữ:</span>
+                            </span>
+                            {(() => {
+                              const femaleVoiceId = settings.dubbing.voice_female || currentVoiceList[0]?.voice_id;
+                              const isPlaying = playingPreviewVoice === femaleVoiceId;
+                              const isPreviewing = activeVoicePreviewing === femaleVoiceId;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => handleTestDubbing(femaleVoiceId, currentProvider)}
+                                  disabled={isDubbingTest && !isPreviewing}
+                                  className={`px-2 py-0.5 rounded border text-[10px] flex items-center gap-1 cursor-pointer transition ${
+                                    isPlaying
+                                      ? 'bg-red-600/30 border-red-500 text-red-300 animate-pulse'
+                                      : isPreviewing
+                                      ? 'bg-pink-900 border-pink-500 text-white animate-pulse'
+                                      : 'bg-pink-950 hover:bg-pink-900 border-pink-700/50 text-pink-300'
+                                  }`}
+                                >
+                                  {isPlaying ? (
+                                    <Square className="w-2.5 h-2.5 fill-current" />
+                                  ) : (
+                                    <Play className="w-2.5 h-2.5 fill-current" />
+                                  )}
+                                  <span>{isPlaying ? 'Dừng' : isPreviewing ? 'Đang tạo...' : 'Nghe thử'}</span>
+                                </button>
+                              );
+                            })()}
+                          </div>
+                          <select
+                            value={settings.dubbing.voice_female || currentVoiceList[0]?.voice_id}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                dubbing: { ...settings.dubbing, voice_female: e.target.value },
+                              })
+                            }
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-pink-500/60"
+                          >
+                            {(femaleVoices.length > 0 ? femaleVoices : currentVoiceList).map((fv) => (
+                              <option key={fv.voice_id} value={fv.voice_id}>
+                                {fv.display_name} ({fv.voice_id}) — {fv.lang.toUpperCase()}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="text-[10px] text-slate-500">
+                            Áp dụng cho thoại nữ: em, mẹ, chị, cô gái, [Nữ], v.v.
+                          </p>
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2.5 cursor-pointer p-3 rounded-lg bg-purple-950/20 border border-purple-900/30 text-xs text-purple-200">
+                        <input
+                          type="checkbox"
+                          checked={settings.dubbing.auto_detect_speakers ?? true}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              dubbing: { ...settings.dubbing, auto_detect_speakers: e.target.checked },
+                            })
+                          }
+                          className="rounded accent-purple-500 cursor-pointer"
+                        />
+                        <span className="font-medium">
+                          Tự động phân tích đại từ xưng hô (anh/em, mẹ/con, cô/chú) để nhận dạng giọng đọc cho từng câu thoại
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. TỐC ĐỘ NÓI & DÌM NHẠC NỀN (AUDIO DUCKING) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-5 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-200">Tốc Độ Đọc (Speech Rate):</label>
+                      <span className="font-mono font-bold text-emerald-400 text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-800">
+                        {settings.dubbing.rate}
+                      </span>
+                    </div>
+                    <select
+                      value={settings.dubbing.rate}
+                      onChange={(e) =>
+                        setSettings({ ...settings, dubbing: { ...settings.dubbing, rate: e.target.value } })
+                      }
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="-10%">-10% (Chậm rãi, lắng đọng)</option>
+                      <option value="+0%">+0% (Chuẩn tự nhiên)</option>
+                      <option value="+10%">+10% (Nhanh vừa, khớp thoại gấp)</option>
+                      <option value="+20%">+20% (Nhanh, cho câu dài)</option>
+                    </select>
+                  </div>
+
+                  <div className="p-5 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-200">Dìm Nhạc Nền (Audio Ducking):</label>
+                      <span className="font-mono font-bold text-emerald-400 text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-800">
+                        {Math.round(settings.dubbing.ducking_volume * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.10"
+                      max="0.45"
+                      step="0.05"
+                      value={settings.dubbing.ducking_volume}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          dubbing: { ...settings.dubbing, ducking_volume: parseFloat(e.target.value) },
+                        })
+                      }
+                      className="w-full accent-emerald-500 cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[11px] text-slate-500 font-mono">
+                      <span>10% (Nhạc rất nhỏ)</span>
+                      <span>25% (Chuẩn điện ảnh)</span>
+                      <span>45% (Nhạc to)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 7. KHỐI NGHE THỬ TRỰC TIẾP (LIVE AUDIO PREVIEW) */}
+                <div className="p-5 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Nghe Thử Giọng Đọc Trực Tiếp (Live Audio Preview)</span>
                     </span>
+
+                    <div className="flex items-center gap-2">
+                      {settings.dubbing.mode === 'multi' ? (
+                        <>
+                          {(() => {
+                            const maleVoice = settings.dubbing.voice_male;
+                            const isPlaying = playingPreviewVoice === maleVoice;
+                            const isPreviewing = activeVoicePreviewing === maleVoice;
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => handleTestDubbing(maleVoice, currentProvider)}
+                                disabled={isDubbingTest && !isPreviewing}
+                                className={`px-3 py-1.5 rounded-lg text-white font-bold text-[11px] transition flex items-center gap-1 shadow cursor-pointer ${
+                                  isPlaying
+                                    ? 'bg-red-600 hover:bg-red-500 animate-pulse'
+                                    : isPreviewing
+                                    ? 'bg-cyan-700 animate-pulse cursor-wait'
+                                    : 'bg-cyan-600 hover:bg-cyan-500'
+                                }`}
+                              >
+                                {isPlaying ? <Square className="w-3 h-3 fill-white" /> : <Play className="w-3 h-3 fill-white" />}
+                                <span>{isPlaying ? `Dừng (${maleVoice})` : isPreviewing ? 'Đang tạo...' : `Thử Giọng Nam (${maleVoice})`}</span>
+                              </button>
+                            );
+                          })()}
+                          {(() => {
+                            const femaleVoice = settings.dubbing.voice_female;
+                            const isPlaying = playingPreviewVoice === femaleVoice;
+                            const isPreviewing = activeVoicePreviewing === femaleVoice;
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => handleTestDubbing(femaleVoice, currentProvider)}
+                                disabled={isDubbingTest && !isPreviewing}
+                                className={`px-3 py-1.5 rounded-lg text-white font-bold text-[11px] transition flex items-center gap-1 shadow cursor-pointer ${
+                                  isPlaying
+                                    ? 'bg-red-600 hover:bg-red-500 animate-pulse'
+                                    : isPreviewing
+                                    ? 'bg-pink-700 animate-pulse cursor-wait'
+                                    : 'bg-pink-600 hover:bg-pink-500'
+                                }`}
+                              >
+                                {isPlaying ? <Square className="w-3 h-3 fill-white" /> : <Play className="w-3 h-3 fill-white" />}
+                                <span>{isPlaying ? `Dừng (${femaleVoice})` : isPreviewing ? 'Đang tạo...' : `Thử Giọng Nữ (${femaleVoice})`}</span>
+                              </button>
+                            );
+                          })()}
+                        </>
+                      ) : (
+                        (() => {
+                          const mainVoice = settings.dubbing.voice;
+                          const isPlaying = playingPreviewVoice === mainVoice;
+                          const isPreviewing = activeVoicePreviewing === mainVoice;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => handleTestDubbing(mainVoice, currentProvider)}
+                              disabled={isDubbingTest && !isPreviewing}
+                              className={`px-3.5 py-1.5 rounded-lg active:scale-95 text-white font-bold text-xs transition flex items-center gap-1.5 shadow cursor-pointer ${
+                                isPlaying
+                                  ? 'bg-red-600 hover:bg-red-500 animate-pulse'
+                                  : isPreviewing
+                                  ? 'bg-emerald-700 animate-pulse cursor-wait'
+                                  : 'bg-emerald-600 hover:bg-emerald-500'
+                              }`}
+                            >
+                              {isPlaying ? <Square className="w-3 h-3 fill-white" /> : <Play className="w-3 h-3 fill-white" />}
+                              <span>
+                                {isPlaying
+                                  ? `Dừng đọc (${mainVoice})`
+                                  : isPreviewing
+                                  ? 'Đang tạo âm thanh...'
+                                  : `Nghe thử giọng: ${mainVoice}`}
+                              </span>
+                            </button>
+                          );
+                        })()
+                      )}
+                    </div>
                   </div>
-                  <input
-                    type="range"
-                    min="0.10"
-                    max="0.45"
-                    step="0.05"
-                    value={settings.dubbing.ducking_volume}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        dubbing: { ...settings.dubbing, ducking_volume: parseFloat(e.target.value) },
-                      })
-                    }
-                    className="w-full accent-emerald-500 cursor-pointer"
-                  />
-                  <div className="flex justify-between text-[11px] text-slate-500 font-mono">
-                    <span>10% (Nhạc rất nhỏ)</span>
-                    <span>25% (Chuẩn điện ảnh)</span>
-                    <span>45% (Nhạc to)</span>
+
+                  <div>
+                    <label className="text-[11px] text-slate-500 block mb-1">Đoạn văn thử nghiệm:</label>
+                    <input
+                      type="text"
+                      value={testDubbingText}
+                      onChange={(e) => setTestDubbingText(e.target.value)}
+                      className="w-full bg-slate-950/80 border border-slate-800/60 rounded-lg p-2.5 text-slate-100 text-xs focus:outline-none focus:border-emerald-500/60 transition"
+                    />
                   </div>
                 </div>
               </div>
-
-              {/* Khối Thử Nghiệm Nghe Giọng Đọc Trực Tiếp */}
-              <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Nghe Thử Giọng Đọc (Live Audio Preview)</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleTestDubbing}
-                    disabled={isDubbingTest}
-                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs transition disabled:opacity-50 flex items-center gap-1.5 shadow cursor-pointer"
-                  >
-                    <Play className="w-3 h-3 fill-white" />
-                    <span>{isDubbingTest ? 'Đang tạo âm thanh...' : 'Nghe thử ngay'}</span>
-                  </button>
-                </div>
-
-                <div>
-                  <span className="text-[11px] text-slate-400 block mb-1">Đoạn văn thử nghiệm:</span>
-                  <input
-                    type="text"
-                    value={testDubbingText}
-                    onChange={(e) => setTestDubbingText(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100 text-xs focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ================= TAB 4: RENDER & PRESET ================= */}
           {activeTab === 'render' && (

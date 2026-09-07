@@ -177,6 +177,23 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
   const pollTimerRef = useRef<any>(null);
 
   // Proxy & Device Settings state
+  const [networkMode, setNetworkMode] = useState<'proxy' | 'direct'>(() => {
+    const versionKey = 'sls_network_mode_pref_v2';
+    const hasExplicitPref = localStorage.getItem(versionKey);
+    if (hasExplicitPref) {
+      return (localStorage.getItem('sls_network_mode') as 'proxy' | 'direct') || 'direct';
+    }
+    // Mặc định luôn là IP Trực Tiếp (Direct IP)
+    localStorage.setItem('sls_network_mode', 'direct');
+    return 'direct';
+  });
+
+  const handleToggleNetworkMode = (mode: 'proxy' | 'direct') => {
+    setNetworkMode(mode);
+    localStorage.setItem('sls_network_mode', mode);
+    localStorage.setItem('sls_network_mode_pref_v2', 'true');
+  };
+
   const [showProxySection, setShowProxySection] = useState(initialOpenSettings);
   const [proxyUrl, setProxyUrl] = useState(() => localStorage.getItem('sls_proxy_url') || '');
   const [rateLimitDelay, setRateLimitDelay] = useState<number>(() => {
@@ -487,6 +504,10 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
       return;
     }
     setIsAddingToQueue(true);
+    if (outputDir.trim()) {
+      localStorage.setItem('sls_custom_output_dir', outputDir.trim());
+      localStorage.setItem('sls_output_dir', outputDir.trim());
+    }
     try {
       const res = await apiClient.addToQueue({
         target_info: targetInfo,
@@ -495,7 +516,9 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
         auto_create_project: autoCreateProject,
         source_language: sourceLang,
         target_language: targetLang,
-        proxy: proxyUrl.trim() || null,
+        proxy: networkMode === 'direct' ? null : (proxyUrl.trim() || null),
+        strict_proxy: networkMode !== 'direct',
+        auto_xray: networkMode === 'direct' ? false : (!proxyUrl || proxyUrl.includes('10809')),
         rate_limit_delay: rateLimitDelay,
         rotate_device_each_ep: rotationInterval > 0,
         rotation_interval: rotationInterval,
@@ -658,6 +681,10 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     localStorage.setItem('sls_proxy_url', proxyUrl);
     localStorage.setItem('sls_rate_limit_delay', String(rateLimitDelay));
     localStorage.setItem('sls_rotation_interval', String(rotationInterval));
+    if (outputDir.trim()) {
+      localStorage.setItem('sls_custom_output_dir', outputDir.trim());
+      localStorage.setItem('sls_output_dir', outputDir.trim());
+    }
 
     try {
       await apiClient.startDownload({
@@ -669,7 +696,8 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
         auto_create_project: autoCreateProject,
         source_language: sourceLang,
         target_language: targetLang,
-        proxy: proxyUrl.trim() || null,
+        proxy: networkMode === 'direct' ? null : (proxyUrl.trim() || null),
+        strict_proxy: networkMode !== 'direct',
         rate_limit_delay: rateLimitDelay,
         rotate_device_each_ep: rotationInterval > 0,
         rotation_interval: rotationInterval,
@@ -2396,6 +2424,36 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                   </button>
                   {targetInfo && (
                     <>
+                      {/* NÚT GẠT CHỌN CHẾ ĐỘ MẠNG TRONG MODAL */}
+                      <div className="flex items-center p-0.5 bg-slate-950 border border-slate-800 rounded-xl text-xs select-none mr-1 shadow-inner">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleNetworkMode('direct')}
+                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-semibold transition cursor-pointer ${
+                            networkMode === 'direct'
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-sm'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                          title="Tải trực tiếp bằng mạng nhà (Không dùng proxy)"
+                        >
+                          <Zap className={`w-3.5 h-3.5 ${networkMode === 'direct' ? 'text-amber-400' : 'text-slate-500'}`} />
+                          <span>⚡ IP Trực Tiếp</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleNetworkMode('proxy')}
+                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-semibold transition cursor-pointer ${
+                            networkMode === 'proxy'
+                              ? 'bg-indigo-600 text-white border border-indigo-500 shadow-sm'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                          title="Tải qua Proxy bảo vệ IP và chống chặn"
+                        >
+                          <Shield className={`w-3.5 h-3.5 ${networkMode === 'proxy' ? 'text-indigo-200' : 'text-slate-500'}`} />
+                          <span>🌐 Dùng Proxy</span>
+                        </button>
+                      </div>
+
                       <button
                         onClick={handleAddToQueue}
                         disabled={isAddingToQueue || selectedEpisodes.length === 0}

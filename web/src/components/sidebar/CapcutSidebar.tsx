@@ -24,6 +24,7 @@ import {
   ArrowUpToLine,
   ArrowDownToLine,
   MoveVertical,
+  X,
 } from 'lucide-react';
 import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../../types/api';
 import { apiClient } from '../../api/client';
@@ -115,6 +116,41 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [maskMode, setMaskMode] = useState<'blur' | 'box' | 'none'>('blur');
   const [applyFlipToExport, setApplyFlipToExport] = useState<boolean>(true);
+
+  // CapCut Desktop Draft Import Modal State
+  const [showCapcutModal, setShowCapcutModal] = useState(false);
+  const [capcutDraftsList, setCapcutDraftsList] = useState<any[]>([]);
+  const [isLoadingCapcutList, setIsLoadingCapcutList] = useState(false);
+  const [capcutImportMsg, setCapcutImportMsg] = useState<string | null>(null);
+
+  const handleOpenCapcutModal = async () => {
+    setShowCapcutModal(true);
+    setIsLoadingCapcutList(true);
+    setCapcutImportMsg(null);
+    try {
+      const res = await apiClient.getCapCutDrafts(30);
+      setCapcutDraftsList(res.drafts || []);
+    } catch (err: any) {
+      console.warn('Could not fetch CapCut drafts:', err);
+    } finally {
+      setIsLoadingCapcutList(false);
+    }
+  };
+
+  const handleImportCapcutProject = async (draftId: string) => {
+    if (!activeProject) return;
+    setIsLoadingCapcutList(true);
+    try {
+      const res = await apiClient.importCapCutDraft(activeProject.project_id, draftId);
+      setCapcutImportMsg(`Đã nạp thành công ${res.imported_count} câu phụ đề từ CapCut!`);
+      if (onRefreshCues) onRefreshCues();
+      setTimeout(() => setShowCapcutModal(false), 1200);
+    } catch (err: any) {
+      setCapcutImportMsg(`Lỗi: ${err?.message || 'Không thể nạp phụ đề'}`);
+    } finally {
+      setIsLoadingCapcutList(false);
+    }
+  };
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -700,16 +736,118 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
                   <span className="text-slate-400">
                     Hiển thị: <strong>{filteredCues.length}</strong> câu
                   </span>
-                  {onRefreshCues && (
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={onRefreshCues}
-                      className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                      type="button"
+                      onClick={handleOpenCapcutModal}
+                      className="text-purple-400 hover:text-purple-300 flex items-center gap-1 font-semibold cursor-pointer"
+                      title="Nhập phụ đề từ dự án CapCut Desktop trên máy"
                     >
-                      <RefreshCw className="w-3 h-3" />
-                      <span>Làm mới</span>
+                      <span>🎵</span>
+                      <span>Nhập từ CapCut</span>
                     </button>
-                  )}
+                    {onRefreshCues && (
+                      <button
+                        onClick={onRefreshCues}
+                        className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Làm mới</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {/* MODAL NHẬP PHỤ ĐỀ TỪ CAPCUT DESKTOP */}
+                {showCapcutModal && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 animate-in fade-in">
+                    <div className="bg-slate-900 border border-purple-900/60 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl space-y-3 p-5">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <div className="flex items-center gap-2 text-white font-bold text-sm">
+                          <span className="text-base">🎵</span>
+                          <span>Nhập Phụ Đề Từ CapCut Desktop</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowCapcutModal(false)}
+                          className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <p className="text-xs text-slate-400">
+                        Chọn một dự án CapCut bạn vừa bấm "Tạo phụ đề tự động" trong CapCut Desktop để nạp tức thì vào Studio:
+                      </p>
+
+                      {capcutImportMsg && (
+                        <div className="p-2.5 rounded-lg bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 text-xs flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>{capcutImportMsg}</span>
+                        </div>
+                      )}
+
+                      <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+                        {isLoadingCapcutList ? (
+                          <div className="text-center py-8 text-slate-400 text-xs flex items-center justify-center gap-2">
+                            <RefreshCw className="w-4 h-4 animate-spin text-purple-400" />
+                            <span>Đang đọc dự án CapCut...</span>
+                          </div>
+                        ) : capcutDraftsList.length === 0 ? (
+                          <div className="text-center py-8 text-slate-500 text-xs border border-dashed border-slate-800 rounded-lg">
+                            Không tìm thấy dự án CapCut nào trên máy.
+                          </div>
+                        ) : (
+                          capcutDraftsList.map((draft) => (
+                            <div
+                              key={draft.id}
+                              className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-purple-600 transition flex items-center justify-between gap-3 text-xs"
+                            >
+                              <div className="min-w-0 space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white truncate" title={draft.name}>
+                                    {draft.name}
+                                  </span>
+                                  <span className="px-2 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-800/60 text-[10px] font-mono shrink-0">
+                                    {draft.cue_count} câu
+                                  </span>
+                                </div>
+                                {draft.preview_cues && draft.preview_cues.length > 0 && (
+                                  <div className="text-[10px] text-slate-400 italic truncate max-w-xs">
+                                    "{draft.preview_cues[0]}"
+                                  </div>
+                                )}
+                                <div className="flex items-center gap-3 text-[10px] text-slate-500 font-mono">
+                                  <span>{draft.updated_at}</span>
+                                  {draft.duration_sec > 0 && <span>{draft.duration_sec}s</span>}
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleImportCapcutProject(draft.id)}
+                                disabled={isLoadingCapcutList || draft.cue_count === 0}
+                                className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 active:scale-95 text-white font-semibold text-xs transition shadow disabled:opacity-40 cursor-pointer shrink-0"
+                              >
+                                Nạp Vào Studio
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-800 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setShowCapcutModal(false)}
+                          className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+                        >
+                          Đóng
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Danh sách câu phụ đề */}
                 {filteredCues.length === 0 ? (

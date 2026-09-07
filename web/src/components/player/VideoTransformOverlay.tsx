@@ -174,12 +174,12 @@ export const VideoTransformOverlay: React.FC<VideoTransformOverlayProps> = ({
     >
       {/* 1. Khung viền bounding box CapCut */}
       <div
-        className="w-full h-full border-2 border-white/95 shadow-2xl relative pointer-events-auto cursor-move rounded-xl group"
+        className="w-full h-full border-2 border-white/95 shadow-2xl relative pointer-events-auto cursor-move rounded-none group"
         onMouseDown={(e) => handleStartDrag('move', e)}
         title="Nhấp và kéo để di chuyển vị trí video"
       >
         {/* Lớp phủ mờ khi hover để người dùng nhận biết có thể kéo */}
-        <div className="absolute inset-0 bg-white/5 hover:bg-white/10 transition-colors rounded-xl" />
+        <div className="absolute inset-0 bg-white/5 hover:bg-white/10 transition-colors rounded-none" />
 
         {/* 2. Bốn mấu tay cầm ở 4 góc (Resize Corners) */}
         {/* Góc Tây Bắc (NW) */}

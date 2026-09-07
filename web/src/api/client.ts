@@ -107,6 +107,31 @@ export class StudioApiClient {
     return res.json();
   }
 
+  async getProjectSettings(projectId: string): Promise<Record<string, any>> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/settings`, { headers: this.headers() });
+    if (!res.ok) throw new Error('Không thể tải cài đặt riêng của dự án');
+    return res.json();
+  }
+
+  async saveProjectSettings(projectId: string, settings: Record<string, any>): Promise<{ status: string; custom_pipeline_settings: Record<string, any> }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/settings`, {
+      method: 'PUT',
+      headers: this.headers(),
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) throw new Error('Không thể lưu cài đặt riêng cho dự án');
+    return res.json();
+  }
+
+  async resetProjectSettings(projectId: string): Promise<{ status: string; custom_pipeline_settings: null }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/settings`, {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể khôi phục cài đặt mặc định');
+    return res.json();
+  }
+
   async runPipeline(projectId: string, options?: { max_duration_seconds?: number; sync?: boolean }): Promise<{ status: string; project_id: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/pipeline/run`, {
       method: 'POST',
@@ -256,6 +281,15 @@ export class StudioApiClient {
     return `${API_BASE}/projects/${projectId}/video/rendered${download ? '?download=true' : ''}`;
   }
 
+  async revealProjectExport(projectId: string): Promise<{ success: boolean; path: string; error?: string }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/reveal-export`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể mở thư mục xuất file');
+    return res.json();
+  }
+
   async runDubbing(
     projectId: string,
     voice: string = 'vi-VN-NamMinhNeural',
@@ -323,6 +357,53 @@ export class StudioApiClient {
     return res.json();
   }
 
+  async getGroqPoolStatus(): Promise<GroqPoolStatus> {
+    const res = await fetch(`${API_BASE}/settings/groq-pool`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể lấy trạng thái Groq Key Pool');
+    return res.json();
+  }
+
+  async saveGroqPool(keys: string[]): Promise<{
+    status: string;
+    pool_status: GroqPoolStatus;
+  }> {
+    const res = await fetch(`${API_BASE}/settings/groq-pool`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ keys }),
+    });
+    if (!res.ok) throw new Error('Không thể cập nhật danh sách Groq Keys');
+    return res.json();
+  }
+
+  async verifyGroqKeys(index?: number): Promise<{
+    status: string;
+    result?: any;
+    pool_status: GroqPoolStatus;
+  }> {
+    const res = await fetch(`${API_BASE}/settings/groq-pool/verify`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ index: index ?? null }),
+    });
+    if (!res.ok) throw new Error('Không thể kiểm tra trạng thái Groq Keys');
+    return res.json();
+  }
+
+  async deleteGroqKey(index: number): Promise<{
+    status: string;
+    pool_status: GroqPoolStatus;
+  }> {
+    const res = await fetch(`${API_BASE}/settings/groq-pool/key/${index}`, {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error(`Không thể xóa Groq key #${index}`);
+    return res.json();
+  }
+
   async batchDeleteProjects(projectIds: string[]): Promise<{ deleted_count: number; total: number }> {
     const res = await fetch(`${API_BASE}/projects/batch-delete`, {
       method: 'POST',
@@ -356,6 +437,9 @@ export class StudioApiClient {
     source_language?: string;
     target_language?: string;
     proxy?: string | null;
+    proxy_list?: string[];
+    strict_proxy?: boolean;
+    cdn_direct_bypass?: boolean;
     rate_limit_delay?: number;
     rotate_device_each_ep?: boolean;
     rotation_interval?: number;
@@ -375,7 +459,7 @@ export class StudioApiClient {
     return res.json();
   }
 
-  async testProxy(proxyUrl: string): Promise<{ ok: boolean; ip?: string; direct_ip?: string; is_masked?: boolean; latency_ms?: number; error?: string }> {
+  async testProxy(proxyUrl: string): Promise<{ ok: boolean; ip?: string; direct_ip?: string; is_masked?: boolean; latency_ms?: number; error?: string; note?: string; is_standby?: boolean }> {
     const res = await fetch(`${API_BASE}/downloader/test-proxy`, {
       method: 'POST',
       headers: this.headers(),
@@ -385,6 +469,64 @@ export class StudioApiClient {
       const err = await res.json().catch(() => ({ detail: 'Lỗi kiểm tra proxy' }));
       throw new Error(err.detail || 'Lỗi kiểm tra proxy');
     }
+    return res.json();
+  }
+
+  async getProxyStatus(proxyUrl?: string): Promise<ProxyStatusResponse> {
+    const query = proxyUrl ? `?proxy_url=${encodeURIComponent(proxyUrl)}` : '';
+    const res = await fetch(`${API_BASE}/downloader/proxy/status${query}`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể kiểm tra trạng thái proxy');
+    return res.json();
+  }
+
+  async getProxyPoolStatus(): Promise<ProxyPoolStatusResponse> {
+    const res = await fetch(`${API_BASE}/downloader/proxy/pool`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể lấy thông tin proxy pool');
+    return res.json();
+  }
+
+  async getXrayStatus(): Promise<XrayStatusResponse> {
+    const res = await fetch(`${API_BASE}/downloader/xray/status`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể lấy trạng thái Xray Core');
+    return res.json();
+  }
+
+  async refreshXrayNodes(customFeed?: string, maxLatencyMs?: number): Promise<XrayStatusResponse> {
+    const res = await fetch(`${API_BASE}/downloader/xray/refresh`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({
+        custom_feed_or_nodes: customFeed || null,
+        max_latency_ms: maxLatencyMs || 800.0,
+      }),
+    });
+    if (!res.ok) throw new Error('Không thể làm mới danh sách node Xray');
+    return res.json();
+  }
+
+  async toggleXray(enabled: boolean): Promise<{ success: boolean; is_enabled: boolean; status: XrayStatusResponse }> {
+    const res = await fetch(`${API_BASE}/downloader/xray/toggle`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) throw new Error('Không thể chuyển đổi trạng thái Xray');
+    return res.json();
+  }
+
+  async switchXrayNode(nodeName: string): Promise<{ success: boolean; status: XrayStatusResponse }> {
+    const res = await fetch(`${API_BASE}/downloader/xray/switch`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ node_name: nodeName }),
+    });
+    if (!res.ok) throw new Error(`Không thể chuyển sang node ${nodeName}`);
     return res.json();
   }
 
@@ -700,6 +842,9 @@ export class StudioApiClient {
     target_lang?: string;
     provider?: string;
     gemini_model?: string;
+    local_model?: string;
+    local_endpoint?: string;
+    auto_fallback?: boolean;
     prompt_tone?: string;
     use_glossary?: boolean;
   }): Promise<TestTranslationResult> {
@@ -712,11 +857,45 @@ export class StudioApiClient {
     return res.json();
   }
 
+  async testLocalLlmConnection(req?: {
+    endpoint?: string;
+    model?: string;
+  }): Promise<{
+    ok: boolean;
+    latency_ms: number;
+    message: string;
+    models: string[];
+    has_target_model: boolean;
+  }> {
+    const res = await fetch(`${API_BASE}/settings/local-llm-check`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(req || {}),
+    });
+    if (!res.ok) throw new Error('Không thể kết nối API kiểm tra Local LLM');
+    return res.json();
+  }
+
+  async startLocalLlm(): Promise<{
+    ok: boolean;
+    message: string;
+  }> {
+    const res = await fetch(`${API_BASE}/settings/local-llm-start`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể khởi động Local LLM');
+    return res.json();
+  }
+
+
   async testDubbing(req: {
     text: string;
+    provider?: string;
     voice?: string;
     rate?: string;
     pitch?: string;
+    prompt_style?: string;
   }): Promise<Blob> {
     const res = await fetch(`${API_BASE}/settings/test-tts`, {
       method: 'POST',
@@ -725,6 +904,22 @@ export class StudioApiClient {
     });
     if (!res.ok) throw new Error('Lỗi khi tạo giọng đọc thử nghiệm');
     return res.blob();
+  }
+
+  async getTTSCatalog(): Promise<Record<string, Array<{
+    voice_id: string;
+    display_name: string;
+    lang: string;
+    gender: string;
+    description: string;
+    tags: string[];
+    resource_id?: string;
+  }>>> {
+    const res = await fetch(`${API_BASE}/settings/tts-catalog`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Lỗi khi nạp danh mục giọng đọc');
+    return res.json();
   }
 
   async testCapCutConnection(req?: {
@@ -744,6 +939,45 @@ export class StudioApiClient {
       body: JSON.stringify(req || {}),
     });
     if (!res.ok) throw new Error('Lỗi khi kiểm tra kết nối CapCut Cloud API');
+    return res.json();
+  }
+
+  async testGroqConnection(req?: {
+    api_key?: string;
+  }): Promise<{
+    ok: boolean;
+    latency_ms: number;
+    message: string;
+    models_count?: number;
+  }> {
+    const res = await fetch(`${API_BASE}/settings/groq-check`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(req || {}),
+    });
+    if (!res.ok) throw new Error('Lỗi khi kiểm tra kết nối Groq Cloud API');
+    return res.json();
+  }
+
+  async getCapCutDrafts(limit: number = 30): Promise<CapCutDraftsResponse> {
+    const res = await fetch(`${API_BASE}/settings/capcut-drafts?limit=${limit}`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể tải danh sách dự án CapCut');
+    return res.json();
+  }
+
+  async importCapCutDraft(
+    projectId: string,
+    draftId?: string,
+    draftPath?: string
+  ): Promise<ImportCapCutDraftResponse> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/import-capcut-draft`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ draft_id: draftId, draft_path: draftPath }),
+    });
+    if (!res.ok) throw new Error('Không thể nạp phụ đề từ CapCut');
     return res.json();
   }
 }
@@ -770,6 +1004,90 @@ export interface ScanEpisodesResponse {
   missing_count: number;
 }
 
+export interface DetectedLocalProxyItem {
+  name: string;
+  url: string;
+  active: boolean;
+}
+
+export interface ProxyStatusResponse {
+  enabled: boolean;
+  proxy_url: string | null;
+  is_alive: boolean;
+  is_standby?: boolean;
+  latency_ms: number | null;
+  mode: string;
+  detected_local_proxies: DetectedLocalProxyItem[];
+}
+
+export interface ProxyNodeMetric {
+  url: string;
+  is_alive: boolean;
+  latency_ms: number | null;
+  active_leases: number;
+  total_served: number;
+  bytes_transferred: number;
+  speed_mbps: number;
+  last_active_at: number;
+}
+
+export interface TunnelLogEntry {
+  timestamp: number;
+  time_str: string;
+  task: string;
+  proxy: string;
+  message: string;
+  level: 'info' | 'warn' | 'error';
+  speed_mbps: number;
+  bytes_transferred: number;
+}
+
+export interface ProxyPoolStatusResponse {
+  status?: 'active' | 'standby';
+  is_active?: boolean;
+  is_downloading?: boolean;
+  total_nodes: number;
+  alive_nodes: number;
+  active_leases: number;
+  total_bytes_transferred: number;
+  total_speed_mbps: number;
+  strict_proxy: boolean;
+  nodes: ProxyNodeMetric[];
+  tunnel_logs: TunnelLogEntry[];
+}
+
+export interface XrayActiveNode {
+  name: string;
+  protocol: string;
+  host: string;
+  port: number;
+  latency_ms?: number | null;
+}
+
+export interface XrayQualityNode {
+  name: string;
+  protocol: string;
+  host: string;
+  port: number;
+  is_alive: boolean;
+  latency_ms?: number | null;
+  error?: string | null;
+}
+
+export interface XrayStatusResponse {
+  installed: boolean;
+  running: boolean;
+  is_enabled: boolean;
+  is_downloading: boolean;
+  is_benchmarking: boolean;
+  http_port: number;
+  socks_port: number;
+  active_node?: XrayActiveNode | null;
+  quality_nodes_count: number;
+  quality_nodes: XrayQualityNode[];
+  last_benchmarked_at: number;
+}
+
 export interface VideoResolutionItem {
   id: string;
   label: string;
@@ -791,6 +1109,10 @@ export interface DownloadQueueAddPayload {
   source_language?: string;
   target_language?: string;
   proxy?: string | null;
+  proxy_list?: string[];
+  strict_proxy?: boolean;
+  cdn_direct_bypass?: boolean;
+  auto_xray?: boolean;
   rate_limit_delay?: number;
   rotate_device_each_ep?: boolean;
   rotation_interval?: number;
@@ -821,6 +1143,7 @@ export interface DownloadQueueTaskItem {
   concurrency?: number;
   cookie_source?: string;
   error?: string | null;
+  auto_xray?: boolean;
   created_at?: number;
 }
 
@@ -927,6 +1250,51 @@ export interface GeminiPoolStatus {
   items?: GeminiKeyItem[];
 }
 
+export interface GroqKeyItem {
+  index: number;
+  masked_key: string;
+  is_usable: boolean;
+  status: 'active' | 'cooldown' | 'invalid' | 'error' | 'network_error' | 'untested';
+  status_label: string;
+  remaining_seconds: number;
+  reason: string;
+  latency_ms?: number;
+  last_checked?: number;
+  message?: string;
+}
+
+export interface GroqPoolStatus {
+  total_keys: number;
+  active_keys: number;
+  cooldown_keys: number;
+  items: GroqKeyItem[];
+}
+
+export interface CapCutDraftItem {
+  id: string;
+  name: string;
+  path: string;
+  folder_path: string;
+  mtime: number;
+  updated_at: string;
+  duration_sec: number;
+  cue_count: number;
+  preview_cues: string[];
+}
+
+export interface CapCutDraftsResponse {
+  installed: boolean;
+  draft_dir: string;
+  drafts: CapCutDraftItem[];
+}
+
+export interface ImportCapCutDraftResponse {
+  status: string;
+  imported_count: number;
+  message?: string;
+  cues: any[];
+}
+
 export interface PlatformAuthAccount {
   logged_in: boolean;
   user_name?: string;
@@ -989,17 +1357,26 @@ export type ExtractionMethod = 'ocr' | 'asr_whisper' | 'vlm_gemini' | 'demux_str
 export interface ExtractionSettings {
   // Phân chia 2 Master Mode:
   // - "local": Chạy hoàn toàn cục bộ trên máy, tận dụng GPU RTX 3050 & 16 CPU cores (0đ, 100% offline)
-  // - "api": Chạy qua đám mây Cloud AI (Google Gemini hoặc CapCut ByteDance)
+  // - "api": Chạy qua đám mây Cloud AI (Google Gemini, ByteDance CapCut, hoặc Groq Whisper)
   mode?: 'local' | 'api';
-  local_engine?: 'rapidocr' | 'whisper' | 'demux';
-  api_provider?: 'gemini' | 'capcut';
+  local_engine?: 'rapidocr' | 'whisper' | 'demux' | 'hybrid';
+  api_provider?: 'gemini' | 'capcut' | 'groq';
   capcut_api_endpoint?: string;
   capcut_session_token?: string;
+  capcut_mode?: 'cloud_api' | 'desktop_draft';
+  capcut_draft_id?: string;
+  groq_api_key?: string;
+  groq_model?: 'whisper-large-v3' | 'whisper-large-v3-turbo';
+  auto_fallback?: boolean;
+
+  hybrid_whisper_model?: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
+  hybrid_confidence_threshold?: number;
+  hybrid_rescue_missing?: boolean;
 
   method?: ExtractionMethod;
 
   // 1. OCR (Thị giác khung hình)
-  engine: 'rapidocr' | 'paddle' | 'mock';
+  engine: 'rapidocr' | 'paddle';
   default_source_lang?: 'zh' | 'en' | 'vi' | 'auto';
   sample_fps: number;
   diff_threshold: number;
@@ -1024,16 +1401,26 @@ export interface ExtractionSettings {
 export type OcrSettings = ExtractionSettings;
 
 export interface TranslationSettings {
-  provider: 'gemini' | 'google_web' | 'local_model';
+  provider: 'gemini' | 'local' | 'local_model' | 'auto' | 'google_web';
   target_language?: 'vi' | 'en' | 'zh' | 'none';
   gemini_model: string;
+  local_model?: string;
+  local_endpoint?: string;
+  auto_fallback?: boolean;
   batch_size: number;
   prompt_tone: 'dramatic' | 'daily' | 'humorous' | 'literal';
   use_glossary: boolean;
 }
 
+
 export interface DubbingSettings {
+  provider?: 'edge' | 'capcut' | 'gemini' | 'local';
+  mode?: 'single' | 'multi';
   voice: string;
+  voice_male?: string;
+  voice_female?: string;
+  auto_detect_speakers?: boolean;
+  gemini_prompt_style?: string;
   rate: string;
   pitch: string;
   ducking_volume: number;

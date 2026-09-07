@@ -36,6 +36,8 @@ export interface ProjectManifestV1 {
   target_language: string;
   active_revision: number;
   media_metadata?: Record<string, any>;
+  duration?: number;
+  source_video_resolved_path?: string;
   model_selections?: Record<string, string>;
   regions?: RegionTrackV1[];
   cues_count?: number;
@@ -44,8 +46,12 @@ export interface ProjectManifestV1 {
   first_cue_original?: string;
   has_voiceover?: boolean;
   has_export?: boolean;
+  export_path?: string | null;
+  export_file_size_bytes?: number;
+  export_verified?: boolean;
   style?: Record<string, any>;
   output_presets?: Record<string, any>;
+  custom_pipeline_settings?: Record<string, any>;
   created_at: number;
   updated_at: number;
   schema_version?: string;

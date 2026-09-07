@@ -14,34 +14,60 @@ import {
 } from './types/presets';
 import { VideoPlayer } from './components/player/VideoPlayer';
 import { BottomTimeline } from './components/timeline/BottomTimeline';
-import { CapcutSidebar } from './components/sidebar/CapcutSidebar';
+import { StudioHeader } from './components/layout/StudioHeader';
+import { LeftMediaSidebar } from './components/sidebar/LeftMediaSidebar';
+import { RightInspectorPanel } from './components/inspector/RightInspectorPanel';
 import { DashboardBatchHub } from './components/project/DashboardBatchHub';
 import { GlobalSettingsView } from './components/project/GlobalSettingsView';
 import { NewProjectModal } from './components/project/NewProjectModal';
 import { DownloadQueueHub } from './components/project/DownloadQueueHub';
 import { VideoDownloaderHub } from './components/project/VideoDownloaderHub';
 import { GlobalActivityLogger, appLogger, useAppLoggerCount } from './components/common/GlobalActivityLogger';
-import {
-  Layers,
-  CheckCircle2,
-  XCircle,
-  Play,
-  Sparkles,
-  FolderOpen,
-  Loader2,
-  AlertCircle,
-  LayoutDashboard,
-  ChevronLeft,
-  Sliders,
-  Ratio,
-  ListPlus,
-  Download,
-  Activity,
-  Settings,
-} from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
+import { extractDramaInfo } from './utils/drama';
+
+const STUDIO_STORAGE_KEY = 'sub_studio_active_state_v1';
+
+interface StoredStudioState {
+  roiRegion?: RegionTrackV1;
+  maskStyle?: MaskStyleType;
+  blurStrength?: number;
+  subtitlePlacement?: SubtitlePlacementMode;
+  aspectRatio?: AspectRatioType;
+  fitMode?: 'contain' | 'cover';
+  zoomLevel?: ZoomMode;
+  isFlippedH?: boolean;
+  isFlippedV?: boolean;
+  rotation?: number;
+  sourceLang?: string;
+  targetLang?: string;
+  activePresetId?: string;
+  selectedDramaTitle?: string | null;
+  activeProjectId?: string | null;
+}
+
+function getStoredStudioState(): StoredStudioState | null {
+  try {
+    const raw = localStorage.getItem(STUDIO_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+function saveStudioActiveState(state: StoredStudioState) {
+  try {
+    localStorage.setItem(STUDIO_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore
+  }
+}
 
 export const App: React.FC = () => {
   const loggerCount = useAppLoggerCount();
+  const savedState = useRef(getStoredStudioState()).current;
+
   // Chế độ màn hình: Dashboard, Studio, Hàng Đợi, Trung Tâm Tải Video, hoặc Thiết Lập Hệ Thống
   const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings'>('dashboard');
   const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>('search');
@@ -49,24 +75,29 @@ export const App: React.FC = () => {
 
   // Quản lý Chuẩn Cấu Hình (Preset Profiles)
   const [presets, setPresets] = useState<PresetProfile[]>(() => getStoredPresets());
-  const [activePresetId, setActivePresetId] = useState<string>(() => getDefaultPreset().id);
+  const [activePresetId, setActivePresetId] = useState<string>(() => savedState?.activePresetId || getDefaultPreset().id);
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState<boolean>(false);
+
+  // Trạng thái lưu cấu hình toàn cục & thay đổi chưa lưu
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
 
   // Trạng thái dự án và video hiện tại
   const [projects, setProjects] = useState<ProjectManifestV1[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectManifestV1 | null>(null);
+  const [selectedDramaTitle, setSelectedDramaTitle] = useState<string | null>(() => savedState?.selectedDramaTitle || null);
   const [videoUrl, setVideoUrl] = useState<string>('');
   const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
   const [cues, setCues] = useState<SubtitleCueV1[]>([]);
-  const [sourceLang, setSourceLang] = useState<string>('auto');
-  const [targetLang, setTargetLang] = useState<string>('vi');
+  const [sourceLang, setSourceLang] = useState<string>(() => savedState?.sourceLang || 'auto');
+  const [targetLang, setTargetLang] = useState<string>(() => savedState?.targetLang || 'vi');
 
   // Tỉ lệ khung hình (Aspect Ratio) & Fit Mode
-  const [aspectRatio, setAspectRatio] = useState<AspectRatioType>('original');
-  const [fitMode, setFitMode] = useState<'contain' | 'cover'>('contain');
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioType>(() => savedState?.aspectRatio || 'original');
+  const [fitMode, setFitMode] = useState<'contain' | 'cover'>(() => savedState?.fitMode || 'contain');
 
   // Vùng quét phụ đề (ROI)
-  const [roiRegion, setRoiRegion] = useState<RegionTrackV1>({
+  const [roiRegion, setRoiRegion] = useState<RegionTrackV1>(() => savedState?.roiRegion || {
     region_id: 'roi-main',
     x: 0.05,
     y: 0.70,
@@ -77,14 +108,14 @@ export const App: React.FC = () => {
   // Trạng thái biến đổi video và lớp phủ hiển thị
   const [videoPosition, setVideoPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [interactionMode, setInteractionMode] = useState<'video' | 'roi'>('video');
-  const [isFlippedH, setIsFlippedH] = useState<boolean>(false);
-  const [isFlippedV, setIsFlippedV] = useState<boolean>(false);
-  const [rotation, setRotation] = useState<number>(0);
-  const [zoomLevel, setZoomLevel] = useState<ZoomMode>('fit');
+  const [isFlippedH, setIsFlippedH] = useState<boolean>(() => Boolean(savedState?.isFlippedH));
+  const [isFlippedV, setIsFlippedV] = useState<boolean>(() => Boolean(savedState?.isFlippedV));
+  const [rotation, setRotation] = useState<number>(() => (typeof savedState?.rotation === 'number' ? savedState.rotation : 0));
+  const [zoomLevel, setZoomLevel] = useState<ZoomMode>(() => savedState?.zoomLevel || 'fit');
   const [previewMask, setPreviewMask] = useState<boolean>(false);
-  const [maskStyle, setMaskStyle] = useState<MaskStyleType>('feather_tight');
-  const [blurStrength, setBlurStrength] = useState<number>(20);
-  const [subtitlePlacement, setSubtitlePlacement] = useState<SubtitlePlacementMode>('roi');
+  const [maskStyle, setMaskStyle] = useState<MaskStyleType>(() => savedState?.maskStyle || 'feather_tight');
+  const [blurStrength, setBlurStrength] = useState<number>(() => (typeof savedState?.blurStrength === 'number' ? savedState.blurStrength : 20));
+  const [subtitlePlacement, setSubtitlePlacement] = useState<SubtitlePlacementMode>(() => savedState?.subtitlePlacement || 'roi');
   const [showSubtitleOverlay, setShowSubtitleOverlay] = useState<boolean>(true);
 
   // Trạng thái phát video và thanh timeline
@@ -188,22 +219,17 @@ export const App: React.FC = () => {
     }
   };
 
-  // Nạp danh sách dự án từ Backend
-  const loadProjects = useCallback(async () => {
-    try {
-      const list = await apiClient.listProjects();
-      setProjects(list);
-    } catch (err: any) {
-      console.error('Lỗi khi tải danh sách dự án:', err);
-    }
-  }, []);
-
   // Chọn dự án để xử lý video và chuyển sang giao diện Studio
-  const selectProject = (proj: ProjectManifestV1) => {
+  const selectProject = useCallback((proj: ProjectManifestV1) => {
     setActiveProject(proj);
     setLocalVideoFile(null);
     setSourceLang(proj.source_language || 'zh');
     setTargetLang(proj.target_language || 'vi');
+
+    const drama = extractDramaInfo(proj.title, proj.source_video_path).dramaTitle;
+    if (drama && drama !== 'Video đơn lẻ / Chưa phân loại') {
+      setSelectedDramaTitle(drama);
+    }
 
     const streamUrl = apiClient.getVideoStreamUrl(proj.project_id);
     setVideoUrl(streamUrl);
@@ -228,7 +254,25 @@ export const App: React.FC = () => {
     setStatusMessage(`Đã nạp: ${proj.title}`);
     appLogger.info(`Đã nạp dự án: ${proj.title}`, 'Dự án');
     setViewMode('studio');
-  };
+  }, [presets, loadCues]);
+
+  // Nạp danh sách dự án từ Backend & tự động khôi phục dự án sau F5
+  const loadProjects = useCallback(async () => {
+    try {
+      const list = await apiClient.listProjects();
+      setProjects(list);
+
+      // Tự động khôi phục lại tập phim đang mở nếu người dùng F5
+      if (!activeProject && savedState?.activeProjectId) {
+        const found = list.find((p) => p.project_id === savedState.activeProjectId);
+        if (found) {
+          selectProject(found);
+        }
+      }
+    } catch (err: any) {
+      console.error('Lỗi khi tải danh sách dự án:', err);
+    }
+  }, [activeProject, selectProject]);
 
   // Xóa dự án
   const handleDeleteProject = async (projectId: string) => {
@@ -262,6 +306,137 @@ export const App: React.FC = () => {
     setCues([]);
     setStatusMessage(`Đã nạp: ${file.name}`);
     appLogger.success(`Đã nạp video từ máy tính: ${file.name}`, 'Video');
+  };
+
+  // Tự động lưu snapshot trạng thái làm việc vào localStorage để giữ nguyên khi F5
+  useEffect(() => {
+    saveStudioActiveState({
+      roiRegion,
+      maskStyle,
+      blurStrength,
+      subtitlePlacement,
+      aspectRatio,
+      fitMode,
+      zoomLevel,
+      isFlippedH,
+      isFlippedV,
+      rotation,
+      sourceLang,
+      targetLang,
+      activePresetId,
+      selectedDramaTitle,
+      activeProjectId: activeProject?.project_id || null,
+    });
+  }, [
+    roiRegion,
+    maskStyle,
+    blurStrength,
+    subtitlePlacement,
+    aspectRatio,
+    fitMode,
+    zoomLevel,
+    isFlippedH,
+    isFlippedV,
+    rotation,
+    sourceLang,
+    targetLang,
+    activePresetId,
+    selectedDramaTitle,
+    activeProject,
+  ]);
+
+  // Lưu cấu hình toàn cục (Preset, LocalStorage & Pipeline Settings backend)
+  const handleSaveGlobalConfig = async () => {
+    setIsSavingConfig(true);
+    try {
+      // 1. Cập nhật và lưu Preset Profile hiện tại vào localStorage
+      const currentPreset = presets.find((p) => p.id === activePresetId) || getDefaultPreset(presets);
+      const updatedPreset: PresetProfile = {
+        ...currentPreset,
+        roi: {
+          x: roiRegion.x,
+          y: roiRegion.y,
+          width: roiRegion.width,
+          height: roiRegion.height,
+        },
+        mask_style: maskStyle,
+        blur_strength: blurStrength,
+        subtitle_placement: subtitlePlacement,
+        aspect_ratio: aspectRatio,
+        fit_mode: fitMode,
+        zoom_level: zoomLevel,
+        is_flipped_h: isFlippedH,
+        is_flipped_v: isFlippedV,
+        show_subtitle_overlay: showSubtitleOverlay,
+        source_lang: sourceLang,
+        target_lang: targetLang,
+      };
+
+      const nextPresets = presets.map((p) => (p.id === updatedPreset.id ? updatedPreset : p));
+      handleSavePresets(nextPresets);
+
+      // 2. Lưu trạng thái snapshot tức thì vào localStorage
+      saveStudioActiveState({
+        roiRegion,
+        maskStyle,
+        blurStrength,
+        subtitlePlacement,
+        aspectRatio,
+        fitMode,
+        zoomLevel,
+        isFlippedH,
+        isFlippedV,
+        rotation,
+        sourceLang,
+        targetLang,
+        activePresetId,
+        selectedDramaTitle,
+        activeProjectId: activeProject?.project_id || null,
+      });
+
+      // 3. Đồng bộ xuống backend pipeline settings
+      try {
+        const currentPipe = await apiClient.getPipelineSettings();
+        if (currentPipe) {
+          const updatedPipe = {
+            ...currentPipe,
+            render: {
+              ...currentPipe.render,
+              default_mask_style: maskStyle,
+              default_blur_strength: blurStrength,
+            },
+            translation: {
+              ...currentPipe.translation,
+              target_language: (['zh', 'en', 'vi', 'none'].includes(targetLang) ? (targetLang as any) : 'vi'),
+            },
+          };
+          await apiClient.savePipelineSettings(updatedPipe);
+        }
+      } catch (pipeErr) {
+        console.warn('Không thể đồng bộ pipeline settings xuống backend:', pipeErr);
+      }
+
+      // 4. Nếu có activeProject, lưu ROI vào project settings trên backend
+      if (activeProject) {
+        try {
+          await apiClient.saveProjectSettings(activeProject.project_id, {
+            roi: roiRegion,
+            aspect_ratio: aspectRatio,
+          } as any);
+        } catch {
+          // Ignore
+        }
+      }
+
+      setStatusMessage('✓ Đã lưu cấu hình toàn cục thành công! (Không mất khi F5)');
+      appLogger.success('Đã lưu cấu hình toàn cục thành công (giữ nguyên khi F5)', 'Cấu hình');
+      setHasUnsavedChanges(false);
+    } catch (err: any) {
+      console.error('Lỗi khi lưu cấu hình:', err);
+      appLogger.error(`Lỗi lưu cấu hình: ${err?.message || 'Thất bại'}`, 'Cấu hình');
+    } finally {
+      setIsSavingConfig(false);
+    }
   };
 
   // Khởi tạo và lắng nghe WebSocket
@@ -476,246 +651,75 @@ export const App: React.FC = () => {
             setDownloaderTab(tab || 'search');
             setViewMode('downloader');
           }}
+          selectedDramaTitle={selectedDramaTitle}
+          onSelectDramaTitle={(t) => setSelectedDramaTitle(t)}
         />
       ) : (
         /* ========================================================================= */
         /* 2. GIAO DIỆN STUDIO */
         /* ========================================================================= */
         <>
-          {/* Header Studio Chuẩn NLE Có Nút "Quay Lại Dashboard" Nổi Bật */}
-          <header className="h-12 shrink-0 border-b border-slate-800 bg-slate-900/95 backdrop-blur px-4 flex items-center justify-between z-50">
-            {/* Trái: Nút Quay Lại Dashboard + Logo + Bộ Chọn Dự Án & Chuẩn Nhanh */}
-            <div className="flex items-center gap-3">
-              {/* Nút Quay Lại Dashboard */}
-              <button
-                onClick={() => setViewMode('dashboard')}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/60 text-indigo-300 text-xs font-semibold shadow transition active:scale-95"
-                title="Quay lại Dashboard"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-                <LayoutDashboard className="w-3.5 h-3.5" />
-                <span>Dashboard</span>
-              </button>
+          {/* 1. Header Studio Duy Nhất 48px */}
+          <StudioHeader
+            activeProject={activeProject}
+            projects={projects}
+            onSelectProject={selectProject}
+            onBackToDashboard={() => {
+              setSelectedDramaTitle(null);
+              setViewMode('dashboard');
+            }}
+            onBackToDrama={() => {
+              setViewMode('dashboard');
+            }}
+            dramaTitle={selectedDramaTitle}
+            presets={presets}
+            activePresetId={activePresetId}
+            onSelectPreset={applyPresetProfile}
+            onSaveGlobalConfig={handleSaveGlobalConfig}
+            isSavingConfig={isSavingConfig}
+            hasUnsavedChanges={hasUnsavedChanges}
+            statusMessage={statusMessage}
+            backendOnline={backendOnline}
+            wsConnected={wsConnected}
+            loggerCount={loggerCount}
+            onToggleLogger={() => appLogger.toggle()}
+            isScanning={isScanning}
+            hasVideo={Boolean(videoUrl)}
+            onStartScan={handleStartScan}
+            onOpenDownloader={() => {
+              setDownloaderTab('direct');
+              setViewMode('downloader');
+            }}
+            onOpenQueue={() => {
+              setDownloaderTab('queue');
+              setViewMode('downloader');
+            }}
+            onOpenSettings={() => {
+              setSettingsTab('ocr');
+              setViewMode('settings');
+            }}
+            cuesCount={cues.length}
+          />
 
-              {/* Nút Trung Tâm Tải Video */}
-              <button
-                onClick={() => {
-                  setDownloaderTab('direct');
-                  setViewMode('downloader');
-                }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/60 text-emerald-300 text-xs font-semibold shadow transition active:scale-95"
-                title="Tải video từ liên kết (Hồng Quả, YouTube, XHS...)"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Tải Video</span>
-              </button>
-
-              {/* Nút Hàng Đợi Tải Phim */}
-              <button
-                onClick={() => {
-                  setDownloaderTab('queue');
-                  setViewMode('downloader');
-                }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold shadow transition active:scale-95"
-                title="Mở Trang Quản Lý Hàng Đợi Tải Phim"
-              >
-                <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Hàng Đợi</span>
-              </button>
-
-              {/* Nút Thiết Lập Hệ Thống */}
-              <button
-                onClick={() => {
-                  setSettingsTab('ocr');
-                  setViewMode('settings');
-                }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold shadow transition active:scale-95"
-                title="Mở Trang Thiết Lập Toàn Cục (OCR, AI, TTS, Render)"
-              >
-                <Settings className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Thiết Lập</span>
-              </button>
-
-              <div className="h-4 w-px bg-slate-800" />
-
-              <div className="flex items-center gap-2">
-                <div className="p-1 bg-indigo-600/20 border border-indigo-500/30 rounded text-indigo-400">
-                  <Layers className="w-3.5 h-3.5" />
-                </div>
-                <span className="text-xs font-bold text-white tracking-wide uppercase hidden sm:inline">
-                  Studio
-                </span>
-              </div>
-
-              <div className="h-4 w-px bg-slate-800" />
-
-              {/* Chọn dự án dạng Pill */}
-              {projects.length > 0 && (
-                <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-md text-xs">
-                  <FolderOpen className="w-3 h-3 text-indigo-400 shrink-0" />
-                  <select
-                    value={activeProject?.project_id || ''}
-                    onChange={(e) => {
-                      const p = projects.find((x) => x.project_id === e.target.value);
-                      if (p) selectProject(p);
-                    }}
-                    className="bg-transparent text-slate-200 focus:outline-none cursor-pointer max-w-[140px] sm:max-w-[200px] truncate text-[11px]"
-                  >
-                    {projects.map((p) => (
-                      <option key={p.project_id} value={p.project_id} className="bg-slate-900 text-slate-200">
-                        {p.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Bộ Chọn Chuẩn Preset Nhanh Trong Studio */}
-              <div className="hidden md:flex items-center gap-1 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-md text-xs">
-                <Sliders className="w-3 h-3 text-amber-400 shrink-0" />
-                <select
-                  value={activePresetId}
-                  onChange={(e) => {
-                    const chosen = presets.find((x) => x.id === e.target.value);
-                    if (chosen) applyPresetProfile(chosen);
-                  }}
-                  className="bg-transparent text-amber-300 font-medium focus:outline-none cursor-pointer max-w-[160px] truncate text-[11px]"
-                  title="Đổi nhanh Chuẩn cấu hình áp dụng cho video này"
-                >
-                  {presets.map((p) => (
-                    <option key={p.id} value={p.id} className="bg-slate-900 text-slate-200">
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Dòng trạng thái tích hợp tinh tế */}
-              {statusMessage && (
-                <div className="hidden xl:flex items-center gap-1.5 text-[11px] text-indigo-300 bg-indigo-950/40 border border-indigo-800/40 px-2.5 py-0.5 rounded-full animate-in fade-in">
-                  <Sparkles className="w-3 h-3 text-indigo-400 shrink-0" />
-                  <span className="max-w-[220px] truncate">{statusMessage}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Phải: Trạng thái Backend, Nhật ký & Nút Bắt đầu Quét */}
-            <div className="flex items-center gap-2.5">
-              {/* Menu Tỉ Lệ Khung Hình Nhanh Trên Header */}
-              <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-md text-xs">
-                <Ratio className="w-3 h-3 text-indigo-400 shrink-0" />
-                <select
-                  value={aspectRatio}
-                  onChange={(e) => setAspectRatio(e.target.value as AspectRatioType)}
-                  className="bg-transparent text-slate-300 font-mono text-[10px] focus:outline-none cursor-pointer"
-                  title="Tỉ lệ khung hình Canvas"
-                >
-                  <option value="original" className="bg-slate-900">Gốc</option>
-                  <option value="16:9" className="bg-slate-900">16:9</option>
-                  <option value="9:16" className="bg-slate-900">9:16 (TikTok)</option>
-                  <option value="1:1" className="bg-slate-900">1:1 (Vuông)</option>
-                  <option value="4:3" className="bg-slate-900">4:3</option>
-                  <option value="2.35:1" className="bg-slate-900">2.35:1</option>
-                </select>
-              </div>
-
-              {/* Trạng thái Server */}
-              <div className="hidden sm:flex items-center gap-2 text-[11px] bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
-                <div className="flex items-center gap-1">
-                  {backendOnline ? (
-                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                  ) : (
-                    <XCircle className="w-3 h-3 text-rose-500" />
-                  )}
-                  <span className="text-slate-400">Server</span>
-                </div>
-
-                <span className="text-slate-700">|</span>
-
-                <div className="flex items-center gap-1">
-                  <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-                  <span className="text-slate-400">Live</span>
-                </div>
-              </div>
-
-              {/* Nút Mở Nhật Ký Hoạt Động */}
-              <button
-                onClick={() => appLogger.toggle()}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer shadow-sm"
-                title="Nhật ký hoạt động hệ thống"
-              >
-                <Activity className="w-3.5 h-3.5 text-cyan-400" />
-                <span className="hidden sm:inline">Nhật ký</span>
-                {loggerCount > 0 && (
-                  <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold">
-                    {loggerCount}
-                  </span>
-                )}
-              </button>
-
-              {/* Nút hành động chính: Bắt đầu quét */}
-              <button
-                onClick={handleStartScan}
-                disabled={isScanning || !videoUrl}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold shadow transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isScanning ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Đang Quét...</span>
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-3.5 h-3.5 fill-white" />
-                    <span>Quét Phụ Đề</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </header>
-
-          {/* Vùng trung tâm: Sidebar CapCut bên trái + Video Player trung tâm */}
+          {/* 2. Vùng Làm Việc 3-Panel: Hộp Trái + Video ở Giữa + Hộp Phải Inspector */}
           <main className="flex-1 min-h-0 min-w-0 flex flex-row relative overflow-hidden">
-            <CapcutSidebar
+            {/* Hộp Trái: Danh Sách Phụ Đề & Quản Lý Tập Phim */}
+            <LeftMediaSidebar
               projects={projects}
               activeProject={activeProject}
               onSelectProject={selectProject}
               onPickLocalVideo={handlePickLocalVideo}
-              region={roiRegion}
-              onUpdateRegion={(r) => setRoiRegion(r)}
-              onAutoDetectRoi={handleAutoDetectRoi}
               cues={cues}
+              currentTime={currentTime}
               onRefreshCues={loadCues}
               onSeekToCue={(pts) => setCurrentTime(pts)}
               onUpdateCue={handleUpdateCue}
-              sourceLang={sourceLang}
-              targetLang={targetLang}
-              onLanguageChange={(s, t) => {
-                setSourceLang(s);
-                setTargetLang(t);
-              }}
-              isFlippedH={isFlippedH}
-              isFlippedV={isFlippedV}
-              onToggleFlipH={() => setIsFlippedH((prev) => !prev)}
-              onToggleFlipV={() => setIsFlippedV((prev) => !prev)}
-
-              aspectRatio={aspectRatio}
-              onAspectRatioChange={setAspectRatio}
-
-              videoPosition={videoPosition}
-              onPositionChange={setVideoPosition}
-              scale={zoomLevel === 'fit' ? 1.0 : zoomLevel}
-              onScaleChange={(s) => setZoomLevel(s)}
-              rotation={rotation}
-              onRotationChange={(deg) => setRotation(normalizeRotation(deg))}
-              onResetTransform={handleResetTransform}
-              interactionMode={interactionMode}
-              onInteractionModeChange={setInteractionMode}
+              onDeleteProject={handleDeleteProject}
             />
 
+            {/* Video Canvas ở Giữa: Khung Xem Cực Kỳ Thoáng Đãng */}
             <VideoPlayer
               videoUrl={videoUrl}
-              videoTitle={activeProject?.title || localVideoFile?.name}
               region={roiRegion}
               currentTime={currentTime}
               isPlaying={isPlaying}
@@ -726,14 +730,74 @@ export const App: React.FC = () => {
               onPickLocalVideo={handlePickLocalVideo}
               cues={cues}
               aspectRatio={aspectRatio}
-              onAspectRatioChange={(r) => {
-                setAspectRatio(r);
-                appLogger.info(`Đổi tỉ lệ khung hình: ${r}`, 'Canvas');
+              fitMode={fitMode}
+              isFlippedH={isFlippedH}
+              isFlippedV={isFlippedV}
+              rotation={rotation}
+              onRotationChange={(deg) => {
+                const next = normalizeRotation(deg);
+                setRotation(next);
               }}
+              zoomLevel={zoomLevel}
+              onZoomChange={(z) => {
+                setZoomLevel(z);
+                appLogger.info(`Zoom: ${z === 'fit' ? 'Fit (Vừa vặn)' : `${Math.round(z * 100)}%`}`, 'Hiển thị');
+              }}
+              previewMask={previewMask}
+              maskStyle={maskStyle}
+              blurStrength={blurStrength}
+              showSubtitleOverlay={showSubtitleOverlay}
+              subtitlePlacement={subtitlePlacement}
               videoPosition={videoPosition}
               onPositionChange={setVideoPosition}
               interactionMode={interactionMode}
               onInteractionModeChange={setInteractionMode}
+            />
+
+            {/* Hộp Phải: Bảng Thuộc Tính & Inspector Chuẩn Premiere/CapCut */}
+            <RightInspectorPanel
+              region={roiRegion}
+              onUpdateRegion={(r) => setRoiRegion(r)}
+              onAutoDetectRoi={handleAutoDetectRoi}
+              sourceLang={sourceLang}
+              targetLang={targetLang}
+              onLanguageChange={(s, t) => {
+                setSourceLang(s);
+                setTargetLang(t);
+              }}
+              previewMask={previewMask}
+              onTogglePreviewMask={() => {
+                setPreviewMask((prev) => {
+                  const next = !prev;
+                  appLogger.info(next ? 'Bật chế độ che phụ đề gốc' : 'Tắt chế độ che phụ đề gốc', 'Che sub');
+                  return next;
+                });
+              }}
+              maskStyle={maskStyle}
+              onMaskStyleChange={(st) => {
+                setMaskStyle(st);
+                appLogger.info(`Kiểu che phụ đề: ${st}`, 'Che sub');
+              }}
+              blurStrength={blurStrength}
+              onBlurStrengthChange={setBlurStrength}
+              showSubtitleOverlay={showSubtitleOverlay}
+              onToggleSubtitleOverlay={() => {
+                setShowSubtitleOverlay((prev) => {
+                  const next = !prev;
+                  appLogger.info(next ? 'Bật hiển thị phụ đề dịch' : 'Tắt hiển thị phụ đề dịch', 'Phụ đề');
+                  return next;
+                });
+              }}
+              subtitlePlacement={subtitlePlacement}
+              onSubtitlePlacementChange={(p) => {
+                setSubtitlePlacement(p);
+                appLogger.info(`Vị trí phụ đề: ${p === 'bottom' ? 'Đáy video (chuẩn điện ảnh)' : 'Vùng quét (đè chữ gốc)'}`, 'Phụ đề');
+              }}
+              aspectRatio={aspectRatio}
+              onAspectRatioChange={(r) => {
+                setAspectRatio(r);
+                appLogger.info(`Đổi tỉ lệ khung hình: ${r}`, 'Canvas');
+              }}
               fitMode={fitMode}
               onToggleFitMode={() => {
                 setFitMode((m) => {
@@ -768,40 +832,16 @@ export const App: React.FC = () => {
                 const next = normalizeRotation(deg);
                 setRotation(next);
               }}
-              zoomLevel={zoomLevel}
-              onZoomChange={(z) => {
-                setZoomLevel(z);
-                appLogger.info(`Zoom: ${z === 'fit' ? 'Fit (Vừa vặn)' : `${Math.round(z * 100)}%`}`, 'Hiển thị');
-              }}
+              videoPosition={videoPosition}
+              onPositionChange={setVideoPosition}
               onResetTransform={handleResetTransform}
-              previewMask={previewMask}
-              onTogglePreviewMask={() => {
-                setPreviewMask((prev) => {
-                  const next = !prev;
-                  appLogger.info(next ? 'Bật chế độ che phụ đề gốc' : 'Tắt chế độ che phụ đề gốc', 'Che sub');
-                  return next;
-                });
-              }}
-              maskStyle={maskStyle}
-              onMaskStyleChange={(st) => {
-                setMaskStyle(st);
-                appLogger.info(`Kiểu che phụ đề: ${st}`, 'Che sub');
-              }}
-              blurStrength={blurStrength}
-              onBlurStrengthChange={setBlurStrength}
-              showSubtitleOverlay={showSubtitleOverlay}
-              onToggleSubtitleOverlay={() => {
-                setShowSubtitleOverlay((prev) => {
-                  const next = !prev;
-                  appLogger.info(next ? 'Bật hiển thị phụ đề dịch' : 'Tắt hiển thị phụ đề dịch', 'Phụ đề');
-                  return next;
-                });
-              }}
-              subtitlePlacement={subtitlePlacement}
-              onSubtitlePlacementChange={(p) => {
-                setSubtitlePlacement(p);
-                appLogger.info(`Vị trí phụ đề: ${p === 'bottom' ? 'Đáy video (chuẩn điện ảnh)' : 'Vùng quét (đè chữ gốc)'}`, 'Phụ đề');
-              }}
+              activeProject={activeProject}
+              onRefreshCues={loadCues}
+              isScanning={isScanning}
+              onStartScan={handleStartScan}
+              onSaveGlobalConfig={handleSaveGlobalConfig}
+              isSavingConfig={isSavingConfig}
+              hasUnsavedChanges={hasUnsavedChanges}
             />
           </main>
 

@@ -16,6 +16,8 @@ import {
   Volume2,
   VolumeX,
   Clock,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { SubtitleCueV1 } from '../../types/api';
@@ -60,6 +62,7 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
   const [isVideoVisible, setIsVideoVisible] = useState<boolean>(true);
   const [isAudioLocked, setIsAudioLocked] = useState<boolean>(false);
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
+  const [isTracksCollapsed, setIsTracksCollapsed] = useState<boolean>(false);
 
   const totalDuration = Math.max(1.0, duration);
 
@@ -402,11 +405,32 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
               </button>
             ))}
           </div>
+
+          {/* Nút Thu Gọn / Mở Rộng Timeline */}
+          <button
+            type="button"
+            onClick={() => setIsTracksCollapsed(!isTracksCollapsed)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition text-[11px] font-medium ml-1 shadow-sm"
+            title={isTracksCollapsed ? 'Mở rộng dải Timeline đầy đủ' : 'Thu gọn dải Timeline để phóng to video'}
+          >
+            {isTracksCollapsed ? (
+              <>
+                <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="hidden sm:inline">Mở Timeline</span>
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="hidden sm:inline">Thu Gọn</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
-      {/* 2. Bố Cục Timeline Chuẩn NLE: Cột Track Header Bên Trái + Vùng Cuộn Track & Thước Đo Thời Gian */}
-      <div className="flex px-4 py-2.5 gap-2">
+      {/* 2. Bố Cục Timeline Chuẩn NLE (Có thể thu gọn) */}
+      {!isTracksCollapsed && (
+      <div className="flex px-3 py-2 gap-2 animate-in fade-in duration-100">
         {/* Cột Track Header bên trái: Có icon Khóa / Ẩn / Mute cho từng dải */}
         <div className="w-24 shrink-0 flex flex-col rounded-xl overflow-hidden border border-slate-800/90 bg-slate-950 text-[10px] font-medium shadow-md">
           {/* Ô Header Trống (Tương ứng với hàng Thước Đo Thời Gian) */}
@@ -612,6 +636,7 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 };
