@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 
-def build_ocr_candidates(crop: np.ndarray) -> List[np.ndarray]:
+def build_ocr_candidates(crop: np.ndarray, include_advanced: bool = False) -> List[np.ndarray]:
     """Build deterministic image variants for subtitle OCR selection."""
     if not isinstance(crop, np.ndarray) or crop.size == 0:
         raise ValueError("OCR crop must be a non-empty numpy image")
@@ -29,7 +29,21 @@ def build_ocr_candidates(crop: np.ndarray) -> List[np.ndarray]:
     # A fixed high-luminance mask removes bright scene signage that survives
     # global contrast normalization while retaining the subtitle cores.
     bright_subtitle = np.where(grayscale >= 200, 255, 0).astype(np.uint8)
-    return [crop, contrast, thresholded, bright_subtitle]
+    candidates = [crop, contrast, thresholded, bright_subtitle]
+
+    if include_advanced:
+        # 1. CLAHE (Contrast Limited Adaptive Histogram Equalization - Zuiderveld, 1994):
+        # Tăng tương phản thích nghi cục bộ, bóc tách chữ khỏi nền phức tạp / ánh sáng gradient.
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe_img = clahe.apply(grayscale)
+
+        # 2. Unsharp Masking (USM):
+        # Làm sắc nét viền tần số cao, tách các nét chữ Hán/Latin dày đặc, chống dính nét.
+        gaussian = cv2.GaussianBlur(grayscale, (0, 0), sigmaX=1.5)
+        unsharp_img = cv2.addWeighted(grayscale, 1.5, gaussian, -0.5, 0)
+        candidates.extend([clahe_img, unsharp_img])
+
+    return candidates
 
 
 def enhance_text_contrast(raw_bytes: bytes, width: int, height: int) -> bytes:

@@ -8,7 +8,6 @@ from subtitle_localizer.translation.adapters import (
     TranslateGemmaAdapter,
 )
 from subtitle_localizer.translation.base import TranslationProvider
-from subtitle_localizer.translation.mock import MockTranslationProvider
 from subtitle_localizer.translation.real import RealTranslationProvider
 
 
@@ -17,8 +16,9 @@ class TranslationRegistry:
 
     def __init__(self) -> None:
         self._providers: Dict[str, TranslationProvider] = {}
-        self.register("mock", MockTranslationProvider())
-        self.register("real", RealTranslationProvider())
+        real_provider = RealTranslationProvider()
+        self.register("real", real_provider)
+        self.register("gemini", real_provider)
         self.register("gemma", TranslateGemmaAdapter())
         self.register("nllb", NllbAdapter())
         self.register("opus", OpusMtAdapter())
@@ -33,4 +33,6 @@ class TranslationRegistry:
         # Ưu tiên real translation provider
         if "real" in self._providers:
             return self._providers["real"]
-        return self._providers.get("mock", MockTranslationProvider())
+        if "gemini" in self._providers:
+            return self._providers["gemini"]
+        return next(iter(self._providers.values()), RealTranslationProvider())

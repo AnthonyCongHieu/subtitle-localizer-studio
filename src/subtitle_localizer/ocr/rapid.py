@@ -39,11 +39,6 @@ def _is_valid_language_text(text: str, language: str) -> bool:
         return False
     if re.fullmatch(r"\s*\d+[,.，。]*\s*", text):
         return False
-    if re.fullmatch(
-        r"\s*\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?\s*=\s*\d+(?:\.\d+)?[,.，。…]*\s*",
-        text,
-    ):
-        return False
 
     lang = (language or "auto").lower()
     if lang == "zh":
@@ -161,8 +156,10 @@ class RapidOcrProvider(OcrProvider):
             det_use_cuda=False, cls_use_cuda=False, rec_use_cuda=False
         )
         if hasattr(cpu_engine, "text_det"):
-            cpu_engine.text_det.limit_type = "max"
-            cpu_engine.text_det.limit_side_len = 640
+            cpu_engine.text_det.limit_type = "min"
+            cpu_engine.text_det.limit_side_len = 736
+            if hasattr(cpu_engine.text_det, "postprocess_op") and hasattr(cpu_engine.text_det.postprocess_op, "unclip_ratio"):
+                cpu_engine.text_det.postprocess_op.unclip_ratio = 1.8
         self.engine = cpu_engine
         self.execution_provider = "CPUExecutionProvider"
         self.is_loaded = True
@@ -186,8 +183,10 @@ class RapidOcrProvider(OcrProvider):
                     det_use_cuda=use_cuda, cls_use_cuda=use_cuda, rec_use_cuda=use_cuda
                 )
                 if hasattr(self.engine, "text_det"):
-                    self.engine.text_det.limit_type = "max"
-                    self.engine.text_det.limit_side_len = 640
+                    self.engine.text_det.limit_type = "min"
+                    self.engine.text_det.limit_side_len = 736
+                    if hasattr(self.engine.text_det, "postprocess_op") and hasattr(self.engine.text_det.postprocess_op, "unclip_ratio"):
+                        self.engine.text_det.postprocess_op.unclip_ratio = 1.8
                 # RapidOCR can silently fall back even when CUDA is advertised.
                 sessions = (
                     self.engine.text_det.infer.session,
@@ -331,6 +330,7 @@ class RapidOcrProvider(OcrProvider):
         language: str = "zh",
         progress_callback: Optional[Any] = None,
         diff_threshold: float = 1.5,
+        include_advanced: bool = False,
     ) -> List[OcrObservationV1]:
         with self._lock:
             if not self.is_loaded or self.engine is None:
@@ -398,7 +398,7 @@ class RapidOcrProvider(OcrProvider):
                 best_observation: Optional[OcrObservationV1] = None
                 candidate_texts: List[str] = []
                 inference_errors: List[str] = []
-                candidates = build_ocr_candidates(img_data)
+                candidates = build_ocr_candidates(img_data, include_advanced=include_advanced)
                 for candidate_index, candidate in enumerate(candidates):
                     try:
                         result, _ = engine(candidate)

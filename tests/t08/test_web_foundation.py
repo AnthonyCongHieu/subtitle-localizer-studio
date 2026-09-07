@@ -83,6 +83,169 @@ class WebFoundationTest(unittest.TestCase):
         self.assertIn("Tải từ Link", hub_content)
         self.assertIn("UrlDownloadModal", hub_content)
 
+    def test_video_player_clips_overflow_to_standard_frame(self) -> None:
+        """Kiểm tra VideoPlayer có lớp bọc cố định canvas với overflow-hidden để clip video out ra khỏi khung chuẩn."""
+        player_file = REPOSITORY_ROOT / "web" / "src" / "components" / "player" / "VideoPlayer.tsx"
+        self.assertTrue(player_file.exists())
+        content = player_file.read_text(encoding="utf-8")
+        # Khung chứa video phải có lớp cố định inset-0 overflow-hidden độc lập với transform
+        self.assertIn("absolute inset-0 overflow-hidden", content)
+        # Transform không được đặt cùng div với overflow-hidden để tránh làm tràn video ra ngoài khung chuẩn
+        self.assertNotIn("relative w-full h-full overflow-hidden rounded-xl", content)
+
+    def test_video_player_square_corners_no_rounded(self) -> None:
+        """Kiểm tra khung canvas chuẩn và transform overlay sử dụng góc vuông (rounded-none), không bo góc."""
+        player_file = REPOSITORY_ROOT / "web" / "src" / "components" / "player" / "VideoPlayer.tsx"
+        overlay_file = REPOSITORY_ROOT / "web" / "src" / "components" / "player" / "VideoTransformOverlay.tsx"
+        self.assertTrue(player_file.exists())
+        self.assertTrue(overlay_file.exists())
+        player_content = player_file.read_text(encoding="utf-8")
+        overlay_content = overlay_file.read_text(encoding="utf-8")
+
+        # Khung video canvas không bo góc
+        self.assertNotIn("rounded-xl border border-slate-800", player_content)
+        # Transform overlay không bo góc
+        self.assertNotIn("rounded-xl", overlay_content)
+
+    def test_dashboard_batch_hub_removes_pipeline_and_tune_tabs(self) -> None:
+        """Kiểm tra DashboardBatchHub đã loại bỏ tab Pipeline và Tinh chỉnh video ở góc phải UI."""
+        hub_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "DashboardBatchHub.tsx"
+        self.assertTrue(hub_file.exists())
+        content = hub_file.read_text(encoding="utf-8")
+
+        # Không còn các tab thừa Pipeline và Tinh chỉnh video
+        self.assertNotIn("Tinh chỉnh video", content)
+        self.assertNotIn("Cấu Hình Pipeline", content)
+        self.assertNotIn("Hiệu Chỉnh Video", content)
+        self.assertNotIn("sidebarTab", content)
+
+    def test_dashboard_batch_hub_eight_point_requirements(self) -> None:
+        """Kiểm tra DashboardBatchHub đáp ứng đầy đủ 8 yêu cầu thiết kế mới."""
+        hub_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "DashboardBatchHub.tsx"
+        self.assertTrue(hub_file.exists())
+        content = hub_file.read_text(encoding="utf-8")
+
+        # 1. Box chọn ngôn ngữ dịch
+        self.assertIn("Ngôn ngữ dịch", content)
+
+        # 2. Thanh kéo giảm âm lượng
+        self.assertIn("Giảm âm lượng video gốc", content)
+
+        # 3. Box chọn lồng tiếng (Đơn giọng / Đa giọng giới tính)
+        self.assertIn("Lồng tiếng AI", content)
+        self.assertIn("Đơn giọng", content)
+        self.assertIn("Đa giọng", content)
+
+        # 4. Sắp xếp theo tập / sort tùy ý
+        self.assertIn("Sắp xếp", content)
+        self.assertIn("Tập tăng dần", content)
+        self.assertIn("Tập giảm dần", content)
+
+        # 5. Định dạng + độ phân giải khi xuất
+        self.assertIn("Độ phân giải", content)
+        self.assertIn("1080p", content)
+
+        # 6. Bánh răng chi tiết từng tập dạng popup
+        self.assertIn("Thông số kỹ thuật", content)
+
+        # 7. Thanh phần trăm từng bước & tổng thể toàn bộ
+        self.assertIn("Tiến trình tổng thể", content)
+
+        # 8. Popup xác nhận trước khi chạy (Quick Batch Review)
+        self.assertIn("Xác Nhận & Bắt Đầu", content)
+
+    def test_dashboard_batch_hub_tổng_thể_và_cá_nhân_controls(self) -> None:
+        """Kiểm tra DashboardBatchHub đã gỡ các nút thừa ở footer và trang bị điều khiển tổng thể + cá nhân."""
+        hub_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "DashboardBatchHub.tsx"
+        self.assertTrue(hub_file.exists())
+        content = hub_file.read_text(encoding="utf-8")
+
+        # 1. Đã loại bỏ 5 nút dư thừa ở thanh footer dưới đáy
+        self.assertNotIn("Trích phụ đề", content)
+        self.assertNotIn("title=\"Trích xuất phụ đề hàng loạt\"", content)
+        self.assertNotIn("title=\"Dịch toàn bộ dự án\"", content)
+        self.assertNotIn("title=\"Lồng tiếng AI hàng loạt\"", content)
+        self.assertNotIn("title=\"Kết xuất MP4 hàng loạt\"", content)
+        self.assertNotIn("title=\"Dừng toàn bộ tiến trình\"", content)
+
+        # 2. Điều khiển tổng thể (Batch stages selector & review modal)
+        self.assertIn("Công đoạn thực hiện", content)
+        self.assertIn("batchStages", content)
+
+        # 3. Điều khiển cá nhân cho từng video cụ thể (Episode Inspector actions)
+        self.assertIn("Thao tác cá nhân cho tập này", content)
+        self.assertIn("Quét OCR", content)
+        self.assertIn("Dịch lại", content)
+        self.assertIn("Tạo giọng", content)
+        self.assertIn("Xuất MP4", content)
+        self.assertIn("handleRunSingleStage", content)
+
+        # 4. Tiến trình tổng thể đặt ở đáy phía trên thanh công cụ
+        self.assertIn("Tiến trình tổng thể", content)
+
+    def test_dashboard_multi_drama_folder_architecture(self) -> None:
+        """Kiểm tra giao diện phân cấp Thư mục / Bộ phim lớn (Multi-Drama Folder Architecture)."""
+        card_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "DramaFolderCard.tsx"
+        self.assertTrue(card_file.exists(), "DramaFolderCard.tsx must exist")
+        card_content = card_file.read_text(encoding="utf-8")
+        self.assertIn("DramaFolderCard", card_content)
+        self.assertIn("tập", card_content)
+        self.assertIn("tiến độ", card_content.lower())
+
+        hub_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "DashboardBatchHub.tsx"
+        self.assertTrue(hub_file.exists())
+        hub_content = hub_file.read_text(encoding="utf-8")
+
+        # 1. State & Logic gom nhóm bộ phim
+        self.assertIn("dramaViewMode", hub_content)
+        self.assertIn("selectedDramaTitle", hub_content)
+        self.assertIn("dramaGroups", hub_content)
+
+        # 2. Chuyển đổi chế độ xem & Breadcrumb điều hướng 2 tầng
+        self.assertIn("Theo Bộ phim", hub_content)
+        self.assertIn("Tất cả tập", hub_content)
+        self.assertIn("Danh sách Bộ phim", hub_content)
+
+    def test_client_has_reveal_project_export(self) -> None:
+        """Kiểm tra StudioApiClient có phương thức revealProjectExport."""
+        client_file = REPOSITORY_ROOT / "web" / "src" / "api" / "client.ts"
+        self.assertTrue(client_file.exists())
+        content = client_file.read_text(encoding="utf-8")
+        self.assertIn("revealProjectExport", content)
+        self.assertIn("/projects/${projectId}/reveal-export", content)
+
+    def test_enlarged_inspector_modal_and_verified_path_box(self) -> None:
+        """Kiểm tra Episode Inspector Modal kích thước lớn, fix thời lượng và ô đường dẫn tuyệt đối đã verify."""
+        hub_file = REPOSITORY_ROOT / "web" / "src" / "components" / "project" / "DashboardBatchHub.tsx"
+        self.assertTrue(hub_file.exists())
+        content = hub_file.read_text(encoding="utf-8")
+
+        # 1. Kích thước modal lớn (max-w-5xl hoặc max-w-6xl)
+        self.assertTrue("max-w-5xl" in content or "max-w-6xl" in content)
+
+        # 2. Switcher nguồn video xem trước (bản xuất MP4 vs video gốc)
+        self.assertIn("Video Đã Xuất Bản (MP4)", content)
+        self.assertIn("Video Gốc", content)
+        self.assertIn("previewVideoMode", content)
+
+        # 3. Khắc phục lỗi thời lượng 00:00 qua onLoadedMetadata
+        self.assertIn("onLoadedMetadata", content)
+        self.assertIn("setInspectorDuration", content)
+
+        # 4. Ô đường dẫn tuyệt đối đã verify
+        self.assertIn("Bản xuất MP4 hoàn thiện", content)
+        self.assertIn("Đường dẫn tuyệt đối tệp MP4 kết xuất", content)
+        self.assertIn("Đường dẫn tuyệt đối video gốc đầu vào", content)
+        self.assertIn("Mở trong Thư Mục", content)
+        self.assertIn("Tải MP4", content)
+        self.assertIn("handleRevealExport", content)
+        self.assertIn("handleCopyPath", content)
+
+        # 5. Nhấp vào tiêu đề / thanh trên để mở Thông số kỹ thuật & Chi tiết tập
+        self.assertIn("Bấm vào tiêu đề / thanh trên để mở Thông số kỹ thuật & Chi tiết tập", content)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

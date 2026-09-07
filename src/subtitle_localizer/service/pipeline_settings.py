@@ -15,23 +15,29 @@ DEFAULT_SETTINGS_FILE = Path("pipeline_settings.json")
 
 
 class ExtractionSettings(BaseModel):
-    # Kiến trúc 2 Mode:
-    # - "local": Chạy hoàn toàn trên máy cục bộ (100% Offline, 0đ chi phí, khai thác GPU RTX 3050 & 16 CPU cores)
-    # - "api": Chạy qua đám mây Cloud AI (Gemini Multimodal VLM hoặc CapCut ByteDance ASR)
-    mode: str = "local"  # "local" | "api"
+    # Kiến trúc 2 Mode (Mặc định: Ưu tiên API xịn nhất, tự động fallback về Local khi lỗi):
+    # - "api": Chạy qua đám mây Cloud AI (CapCut ByteDance ASR hoặc Gemini Multimodal VLM)
+    # - "local": Chạy hoàn toàn trên máy cục bộ (Offline qua GPU RTX 3050 & CPU)
+    mode: str = "api"  # "api" | "local" (Mặc định toàn hệ thống: Ưu tiên API)
+
+    # Tự động cứu hộ chuyển về Local Hybrid khi Cloud API gặp lỗi:
+    auto_fallback: bool = True
 
     # Khi mode == "local":
-    # - "rapidocr": Quét điểm ảnh hardsub trên màn hình bằng RapidOCR ONNX CUDA (~140 FPS, chất lượng & tốc độ cao nhất)
-    # - "whisper": Nhận diện giọng nói bằng Faster-Whisper CUDA FP16 khi video không có chữ trên hình
-    # - "demux": Bóc tách luồng phụ đề softsub có sẵn qua FFmpeg (0.1s tức thì)
-    local_engine: str = "rapidocr"  # "rapidocr" | "whisper" | "demux"
+    # Cố định duy nhất Động cơ Đa phương thức lai Hybrid DualFusion (RapidOCR + Faster-Whisper RAM-Pipe)
+    local_engine: str = "hybrid"  # "hybrid" | "rapidocr" | "whisper" | "demux"
 
     # Khi mode == "api":
-    # - "gemini": Google Gemini 2.5 Flash Multimodal (Nhìn hình, đọc chữ, hiểu cốt truyện, dùng Key Pool 43 keys)
-    # - "capcut": ByteDance Volcano Engine Subtitle ASR (Chuẩn nhận diện âm thanh của TikTok / CapCut)
-    api_provider: str = "gemini"  # "gemini" | "capcut"
-    capcut_api_endpoint: str = "https://edit-api-sg.capcut.com"
+    # - "capcut": ByteDance Volcano Engine Subtitle ASR (Chuẩn nhận diện âm thanh của TikTok / CapCut - Khuyên dùng)
+    # - "gemini": Google Gemini Multimodal VLM (Nhìn hình, đọc chữ, hiểu cốt truyện, dùng Key Pool 43 keys)
+    # - "groq": Groq Cloud Whisper LPU (Siêu tốc 0.5s, Whisper Large-v3)
+    api_provider: str = "capcut"  # "capcut" | "gemini" | "groq"
+    capcut_api_endpoint: str = "https://editor-api-sg.capcutapi.com"
     capcut_session_token: str = ""
+    capcut_mode: str = "cloud_api"  # "cloud_api" | "desktop_draft"
+    capcut_draft_id: Optional[str] = ""
+    groq_api_key: str = ""
+    groq_model: str = "whisper-large-v3"  # "whisper-large-v3" | "whisper-large-v3-turbo"
 
     # Phương thức tương thích ngược:
     # 1. "ocr" -> Quét chữ trên màn hình (RapidOCR ONNX / PaddleOCR)
@@ -41,15 +47,15 @@ class ExtractionSettings(BaseModel):
     method: str = "ocr"
 
     # 1. Cấu hình OCR (Thị giác):
-    engine: str = "rapidocr"  # "rapidocr" | "paddle" | "mock"
+    engine: str = "rapidocr"  # "rapidocr" | "paddle"
     default_source_lang: str = "auto"  # "auto" | "zh" | "en" | "vi"
-    sample_fps: float = 2.0
-    diff_threshold: float = 3.5
+    sample_fps: float = 2.5
+    diff_threshold: float = 2.5
     enable_gap_rescue: bool = True
     enable_roi_tightening: bool = True
 
     # 2. Cấu hình ASR (Faster-Whisper CUDA):
-    whisper_model: str = "medium"  # "tiny" | "base" | "small" | "medium" | "large-v3"
+    whisper_model: str = "small"  # "tiny" | "base" | "small" | "medium" | "large-v3"
     whisper_device: str = "cuda"  # "cuda" | "cpu"
     whisper_compute_type: str = "float16"  # "float16" | "int8_float16" | "int8"
     whisper_vad_filter: bool = True
@@ -62,22 +68,37 @@ class ExtractionSettings(BaseModel):
     demux_fallback_to_ocr: bool = True
     demux_stream_lang: str = "auto"
 
+    # 5. Cấu hình Đa Phương Thức Lai (Hybrid DualFusion):
+    hybrid_whisper_model: str = "small"
+    hybrid_confidence_threshold: float = 0.65
+    hybrid_rescue_missing: bool = True
+
 
 # Alias tương thích ngược hoàn toàn
 OcrSettings = ExtractionSettings
 
 
 class TranslationSettings(BaseModel):
-    provider: str = "gemini"  # "gemini" | "google_web" | "local_model"
+    provider: str = "gemini"  # "gemini" | "local" | "google_web"
     target_language: str = "vi"  # "vi" | "en" | "zh" | "none"
-    gemini_model: str = "gemini-2.5-flash"  # "gemini-2.5-flash" | "gemini-2.0-flash" | "gemini-1.5-flash"
+    gemini_model: str = "gemini-3.8-flash"  # "gemini-3.8-flash" | "gemini-3.7-flash" | "gemini-2.5-flash"
+    local_model: str = "qwen2.5:7b-instruct"  # "qwen2.5:7b-instruct" | "qwen2.5:3b-instruct" | "qwen2.5:14b-instruct"
+    local_endpoint: str = "http://localhost:11434"  # Ollama / llama.cpp / OpenAI-compatible endpoint
+    auto_fallback: bool = True  # Tự động chuyển đổi cứu hộ giữa Local và Gemini khi một bên gặp sự cố
     batch_size: int = 35
     prompt_tone: str = "dramatic"  # "dramatic" | "daily" | "humorous" | "literal"
     use_glossary: bool = True
 
 
+
 class DubbingSettings(BaseModel):
-    voice: str = "vi-VN-NamMinhNeural"
+    provider: str = "edge"  # "edge" | "capcut" | "gemini" | "local"
+    mode: str = "single"  # "single" (1 người) | "multi" (nhiều người / phân vai nam nữ)
+    voice: str = "vi-VN-NamMinhNeural"  # Giọng chính khi ở mode 1 người
+    voice_male: str = "vi-VN-NamMinhNeural"  # Giọng nam khi ở mode phân vai
+    voice_female: str = "vi-VN-HoaiMyNeural"  # Giọng nữ khi ở mode phân vai
+    auto_detect_speakers: bool = True  # Tự động phân vai nam/nữ theo ngữ cảnh hội thoại
+    gemini_prompt_style: str = "dramatic"  # Phong cách/sắc thái cho Gemini TTS
     rate: str = "+0%"
     pitch: str = "+0Hz"
     ducking_volume: float = 0.25
@@ -107,7 +128,8 @@ def load_pipeline_settings(filepath: Path | str = DEFAULT_SETTINGS_FILE) -> Glob
     if p.exists():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            _global_settings = GlobalPipelineSettings.parse_obj(data)
+            parse_fn = getattr(GlobalPipelineSettings, "model_validate", getattr(GlobalPipelineSettings, "parse_obj", None))
+            _global_settings = parse_fn(data)
             return _global_settings
         except Exception as ex:
             logger.warning(f"Lỗi đọc file cấu hình pipeline '{filepath}': {ex}. Sử dụng mặc định.")
@@ -250,3 +272,24 @@ def check_hardware_capabilities() -> Dict[str, Any]:
         "onnx_providers": onnx_providers,
         "ffmpeg": ffmpeg_info,
     }
+
+
+def merge_pipeline_settings(
+    base_settings: Optional[GlobalPipelineSettings] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+) -> GlobalPipelineSettings:
+    """Hợp nhất cấu hình pipeline cơ sở với cấu hình ghi đè riêng của từng video/project."""
+    base = base_settings or get_global_pipeline_settings()
+    if not overrides:
+        return base
+
+    dump_fn = getattr(base, "model_dump", getattr(base, "dict", None))
+    base_dict = dump_fn()
+    for section, values in overrides.items():
+        if isinstance(values, dict) and section in base_dict and isinstance(base_dict[section], dict):
+            base_dict[section].update(values)
+        else:
+            base_dict[section] = values
+
+    parse_fn = getattr(GlobalPipelineSettings, "model_validate", getattr(GlobalPipelineSettings, "parse_obj", None))
+    return parse_fn(base_dict)

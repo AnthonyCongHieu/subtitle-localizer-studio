@@ -497,5 +497,65 @@ class ServiceAndWorkerTest(unittest.TestCase):
         self.assertIn("message", data)
 
 
+    def test_reveal_export_endpoint_and_verified_path_contracts(self) -> None:
+        """Kiểm tra hợp đồng export_path, export_verified, export_file_size_bytes và endpoint reveal-export."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-123"}
+
+        source_file = Path(self.temp_dir.name) / "test_ep1.mp4"
+        source_file.write_bytes(b"dummy-video-data")
+        manifest = ProjectManifestV1(
+            project_id="proj-reveal-test",
+            title="Tập 1 - Phim Hay",
+            source_video_path=str(source_file),
+            video_fingerprint="fp_reveal",
+            source_language="zh",
+            target_language="vi",
+            media_metadata={"duration": 136.5, "width": 1920, "height": 1080},
+        )
+        self.repo.save_project(manifest)
+
+        # 1. Khi chưa có file xuất
+        res = client.get(f"/api/v1/projects/{manifest.project_id}", headers=headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertFalse(data["has_export"])
+        self.assertFalse(data["export_verified"])
+        self.assertIsNone(data["export_path"])
+        self.assertEqual(data["duration"], 136.5)
+        self.assertIn("source_video_resolved_path", data)
+
+        # 2. Tạo file xuất giả lập trên ổ đĩa
+        out_dir = Path(self.temp_dir.name) / "outputs" / manifest.project_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        export_file = out_dir / "test_ep1-localized.mp4"
+        export_file.write_bytes(b"rendered-mp4-data-12345")
+
+        res2 = client.get(f"/api/v1/projects/{manifest.project_id}", headers=headers)
+        self.assertEqual(res2.status_code, 200)
+        data2 = res2.json()
+        self.assertTrue(data2["has_export"])
+        self.assertTrue(data2["export_verified"])
+        self.assertIsNotNone(data2["export_path"])
+        self.assertTrue(data2["export_path"].endswith("test_ep1-localized.mp4"))
+        self.assertGreater(data2["export_file_size_bytes"], 0)
+
+        # Kiểm tra trong list_projects
+        list_res = client.get("/api/v1/projects", headers=headers)
+        self.assertEqual(list_res.status_code, 200)
+        target = next((p for p in list_res.json() if p["project_id"] == manifest.project_id), None)
+        self.assertIsNotNone(target)
+        self.assertTrue(target["export_verified"])
+        self.assertEqual(target["duration"], 136.5)
+
+        # 3. Test POST /api/v1/projects/{project_id}/reveal-export
+        reveal_res = client.post(f"/api/v1/projects/{manifest.project_id}/reveal-export", headers=headers)
+        self.assertEqual(reveal_res.status_code, 200)
+        reveal_data = reveal_res.json()
+        self.assertTrue(reveal_data["success"])
+        self.assertIn("path", reveal_data)
+
+
 if __name__ == "__main__":
     unittest.main()

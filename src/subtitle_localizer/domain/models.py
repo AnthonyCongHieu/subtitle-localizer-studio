@@ -211,6 +211,7 @@ class ProjectManifestV1:
     regions: List[RegionTrackV1] = field(default_factory=list)
     style: Dict[str, Any] = field(default_factory=dict)
     output_presets: Dict[str, Any] = field(default_factory=dict)
+    custom_pipeline_settings: Optional[Dict[str, Any]] = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     schema_version: str = "project-manifest-v1"
@@ -240,6 +241,7 @@ class ProjectManifestV1:
             regions=regions,
             style=data.get("style", {}),
             output_presets=data.get("output_presets", {}),
+            custom_pipeline_settings=data.get("custom_pipeline_settings"),
             created_at=float(data.get("created_at", time.time())),
             updated_at=float(data.get("updated_at", time.time())),
             schema_version=data.get("schema_version", "project-manifest-v1"),

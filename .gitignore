@@ -20,6 +20,7 @@ dist/
 benchmarks/golden/clips/
 benchmarks/golden/ground_truth/private/
 benchmarks/results/
+benchmarks/speed_benchmark_results.json
 fixtures/synthetic/generated/
 /tests/fixtures/*
 !/tests/fixtures/.gitkeep
@@ -32,6 +33,7 @@ fixtures/synthetic/generated/
 *.env
 *.json.secret
 gemini_keys_pool.json
+groq_keys_pool.json
 /uploads/
 /e2e_results/
 .serena/
@@ -58,3 +60,4 @@ src/subtitle_localizer/downloader/*.json
 # Unignore TypeScript files
 !web/**/*.ts
 !web/**/*.tsx
+bin/

@@ -4,6 +4,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import sys
 from typing import Dict, List, Optional
 
 from subtitle_localizer.domain.models import ModelDescriptorV1, SubtitleCueV1
@@ -121,6 +122,149 @@ class RealTranslationProvider(TranslationProvider):
     def unload(self) -> None:
         self.is_loaded = False
 
+    def _apply_model_response(
+        self,
+        cues: List[SubtitleCueV1],
+        chunk_indices: List[int],
+        text_content: str,
+    ) -> int:
+        """Phân tích các thẻ [i] câu dịch từ mô hình và cập nhật vào cues kèm phân vai [Nam]/[Nữ]."""
+        pattern = re.compile(r"\[(\d+)\]\s*(.*?)(?=\[\d+\]|\Z)", re.DOTALL)
+        matches = pattern.findall(text_content)
+        updated_count = 0
+        for idx_str, text in matches:
+            i = int(idx_str)
+            if 0 <= i < len(cues):
+                raw_item = text.strip().rstrip(".")
+                # Nhận diện thẻ phân vai nhân vật [Nam] hoặc [Nữ]
+                speaker_match = re.match(
+                    r"^[\(\[]\s*(Nam|Nữ|Nu|Male|Female|Man|Woman)\s*[\)\]][:,\s]*(.*)",
+                    raw_item,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if speaker_match:
+                    spk_raw = speaker_match.group(1).lower()
+                    gender = "female" if spk_raw in ("nữ", "nu", "female", "woman") else "male"
+                    if not isinstance(cues[i].style, dict):
+                        cues[i].style = {}
+                    cues[i].style["speaker"] = gender
+                    cleaned = _capitalize_first(speaker_match.group(2).strip())
+                else:
+                    cleaned = _capitalize_first(raw_item)
+
+                if cleaned and cleaned != cues[i].source_text.strip():
+                    cues[i].translated_text = cleaned
+                    self._cache[cues[i].source_text.strip()] = cleaned
+                    updated_count += 1
+        return updated_count
+
+    def _build_narrative_prompt(
+        self,
+        batch_items: List[str],
+        source_lang: str,
+        target_lang: str,
+        prompt_tone: str = "dramatic",
+    ) -> str:
+        """Xây dựng prompt dịch thuật biên kịch theo bối cảnh câu chuyện, tone kịch bản và phân vai giới tính."""
+        tone_instruction = {
+            "dramatic": "Kịch tính, điện ảnh, cảm xúc chân thực theo hoàn cảnh nhân vật.",
+            "daily": "Đời thường, tự nhiên, gần gũi, chuẩn ngôn ngữ giao tiếp hàng ngày.",
+            "humorous": "Hài hước, dí dỏm, sử dụng tiếng lóng hiện đại phù hợp.",
+            "literal": "Sát nghĩa từ ngữ gốc, nghiêm túc, chính xác.",
+        }.get(prompt_tone, "Tự nhiên, chuẩn ngữ cảnh phim truyền hình.")
+
+        return (
+            f"Bạn là chuyên gia biên kịch và Việt hóa phụ đề phim truyền hình, tiểu phẩm ngắn chuyên nghiệp.\n"
+            f"Nhiệm vụ: Dịch toàn bộ kịch bản hội thoại từ {source_lang} sang {target_lang} và PHÂN VAI GIỚI TÍNH cho từng nhân vật.\n"
+            f"Phong cách kịch bản: {tone_instruction}\n\n"
+            f"NGUYÊN TẮC BỐI CẢNH & PHÂN VAI (RẤT QUAN TRỌNG):\n"
+            f"1. Đọc toàn bộ kịch bản từ đầu đến cuối để nắm bắt cốt truyện, tâm lý và đối thoại qua lại giữa các nhân vật.\n"
+            f"2. BẮT BUỘC xác định rõ giới tính của người nói mỗi câu: [Nam] hoặc [Nữ] dựa theo ngữ cảnh đối thoại (người hỏi/người đáp, bạn nam/bạn nữ, mẹ/con, anh/em).\n"
+            f"3. Giữ đại từ xưng hô thống nhất, tự nhiên theo quan hệ nhân vật (mẹ/con, anh/em, cậu/tớ).\n"
+            f"4. Dịch thoát nghĩa, chuẩn văn phong đời thường, súc tích, dễ đọc trên video, tuyệt đối KHÔNG dịch thô từng từ vô nghĩa.\n"
+            f"5. BẮT BUỘC giữ nguyên mã số `[i]` kèm nhãn phân vai `[Nam]` hoặc `[Nữ]` ở đầu mỗi câu (ví dụ: `[0] [Nam] Sao thế?` hoặc `[1] [Nữ] Tâm trạng em không tốt sao?`).\n"
+            f"6. Chỉ trả về danh sách các câu dịch dạng `[i] [Nam/Nữ] Câu tiếng Việt`, không kèm thêm lời chào hay giải thích thừa.\n\n"
+            f"KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN:\n" + "\n".join(batch_items)
+        )
+
+
+    def _translate_with_local_qwen(
+        self,
+        cues: List[SubtitleCueV1],
+        source_lang: str,
+        target_lang: str,
+        model: str = "qwen2.5:7b-instruct",
+        endpoint: str = "http://localhost:11434",
+        prompt_tone: str = "dramatic",
+    ) -> bool:
+        """Dịch kịch bản bằng Qwen 2.5 Local LLM qua Ollama hoặc OpenAI-compatible API."""
+        import json
+        import urllib.error
+        import urllib.request
+
+        base_url = endpoint.rstrip("/")
+        chat_url = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+
+        def _translate_batch(batch_items: List[str], chunk_indices: List[int]) -> bool:
+            prompt = self._build_narrative_prompt(batch_items, source_lang, target_lang, prompt_tone)
+            payload_openai = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a professional subtitle localization assistant."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2,
+                "stream": False,
+            }
+            req_data = json.dumps(payload_openai).encode("utf-8")
+            req = urllib.request.Request(chat_url, data=req_data, headers={"Content-Type": "application/json"})
+
+            try:
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    status_code = getattr(resp, "status", getattr(resp, "code", 200))
+                    if status_code == 200:
+                        res_json = json.loads(resp.read().decode("utf-8"))
+                        text_content = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if text_content:
+                            updated = self._apply_model_response(cues, chunk_indices, text_content)
+                            return updated >= len(chunk_indices) * 0.5
+            except Exception as ex_openai:
+                try:
+                    ollama_native_url = f"{base_url.replace('/v1', '')}/api/chat"
+                    payload_ollama = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                    }
+                    req_native = urllib.request.Request(
+                        ollama_native_url,
+                        data=json.dumps(payload_ollama).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req_native, timeout=90) as resp2:
+                        status_code2 = getattr(resp2, "status", getattr(resp2, "code", 200))
+                        if status_code2 == 200:
+                            res_json2 = json.loads(resp2.read().decode("utf-8"))
+                            text_content2 = res_json2.get("message", {}).get("content", "")
+                            if text_content2:
+                                updated2 = self._apply_model_response(cues, chunk_indices, text_content2)
+                                return updated2 >= len(chunk_indices) * 0.5
+                except Exception as ex_native:
+                    logger.warning(f"Local Qwen call to {base_url} failed: {ex_openai} | {ex_native}")
+                    return False
+            return False
+
+        chunk_size = 35
+        all_indices = [i for i, c in enumerate(cues) if c.source_text.strip()]
+        success_any = False
+        for start_idx in range(0, len(all_indices), chunk_size):
+            chunk_indices = all_indices[start_idx : start_idx + chunk_size]
+            batch_items = [f"[{i}] {cues[i].source_text.strip()}" for i in chunk_indices]
+            if _translate_batch(batch_items, chunk_indices):
+                success_any = True
+
+        return success_any
+
     def _translate_with_gemini(
         self,
         cues: List[SubtitleCueV1],
@@ -128,8 +272,10 @@ class RealTranslationProvider(TranslationProvider):
         target_lang: str,
         api_keys: Optional[List[str]] = None,
         key_pool: Optional[Any] = None,
+        gemini_model: str = "gemini-2.5-flash",
+        prompt_tone: str = "dramatic",
     ) -> bool:
-        """Dịch kịch bản bằng Gemini AI 2.5 Flash qua Smart Pool API Keys với đầy đủ bối cảnh câu chuyện."""
+        """Dịch kịch bản bằng Gemini AI qua Smart Pool API Keys với đầy đủ bối cảnh câu chuyện."""
         import json
         import urllib.error
         import urllib.request
@@ -142,19 +288,8 @@ class RealTranslationProvider(TranslationProvider):
         if pool.total_keys == 0:
             return False
 
-        def _translate_batch(batch_items: List[str]) -> bool:
-            prompt = (
-                f"Bạn là chuyên gia biên kịch và Việt hóa phụ đề phim truyền hình, tiểu phẩm ngắn chuyên nghiệp.\n"
-                f"Nhiệm vụ: Dịch toàn bộ kịch bản hội thoại từ {source_lang} sang {target_lang}.\n\n"
-                f"NGUYÊN TẮC BỐI CẢNH & CÂU CHUYỆN (RẤT QUAN TRỌNG):\n"
-                f"1. Đọc toàn bộ kịch bản từ đầu đến cuối để nắm bắt cốt truyện, tâm lý và bối cảnh (ví dụ: mẹ con, tống tiền, đe dọa, bạn bè).\n"
-                f"2. Giữ đại từ xưng hô thống nhất, tự nhiên theo quan hệ nhân vật (mẹ/con, chú/cháu, mày/tao khi đe dọa, cậu/tớ).\n"
-                f"3. Dịch thoát nghĩa, chuẩn văn phong đời thường, súc tích, dễ đọc trên video, tuyệt đối KHÔNG dịch thô từng từ vô nghĩa.\n"
-                f"4. BẮT BUỘC giữ nguyên mã số `[i]` ở đầu mỗi câu để hệ thống tự động gán vào video (ví dụ: [0] ...).\n"
-                f"5. Chỉ trả về danh sách các câu dịch dạng `[i] Câu tiếng Việt`, không kèm thêm lời chào hay giải thích thừa.\n\n"
-                f"KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN:\n" + "\n".join(batch_items)
-            )
-
+        def _translate_batch(batch_items: List[str], chunk_indices: List[int]) -> bool:
+            prompt = self._build_narrative_prompt(batch_items, source_lang, target_lang, prompt_tone)
             payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
 
             max_attempts = min(pool.total_keys, 10)
@@ -164,7 +299,7 @@ class RealTranslationProvider(TranslationProvider):
                     logger.warning("Toàn bộ API Keys trong pool đều đang cooldown hoặc bận")
                     break
 
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={key}"
                 req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
                 try:
                     with urllib.request.urlopen(req, timeout=25) as resp:
@@ -172,16 +307,8 @@ class RealTranslationProvider(TranslationProvider):
                         if status_code == 200:
                             res = json.loads(resp.read().decode("utf-8"))
                             text_content = res["candidates"][0]["content"]["parts"][0]["text"]
-                            pattern = re.compile(r"\[(\d+)\]\s*(.*?)(?=\[\d+\]|\Z)", re.DOTALL)
-                            matches = pattern.findall(text_content)
-                            if len(matches) >= len(batch_items) * 0.5:
-                                for idx_str, text in matches:
-                                    i = int(idx_str)
-                                    if 0 <= i < len(cues):
-                                        cleaned = _capitalize_first(text.strip().rstrip("."))
-                                        if cleaned and cleaned != cues[i].source_text.strip():
-                                            cues[i].translated_text = cleaned
-                                            self._cache[cues[i].source_text.strip()] = cleaned
+                            updated = self._apply_model_response(cues, chunk_indices, text_content)
+                            if updated >= len(chunk_indices) * 0.5:
                                 return True
                 except urllib.error.HTTPError as http_err:
                     if http_err.code == 429:
@@ -207,13 +334,12 @@ class RealTranslationProvider(TranslationProvider):
                     continue
             return False
 
-        # Chia nhỏ kịch bản thành từng mẻ 35 câu để Gemini không bỏ sót câu ngắn
         chunk_size = 35
         all_indices = [i for i, c in enumerate(cues) if c.source_text.strip()]
         for start_idx in range(0, len(all_indices), chunk_size):
             chunk_indices = all_indices[start_idx : start_idx + chunk_size]
             batch_items = [f"[{i}] {cues[i].source_text.strip()}" for i in chunk_indices]
-            _translate_batch(batch_items)
+            _translate_batch(batch_items, chunk_indices)
 
         return True
 
@@ -226,17 +352,68 @@ class RealTranslationProvider(TranslationProvider):
         if not cues:
             return cues
 
-        # 1. Thu thập danh sách API Keys từ GeminiKeyPool toàn cục
-        from subtitle_localizer.translation.key_pool import get_global_gemini_pool
-        pool = get_global_gemini_pool()
+        from subtitle_localizer.service.pipeline_settings import get_global_pipeline_settings
+        pipe_settings = get_global_pipeline_settings().translation
+        provider = getattr(pipe_settings, "provider", "gemini")
 
-        # 2. Ưu tiên dịch thuật bằng Gemini 2.5 Flash theo từng mảng ngữ cảnh
+        translated_ok = False
+        auto_fallback = getattr(pipe_settings, "auto_fallback", True)
+
         is_pytest = "PYTEST_CURRENT_TEST" in os.environ and "TEST_WITH_GEMINI" not in os.environ
-        if pool.total_keys > 0 and not is_pytest:
+
+        # 1. Thử Mode Local nếu cấu hình là local hoặc auto
+        if not is_pytest and provider in ("local", "local_model", "auto"):
+            local_model = getattr(pipe_settings, "local_model", "qwen2.5:7b-instruct")
+            local_endpoint = getattr(pipe_settings, "local_endpoint", "http://localhost:11434")
+            prompt_tone = getattr(pipe_settings, "prompt_tone", "dramatic")
             try:
-                self._translate_with_gemini(cues, source_lang, target_lang, key_pool=pool)
-            except Exception:
-                pass
+                translated_ok = self._translate_with_local_qwen(
+                    cues,
+                    source_lang,
+                    target_lang,
+                    model=local_model,
+                    endpoint=local_endpoint,
+                    prompt_tone=prompt_tone,
+                )
+            except Exception as ex:
+                logger.warning(f"Local Qwen translation failed: {ex}")
+
+        # 2. Thử Mode Gemini nếu cấu hình là gemini, hoặc cấu hình là local/auto nhưng local chưa sẵn sàng và auto_fallback=True
+        if not is_pytest and not translated_ok and (provider == "gemini" or (auto_fallback and provider in ("local", "local_model", "auto"))):
+            from subtitle_localizer.translation.key_pool import get_global_gemini_pool
+            pool = get_global_gemini_pool()
+            if pool.total_keys > 0:
+                try:
+                    if provider != "gemini":
+                        logger.info("Local Qwen chưa sẵn sàng, tự động chuyển sang Gemini AI Key Pool để dịch kịch bản...")
+                    translated_ok = self._translate_with_gemini(
+                        cues,
+                        source_lang,
+                        target_lang,
+                        key_pool=pool,
+                        gemini_model=getattr(pipe_settings, "gemini_model", "gemini-2.5-flash"),
+                        prompt_tone=getattr(pipe_settings, "prompt_tone", "dramatic"),
+                    )
+                except Exception as ex:
+                    logger.warning(f"Gemini translation failed: {ex}")
+
+        # 3. Nếu cấu hình là gemini nhưng gemini thất bại, và auto_fallback=True: thử Local Qwen dự phòng
+        if not is_pytest and not translated_ok and provider == "gemini" and auto_fallback:
+            local_model = getattr(pipe_settings, "local_model", "qwen2.5:7b-instruct")
+            local_endpoint = getattr(pipe_settings, "local_endpoint", "http://localhost:11434")
+            prompt_tone = getattr(pipe_settings, "prompt_tone", "dramatic")
+            try:
+                translated_ok = self._translate_with_local_qwen(
+                    cues,
+                    source_lang,
+                    target_lang,
+                    model=local_model,
+                    endpoint=local_endpoint,
+                    prompt_tone=prompt_tone,
+                )
+            except Exception as ex:
+                logger.warning(f"Fallback to Local Qwen failed: {ex}")
+
 
         # 3. Fallback Pass: Rà soát 100% tất cả các câu chưa có bản dịch hoặc bản dịch trùng chữ gốc
         untranslated = [

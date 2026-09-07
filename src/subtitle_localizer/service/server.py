@@ -21,6 +21,7 @@ from subtitle_localizer.service.pipeline_settings import (
     GlobalPipelineSettings,
     get_global_pipeline_settings,
     save_pipeline_settings,
+    merge_pipeline_settings,
     check_hardware_capabilities,
 )
 
@@ -79,6 +80,14 @@ class GeminiVerifyRequest(BaseModel):
     index: Optional[int] = None
 
 
+class GroqPoolRequest(BaseModel):
+    keys: List[str] = []
+
+
+class GroqVerifyRequest(BaseModel):
+    index: Optional[int] = None
+
+
 class AutoDetectRoiRequest(BaseModel):
     pts: Optional[float] = None
 
@@ -94,16 +103,24 @@ class BatchDeleteProjectsRequest(BaseModel):
 
 class DownloadParseRequest(BaseModel):
     target: str
+    proxy: Optional[str] = None
+    strict_proxy: Optional[bool] = True
 
 
 class DownloadStartRequest(BaseModel):
     target_info: Dict[str, Any]
+    episodes: Optional[List[int]] = None
     start_ep: int = 1
     end_ep: Optional[int] = None
+    output_dir: Optional[str] = None
     auto_create_project: bool = True
     source_language: str = "zh"
     target_language: str = "vi"
     proxy: Optional[str] = None
+    proxy_list: Optional[List[str]] = None
+    strict_proxy: Optional[bool] = True
+    cdn_direct_bypass: Optional[bool] = False
+    auto_xray: Optional[bool] = False
     rate_limit_delay: float = 2.0
     rotate_device_each_ep: bool = True
     rotation_interval: Optional[int] = None
@@ -122,12 +139,17 @@ class DownloadQueueAddRequest(BaseModel):
     source_language: str = "zh"
     target_language: str = "vi"
     proxy: Optional[str] = None
+    proxy_list: Optional[List[str]] = None
+    strict_proxy: Optional[bool] = True
+    cdn_direct_bypass: Optional[bool] = False
+    auto_xray: Optional[bool] = False
     rate_limit_delay: float = 0.0
     rotate_device_each_ep: bool = True
     rotation_interval: Optional[int] = None
     target_resolution: Optional[str] = "best"
     concurrency: Optional[int] = 3
     cookie_source: Optional[str] = "none"
+
 
     @field_validator("target_info")
     @classmethod
@@ -149,6 +171,9 @@ class DownloadQueueAddResponse(BaseModel):
 class DownloadQueueTaskItem(BaseModel):
     task_id: str
     status: str
+    title: Optional[str] = ""
+    series_id: Optional[str] = None
+    platform: Optional[str] = "generic"
     target_info: Dict[str, Any]
     progress_percent: float = 0.0
     speed_mbps: float = 0.0
@@ -161,7 +186,52 @@ class DownloadQueueTaskItem(BaseModel):
     concurrency: Optional[int] = 3
     cookie_source: Optional[str] = "none"
     error: Optional[str] = None
+    auto_xray: Optional[bool] = False
     created_at: Optional[float] = None
+
+
+class XrayStatusResponse(BaseModel):
+    installed: bool
+    running: bool
+    is_enabled: bool
+    is_downloading: bool
+    is_benchmarking: bool
+    http_port: int = 10809
+    socks_port: int = 10808
+    active_node: Optional[Dict[str, Any]] = None
+    quality_nodes_count: int = 0
+    quality_nodes: List[Dict[str, Any]] = []
+    last_benchmarked_at: float = 0.0
+
+
+class XrayToggleRequest(BaseModel):
+    enabled: bool
+
+
+class XrayRefreshRequest(BaseModel):
+    custom_feed_or_nodes: Optional[str] = None
+    max_latency_ms: Optional[float] = 800.0
+
+
+class XraySwitchNodeRequest(BaseModel):
+    node_name: str
+
+
+class DetectedLocalProxyItem(BaseModel):
+    name: str
+    url: str
+    active: bool
+
+
+class ProxyStatusResponse(BaseModel):
+    enabled: bool
+    proxy_url: Optional[str] = None
+    is_alive: bool
+    is_standby: Optional[bool] = None
+    latency_ms: Optional[int] = None
+    mode: str
+    detected_local_proxies: List[DetectedLocalProxyItem] = []
+
 
 
 class DownloadQueueListResponse(BaseModel):
@@ -281,15 +351,31 @@ class TestTranslationRequest(BaseModel):
     target_lang: str = "vi"
     provider: str = "gemini"
     gemini_model: str = "gemini-2.5-flash"
+    local_model: str = "qwen2.5:7b-instruct"
+    local_endpoint: str = "http://localhost:11434"
+    auto_fallback: bool = True
     prompt_tone: str = "dramatic"
     use_glossary: bool = True
 
 
+class LocalLlmCheckRequest(BaseModel):
+    endpoint: Optional[str] = "http://localhost:11434"
+    model: Optional[str] = "qwen2.5:7b-instruct"
+
+
 class TestDubbingRequest(BaseModel):
     text: str
+    provider: Optional[str] = "edge"
     voice: str = "vi-VN-NamMinhNeural"
     rate: str = "+0%"
     pitch: str = "+0Hz"
+    prompt_style: Optional[str] = "dramatic"
+
+
+
+class ImportCapCutDraftRequest(BaseModel):
+    draft_id: Optional[str] = None
+    draft_path: Optional[str] = None
 
 
 def create_app(
@@ -367,7 +453,19 @@ def create_app(
             d["has_voiceover"] = voiceover_path.exists() and voiceover_path.stat().st_size > 0
 
             export_path = resolved_output_root / p.project_id / f"{Path(p.source_video_path).stem}-localized.mp4"
-            d["has_export"] = export_path.exists() and export_path.stat().st_size > 0
+            export_exists = export_path.exists() and export_path.stat().st_size > 0
+            d["has_export"] = export_exists
+            d["export_path"] = str(export_path.resolve()) if export_exists else None
+            d["export_file_size_bytes"] = export_path.stat().st_size if export_exists else 0
+            d["export_verified"] = export_exists
+            try:
+                d["source_video_resolved_path"] = str(Path(p.source_video_path).resolve())
+            except Exception:
+                d["source_video_resolved_path"] = p.source_video_path
+
+            if "duration" not in d or not d.get("duration"):
+                if p.media_metadata and "duration" in p.media_metadata:
+                    d["duration"] = p.media_metadata["duration"]
 
             results.append(d)
         return results
@@ -392,8 +490,17 @@ def create_app(
                 cap = cv2.VideoCapture(str(video_path))
                 vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
                 vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+                fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+                duration = round(frame_count / fps, 2) if fps > 0 else 0.0
                 cap.release()
                 manifest.regions = [propose_default_roi(vw, vh)]
+                manifest.media_metadata = {
+                    "width": vw,
+                    "height": vh,
+                    "fps": fps,
+                    "duration": duration,
+                }
             except Exception:
                 pass
         repository.save_project(manifest)
@@ -422,7 +529,20 @@ def create_app(
         d["has_voiceover"] = voiceover_path.exists() and voiceover_path.stat().st_size > 0
 
         export_path = resolved_output_root / project_id / f"{Path(project.source_video_path).stem}-localized.mp4"
-        d["has_export"] = export_path.exists() and export_path.stat().st_size > 0
+        export_exists = export_path.exists() and export_path.stat().st_size > 0
+        d["has_export"] = export_exists
+        d["export_path"] = str(export_path.resolve()) if export_exists else None
+        d["export_file_size_bytes"] = export_path.stat().st_size if export_exists else 0
+        d["export_verified"] = export_exists
+        try:
+            d["source_video_resolved_path"] = str(Path(project.source_video_path).resolve())
+        except Exception:
+            d["source_video_resolved_path"] = project.source_video_path
+
+        if "duration" not in d or not d.get("duration"):
+            if project.media_metadata and "duration" in project.media_metadata:
+                d["duration"] = project.media_metadata["duration"]
+
         return d
 
     @app.delete("/api/v1/projects/{project_id}")
@@ -449,7 +569,11 @@ def create_app(
     async def parse_download_target(req: DownloadParseRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
         try:
-            return parse_media_target(req.target)
+            return parse_media_target(
+                req.target,
+                proxy=req.proxy,
+                strict_proxy=req.strict_proxy if req.strict_proxy is not None else True,
+            )
         except ValueError as ve:
             raise HTTPException(status_code=400, detail=str(ve))
         except Exception as e:
@@ -461,18 +585,24 @@ def create_app(
         try:
             download_manager.start_download(
                 target_info=req.target_info,
+                episodes=req.episodes,
                 start_ep=req.start_ep,
                 end_ep=req.end_ep,
+                output_dir=req.output_dir,
                 auto_create_project=req.auto_create_project,
                 source_language=req.source_language,
                 target_language=req.target_language,
                 proxy=req.proxy,
+                proxy_list=req.proxy_list,
+                strict_proxy=req.strict_proxy if req.strict_proxy is not None else True,
+                cdn_direct_bypass=req.cdn_direct_bypass if req.cdn_direct_bypass is not None else False,
                 rate_limit_delay=req.rate_limit_delay,
                 rotate_device_each_ep=req.rotate_device_each_ep,
                 rotation_interval=req.rotation_interval,
                 target_resolution=req.target_resolution or "best",
                 concurrency=req.concurrency or 3,
                 cookie_source=req.cookie_source or "none",
+                auto_xray=req.auto_xray if req.auto_xray is not None else False,
             )
             return {"status": "started"}
         except RuntimeError as re:
@@ -512,13 +642,18 @@ def create_app(
                 source_language=req.source_language,
                 target_language=req.target_language,
                 proxy=req.proxy,
+                proxy_list=req.proxy_list,
+                strict_proxy=req.strict_proxy if req.strict_proxy is not None else True,
+                cdn_direct_bypass=req.cdn_direct_bypass if req.cdn_direct_bypass is not None else False,
                 rate_limit_delay=req.rate_limit_delay,
                 rotate_device_each_ep=req.rotate_device_each_ep,
                 rotation_interval=req.rotation_interval,
                 target_resolution=req.target_resolution or "best",
                 concurrency=req.concurrency or 3,
                 cookie_source=req.cookie_source or "none",
+                auto_xray=req.auto_xray if req.auto_xray is not None else False,
             )
+
             queue_info = download_manager.get_queue()
             tasks = queue_info.get("tasks", [])
             position = 1
@@ -664,6 +799,66 @@ def create_app(
         verify_auth(authorization)
         return test_proxy_connection(req.proxy)
 
+    @app.get("/api/v1/downloader/proxy/status", response_model=ProxyStatusResponse)
+    async def get_proxy_status(
+        proxy_url: Optional[str] = Query(None),
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.service.downloader import check_proxy_status
+        return check_proxy_status(proxy_url)
+
+    @app.get("/api/v1/downloader/proxy/pool")
+    async def get_proxy_pool(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        return download_manager.get_proxy_pool_status()
+
+    @app.get("/api/v1/downloader/xray/status", response_model=XrayStatusResponse)
+    async def get_xray_status_endpoint(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.xray_service import XrayService
+        return XrayService.get_instance().get_status()
+
+    @app.post("/api/v1/downloader/xray/refresh", response_model=XrayStatusResponse)
+    async def refresh_xray_nodes_endpoint(
+        req: Optional[XrayRefreshRequest] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.xray_service import XrayService
+        svc = XrayService.get_instance()
+        custom = req.custom_feed_or_nodes if req else None
+        max_lat = req.max_latency_ms if (req and req.max_latency_ms is not None) else 800.0
+        svc.refresh_quality_nodes(custom_feed_or_nodes=custom, max_latency_ms=max_lat)
+        if svc.is_running():
+            svc.switch_to_fastest()
+        return svc.get_status()
+
+    @app.post("/api/v1/downloader/xray/toggle")
+    async def toggle_xray_endpoint(
+        req: XrayToggleRequest,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.xray_service import XrayService
+        svc = XrayService.get_instance()
+        is_enabled = svc.toggle_enabled(req.enabled)
+        return {"success": True, "is_enabled": is_enabled, "status": svc.get_status()}
+
+    @app.post("/api/v1/downloader/xray/switch")
+    async def switch_xray_node_endpoint(
+        req: XraySwitchNodeRequest,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        from subtitle_localizer.downloader.xray_service import XrayService
+        svc = XrayService.get_instance()
+        switched = svc.switch_node_by_name(req.node_name)
+        if not switched:
+            raise HTTPException(status_code=400, detail=f"Không thể chuyển sang node '{req.node_name}'")
+        return {"success": True, "status": svc.get_status()}
+
+
     @app.get("/api/v1/downloader/device")
     async def get_device_info(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
@@ -789,6 +984,45 @@ def create_app(
         repository.save_cues(project_id, cues)
         return {"saved_count": len(cues)}
 
+    @app.post("/api/v1/projects/{project_id}/import-capcut-draft")
+    async def import_capcut_draft(
+        project_id: str,
+        req: Optional[ImportCapCutDraftRequest] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Nạp trực tiếp danh sách phụ đề từ CapCut Desktop Draft vào dự án Studio hiện tại."""
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        from subtitle_localizer.cloud.capcut_bridge import CapCutBridgeExtractor
+        extractor = CapCutBridgeExtractor()
+        draft_id = req.draft_id if req else None
+        draft_path = req.draft_path if req else None
+
+        video_path = Path(manifest.source_video_path) if manifest.source_video_path else Path("video.mp4")
+        cues = extractor.extract_cues(
+            video_path=video_path,
+            source_lang=manifest.source_language,
+            draft_id=draft_id,
+            draft_path=draft_path,
+        )
+        if not cues:
+            return {
+                "status": "empty",
+                "message": "Không tìm thấy phụ đề nào trong bản nháp CapCut được chỉ định.",
+                "imported_count": 0,
+                "cues": [],
+            }
+
+        repository.save_cues(project_id, cues)
+        return {
+            "status": "success",
+            "imported_count": len(cues),
+            "cues": [c.to_dict() for c in cues],
+        }
+
     @app.put("/api/v1/projects/{project_id}/regions")
     async def save_regions(
         project_id: str,
@@ -811,6 +1045,44 @@ def create_app(
         manifest.regions = regions
         repository.save_project(manifest)
         return [region.to_dict() for region in regions]
+
+    @app.get("/api/v1/projects/{project_id}/settings")
+    async def get_project_settings(
+        project_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return manifest.custom_pipeline_settings or {}
+
+    @app.put("/api/v1/projects/{project_id}/settings")
+    async def save_project_settings(
+        project_id: str,
+        settings_data: Dict[str, Any],
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+        manifest.custom_pipeline_settings = settings_data
+        repository.save_project(manifest)
+        return {"status": "success", "custom_pipeline_settings": manifest.custom_pipeline_settings}
+
+    @app.delete("/api/v1/projects/{project_id}/settings")
+    async def reset_project_settings(
+        project_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+        manifest.custom_pipeline_settings = None
+        repository.save_project(manifest)
+        return {"status": "success", "custom_pipeline_settings": None}
 
     @app.post("/api/v1/projects/{project_id}/pipeline/run")
     async def run_pipeline(
@@ -968,9 +1240,14 @@ def create_app(
         if not cues:
             raise HTTPException(status_code=400, detail="Dự án chưa có phụ đề để lồng tiếng")
 
-        settings = get_global_pipeline_settings()
+        settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
+        provider = (body or {}).get("provider") or getattr(settings.dubbing, "provider", "edge")
         voice = (body or {}).get("voice") or settings.dubbing.voice
         rate = (body or {}).get("rate") or settings.dubbing.rate
+        mode = (body or {}).get("mode") or getattr(settings.dubbing, "mode", "single")
+        voice_male = (body or {}).get("voice_male") or getattr(settings.dubbing, "voice_male", "vi-VN-NamMinhNeural")
+        voice_female = (body or {}).get("voice_female") or getattr(settings.dubbing, "voice_female", "vi-VN-HoaiMyNeural")
+        prompt_style = (body or {}).get("prompt_style") or getattr(settings.dubbing, "gemini_prompt_style", "dramatic")
         project_output = resolved_output_root / project_id
         project_output.mkdir(parents=True, exist_ok=True)
         out_voiceover = project_output / f"voiceover_{project_id}.mp3"
@@ -989,6 +1266,11 @@ def create_app(
             output_path=out_voiceover,
             total_duration=duration,
             rate=rate,
+            mode=mode,
+            voice_male=voice_male,
+            voice_female=voice_female,
+            provider=provider,
+            prompt_style=prompt_style,
         )
 
         return {
@@ -996,6 +1278,7 @@ def create_app(
             "project_id": project_id,
             "cues_count": len(cues),
             "voice": voice,
+            "mode": mode,
             "audio_url": f"/api/v1/projects/{project_id}/audio/voiceover",
         }
 
@@ -1417,6 +1700,59 @@ def create_app(
         pool.save_to_file("gemini_keys_pool.json")
         return {"status": "success", "pool_status": pool.get_status()}
 
+    @app.get("/api/v1/settings/groq-pool")
+    async def get_groq_pool_status_endpoint(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        """Lấy thông tin trạng thái xoay tua của Groq Key Pool (số lượng, active, cooldown, latency)."""
+        verify_auth(authorization)
+        from subtitle_localizer.cloud.groq_pool import get_global_groq_pool
+        pool = get_global_groq_pool()
+        return pool.get_status()
+
+    @app.post("/api/v1/settings/groq-pool")
+    async def update_groq_pool_endpoint(
+        req: GroqPoolRequest,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Cập nhật và lưu danh sách Groq API Keys vào Pool xoay tua."""
+        verify_auth(authorization)
+        from subtitle_localizer.cloud.groq_pool import get_global_groq_pool, DEFAULT_GROQ_KEY_POOL_FILE
+        pool = get_global_groq_pool()
+        pool.load_keys(req.keys)
+        pool.save_to_file(DEFAULT_GROQ_KEY_POOL_FILE)
+        return {"status": "success", "pool_status": pool.get_status()}
+
+    @app.post("/api/v1/settings/groq-pool/verify")
+    async def verify_groq_pool_endpoint(
+        req: Optional[GroqVerifyRequest] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Kiểm tra thực tế trạng thái hoạt động của toàn bộ keys hoặc 1 key chỉ định."""
+        verify_auth(authorization)
+        from subtitle_localizer.cloud.groq_pool import get_global_groq_pool
+        pool = get_global_groq_pool()
+        if req and req.index is not None:
+            res = pool.verify_key_by_index(req.index)
+            if res is None:
+                raise HTTPException(status_code=404, detail="Key index not found")
+            return {"status": "success", "result": res, "pool_status": pool.get_status()}
+        pool.verify_all_keys()
+        return {"status": "success", "pool_status": pool.get_status()}
+
+    @app.delete("/api/v1/settings/groq-pool/key/{index}")
+    async def delete_groq_key_endpoint(
+        index: int,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Xóa một key khỏi Groq Pool theo số thứ tự (index)."""
+        verify_auth(authorization)
+        from subtitle_localizer.cloud.groq_pool import get_global_groq_pool, DEFAULT_GROQ_KEY_POOL_FILE
+        pool = get_global_groq_pool()
+        ok = pool.delete_key(index)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Key index not found")
+        pool.save_to_file(DEFAULT_GROQ_KEY_POOL_FILE)
+        return {"status": "success", "pool_status": pool.get_status()}
+
     @app.get("/api/v1/settings/pipeline")
     async def get_pipeline_settings_endpoint(
         authorization: Optional[str] = Header(None),
@@ -1443,6 +1779,24 @@ def create_app(
         verify_auth(authorization)
         return check_hardware_capabilities()
 
+    @app.get("/api/v1/settings/capcut-drafts")
+    async def list_capcut_drafts_endpoint(
+        limit: int = 30,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Liệt kê danh sách các dự án CapCut Desktop Draft gần nhất trên máy tính."""
+        verify_auth(authorization)
+        from subtitle_localizer.cloud.capcut_bridge import CapCutBridgeExtractor
+        extractor = CapCutBridgeExtractor()
+        base_dir = extractor._get_capcut_draft_base_dir()
+        installed = base_dir.exists()
+        drafts = extractor.list_recent_drafts(limit=limit) if installed else []
+        return {
+            "installed": installed,
+            "draft_dir": str(base_dir).replace("\\", "/"),
+            "drafts": drafts,
+        }
+
     @app.post("/api/v1/settings/capcut-check")
     async def test_capcut_endpoint(
         body: Optional[Dict[str, Any]] = None,
@@ -1450,11 +1804,181 @@ def create_app(
     ) -> Dict[str, Any]:
         """Kiểm tra kết nối và độ trễ tới máy chủ CapCut Cloud API."""
         verify_auth(authorization)
-        from subtitle_localizer.service.capcut_api import CapCutSubtitleClient
-        endpoint = (body or {}).get("endpoint") or "https://edit-api-sg.capcut.com"
-        session_token = (body or {}).get("session_token") or ""
-        client = CapCutSubtitleClient(endpoint=endpoint, session_token=session_token)
+        from subtitle_localizer.service.capcut_api import CapCutSubtitleClient, DEFAULT_CAPCUT_ENDPOINT
+        raw_ep = (body or {}).get("endpoint")
+        if not raw_ep or "edit-api-sg.capcut.com" in raw_ep:
+            endpoint = DEFAULT_CAPCUT_ENDPOINT
+        else:
+            endpoint = raw_ep
+        client = CapCutSubtitleClient(endpoint=endpoint)
         return client.test_connection()
+
+    @app.post("/api/v1/settings/groq-check")
+    async def test_groq_endpoint(
+        body: Optional[Dict[str, Any]] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Kiểm tra API Key và độ trễ tới Groq Cloud ASR."""
+        verify_auth(authorization)
+        import time
+        import requests
+        api_key = (body or {}).get("api_key") or os.environ.get("GROQ_API_KEY", "")
+        if not api_key:
+            return {
+                "ok": False,
+                "latency_ms": 0,
+                "message": "Chưa nhập Groq API Key",
+            }
+        t0 = time.time()
+        try:
+            resp = requests.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+            latency_ms = int((time.time() - t0) * 1000)
+            if resp.status_code == 200:
+                return {
+                    "ok": True,
+                    "latency_ms": latency_ms,
+                    "message": "Kết nối Groq Cloud LPU thành công!",
+                    "models_count": len(resp.json().get("data", [])),
+                }
+            elif resp.status_code == 401:
+                return {
+                    "ok": False,
+                    "latency_ms": latency_ms,
+                    "message": "Groq API Key không chính xác hoặc đã hết hạn (HTTP 401)",
+                }
+            else:
+                return {
+                    "ok": False,
+                    "latency_ms": latency_ms,
+                    "message": f"Máy chủ Groq trả về HTTP {resp.status_code}: {resp.text[:100]}",
+                }
+        except Exception as ex:
+            latency_ms = int((time.time() - t0) * 1000)
+            return {
+                "ok": False,
+                "latency_ms": latency_ms,
+                "message": f"Không thể kết nối Groq: {ex}",
+            }
+
+    @app.post("/api/v1/settings/local-llm-check")
+    async def test_local_llm_endpoint(
+        req: Optional[LocalLlmCheckRequest] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Kiểm tra kết nối tới Ollama / llama.cpp / Local LLM Server và lấy danh sách models."""
+        verify_auth(authorization)
+        import time
+        import urllib.request
+        import json
+
+        endpoint = (req.endpoint if req and req.endpoint else "http://localhost:11434").rstrip("/")
+        model = (req.model if req and req.model else "qwen2.5:7b-instruct")
+
+        t0 = time.time()
+        available_models = []
+        is_online = False
+        error_msg = ""
+
+        # 1. Thử Ollama native /api/tags
+        try:
+            url_tags = f"{endpoint}/api/tags"
+            req_tags = urllib.request.Request(url_tags, headers={"User-Agent": "SubtitleLocalizerStudio"})
+            with urllib.request.urlopen(req_tags, timeout=3) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    available_models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+                    is_online = True
+        except Exception as ex_ollama:
+            # 2. Thử chuẩn OpenAI /v1/models (llama.cpp / LM Studio / LocalAI)
+            try:
+                models_url = f"{endpoint}/models" if endpoint.endswith("/v1") else f"{endpoint}/v1/models"
+                req_openai = urllib.request.Request(models_url, headers={"User-Agent": "SubtitleLocalizerStudio"})
+                with urllib.request.urlopen(req_openai, timeout=3) as resp_o:
+                    if resp_o.status == 200:
+                        data = json.loads(resp_o.read().decode("utf-8"))
+                        available_models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                        is_online = True
+            except Exception as ex_openai:
+                error_msg = f"Không thể kết nối máy chủ Local LLM tại {endpoint} ({ex_ollama})"
+
+        latency_ms = round((time.time() - t0) * 1000, 1)
+        has_target_model = any(model.lower() in m.lower() for m in available_models) if available_models else False
+
+        if is_online:
+            msg = f"Kết nối Local LLM thành công! Đã phát hiện {len(available_models)} models."
+            if not has_target_model and available_models:
+                msg += f" (Lưu ý: Mô hình '{model}' chưa có trong máy, bạn có thể chạy 'ollama run {model}')"
+            return {
+                "ok": True,
+                "latency_ms": latency_ms,
+                "message": msg,
+                "models": available_models,
+                "has_target_model": has_target_model,
+            }
+        else:
+            return {
+                "ok": False,
+                "latency_ms": latency_ms,
+                "message": error_msg or f"Chưa khởi động Local Engine tại {endpoint}. Hãy mở Ollama hoặc LM Studio.",
+                "models": [],
+                "has_target_model": False,
+            }
+
+    @app.post("/api/v1/settings/local-llm-start")
+    async def start_local_llm_daemon(
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Tự động khởi động tiến trình Ollama nền trên máy tính."""
+        verify_auth(authorization)
+        import subprocess
+        import shutil
+        import urllib.request
+        import time
+
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=1.0) as resp:
+                if getattr(resp, "status", getattr(resp, "code", 200)) == 200:
+                    return {"ok": True, "message": "Máy chủ Ollama đã đang chạy sẵn trên cổng 11434."}
+        except Exception:
+            pass
+
+        ollama_bin = shutil.which("ollama")
+        if not ollama_bin:
+            default_path = Path(os.path.expanduser("~")) / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
+            if default_path.exists():
+                ollama_bin = str(default_path)
+
+        if not ollama_bin:
+            return {"ok": False, "message": "Không tìm thấy ollama.exe trên máy. Hãy cài đặt Ollama từ https://ollama.com"}
+
+        try:
+            creation_flags = 0
+            if sys.platform == "win32":
+                creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+
+            subprocess.Popen(
+                [ollama_bin, "serve"],
+                creationflags=creation_flags,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            for _ in range(6):
+                time.sleep(0.5)
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=1.0) as resp:
+                        if getattr(resp, "status", getattr(resp, "code", 200)) == 200:
+                            return {"ok": True, "message": "Đã khởi động máy chủ Ollama ngầm thành công!"}
+                except Exception:
+                    continue
+
+            return {"ok": True, "message": "Đã gửi lệnh chạy Ollama serve, tiến trình đang khởi tạo."}
+        except Exception as ex:
+            return {"ok": False, "message": f"Không thể khởi động Ollama: {ex}"}
 
     @app.post("/api/v1/settings/test-translation")
     async def test_translation_endpoint(
@@ -1474,21 +1998,21 @@ def create_app(
         translated = ""
         provider_used = req.provider
 
-        if req.provider == "gemini":
+        tone_desc = {
+            "dramatic": "kịch tính, hấp dẫn, chuẩn phim truyền hình",
+            "daily": "đời thường, gần gũi, tự nhiên",
+            "humorous": "hài hước, dí dỏm, tiếng lóng giới trẻ",
+            "literal": "sát nghĩa từ ngữ gốc",
+        }.get(req.prompt_tone, "tự nhiên chuẩn phim")
+
+        def _try_gemini() -> str:
             from subtitle_localizer.translation.key_pool import get_global_gemini_pool
             pool = get_global_gemini_pool()
             if pool.total_keys > 0:
                 import json
                 import urllib.request
-                import urllib.error
                 key = pool.get_next_key(wait_timeout=2.0)
                 if key:
-                    tone_desc = {
-                        "dramatic": "kịch tính, hấp dẫn, chuẩn phim truyền hình",
-                        "daily": "đời thường, gần gũi, tự nhiên",
-                        "humorous": "hài hước, dí dỏm, tiếng lóng giới trẻ",
-                        "literal": "sát nghĩa từ ngữ gốc",
-                    }.get(req.prompt_tone, "tự nhiên chuẩn phim")
                     prompt = (
                         f"Bạn là chuyên gia dịch thuật phim truyền hình. Dịch câu sau từ {req.source_lang} sang {req.target_lang}.\n"
                         f"Phong cách: {tone_desc}.\n"
@@ -1499,25 +2023,93 @@ def create_app(
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{req.gemini_model}:generateContent?key={key}"
                     req_obj = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
                     try:
-                        with urllib.request.urlopen(req_obj, timeout=12) as resp:
+                        with urllib.request.urlopen(req_obj, timeout=15) as resp:
                             if resp.status == 200:
                                 res_json = json.loads(resp.read().decode("utf-8"))
-                                translated = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+                                return res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
                     except Exception as e:
                         logger.warning(f"Test Gemini translation failed: {e}")
+            return ""
 
-        # Fallback hoặc Google Web nếu Gemini không có kết quả
+        def _try_local() -> str:
+            import json
+            import urllib.request
+            endpoint = (req.local_endpoint or "http://localhost:11434").rstrip("/")
+            model = req.local_model or "qwen2.5:7b-instruct"
+            prompt = (
+                f"Bạn là chuyên gia dịch thuật phim truyền hình. Dịch câu sau từ {req.source_lang} sang {req.target_lang}.\n"
+                f"Phong cách: {tone_desc}.\n"
+                f"Chỉ trả về duy nhất câu đã dịch, không kèm ngoặc kép, lời chào hay giải thích.\n"
+                f"Văn bản: {text}"
+            )
+            chat_url = f"{endpoint}/chat/completions" if endpoint.endswith("/v1") else f"{endpoint}/v1/chat/completions"
+            payload_openai = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "stream": False,
+            }
+            try:
+                req_data = json.dumps(payload_openai).encode("utf-8")
+                req_obj = urllib.request.Request(chat_url, data=req_data, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req_obj, timeout=25) as resp:
+                    if getattr(resp, "status", getattr(resp, "code", 200)) == 200:
+                        res_json = json.loads(resp.read().decode("utf-8"))
+                        res_txt = res_json.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                        if res_txt:
+                            return res_txt
+            except Exception as e_local:
+                try:
+                    native_url = f"{endpoint.replace('/v1', '')}/api/chat"
+                    req_native = urllib.request.Request(
+                        native_url,
+                        data=json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False}).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req_native, timeout=25) as resp_n:
+                        if getattr(resp_n, "status", getattr(resp_n, "code", 200)) == 200:
+                            res_json_n = json.loads(resp_n.read().decode("utf-8"))
+                            res_txt_n = res_json_n.get("message", {}).get("content", "").strip()
+                            if res_txt_n:
+                                return res_txt_n
+                except Exception as e_native:
+                    logger.warning(f"Test Local Qwen translation failed: {e_local} | {e_native}")
+            return ""
+
+        auto_fb = getattr(req, "auto_fallback", True)
+
+        if req.provider == "gemini":
+            translated = _try_gemini()
+            if not translated and auto_fb:
+                translated = _try_local()
+                if translated:
+                    provider_used = "local_qwen (Tự động chuyển từ Gemini)"
+        elif req.provider in ("local", "local_model", "auto"):
+            translated = _try_local()
+            if not translated and auto_fb:
+                translated = _try_gemini()
+                if translated:
+                    provider_used = "gemini (Tự động cứu hộ do Local LLM chưa bật)"
+
+        # Fallback hoặc Google Web nếu Gemini/Local không có kết quả
         if not translated:
             try:
                 from deep_translator import GoogleTranslator
                 src = "zh-CN" if req.source_lang == "zh" else req.source_lang
                 tgt = "vi" if req.target_lang == "vi" else req.target_lang
                 translated = GoogleTranslator(source=src, target=tgt).translate(text)
-                provider_used = "google_web (fallback)" if req.provider == "gemini" else "google_web"
+                provider_used = f"google_web (fallback from {req.provider})" if req.provider in ("gemini", "local", "local_model") else "google_web"
             except Exception as e:
-                translated = f"[Lỗi dịch: {e}]"
+                if req.provider in ("local", "local_model"):
+                    endpoint = (req.local_endpoint or "http://localhost:11434").rstrip("/")
+                    model = req.local_model or "qwen2.5:7b-instruct"
+                    translated = f"[Lưu ý: Chưa khởi động Local LLM tại {endpoint}. Hãy mở PowerShell chạy 'ollama run {model}', hoặc chuyển sang Mode API để dịch ngay bằng Gemini]"
+                elif req.provider == "gemini":
+                    translated = f"[Lưu ý: Gemini API tạm thời không phản hồi. Hãy bấm 'Kiểm Tra Tất Cả Keys' hoặc kiểm tra kết nối mạng]"
+                else:
+                    translated = f"[Lỗi dịch: {e}]"
 
-        if req.use_glossary and not translated.startswith("[Lỗi"):
+        if req.use_glossary and not translated.startswith("["):
             translated = _refine_subtitles(translated, text)
 
         elapsed_ms = round((time.time() - t0) * 1000, 1)
@@ -1528,6 +2120,16 @@ def create_app(
             "latency_ms": elapsed_ms,
         }
 
+
+    @app.get("/api/v1/settings/tts-catalog")
+    async def get_tts_catalog_endpoint(
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Liệt kê toàn bộ kho giọng đọc đa tầng (Edge-TTS, CapCut, Gemini)."""
+        verify_auth(authorization)
+        from subtitle_localizer.dubbing.tts import get_tts_catalog
+        return get_tts_catalog()
+
     @app.post("/api/v1/settings/test-tts")
     async def test_tts_endpoint(
         req: TestDubbingRequest,
@@ -1537,10 +2139,14 @@ def create_app(
         verify_auth(authorization)
         from subtitle_localizer.dubbing.tts import synthesize_text
         text = req.text.strip() or "Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio."
+        provider = req.provider or "edge"
+        prompt_style = req.prompt_style or "dramatic"
         audio_bytes = await synthesize_text(
             text=text,
             voice=req.voice,
             rate=req.rate,
+            provider=provider,
+            prompt_style=prompt_style,
         )
         if not audio_bytes:
             raise HTTPException(status_code=500, detail="Không thể tạo giọng đọc thử nghiệm")
@@ -1650,6 +2256,38 @@ def create_app(
             return FileResponse(path=str(rendered_path), media_type="video/mp4", filename=f"{source_path.stem}-localized.mp4")
         return FileResponse(path=str(rendered_path), media_type="video/mp4")
 
+    @app.post("/api/v1/projects/{project_id}/reveal-export")
+    async def reveal_project_export(project_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        """Mở thư mục chứa file MP4 đã xuất trên Windows Explorer hoặc hệ điều hành sở tại."""
+        verify_auth(authorization)
+        project = repository.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        from pathlib import Path
+        source_path = Path(project.source_video_path)
+        export_path = (resolved_output_root / project_id / f"{source_path.stem}-localized.mp4").resolve()
+        
+        target_to_open = export_path if export_path.exists() else (resolved_output_root / project_id).resolve()
+        if not target_to_open.exists():
+            target_to_open.mkdir(parents=True, exist_ok=True)
+            
+        import sys
+        import subprocess
+        try:
+            if sys.platform == "win32":
+                if export_path.exists():
+                    subprocess.Popen(f'explorer /select,"{str(export_path)}"')
+                else:
+                    subprocess.Popen(f'explorer "{str(target_to_open)}"')
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(export_path)] if export_path.exists() else ["open", str(target_to_open)])
+            else:
+                subprocess.Popen(["xdg-open", str(target_to_open)])
+            return {"success": True, "path": str(export_path if export_path.exists() else target_to_open)}
+        except Exception as e:
+            logger.warning(f"Failed to reveal export path: {e}")
+            return {"success": False, "error": str(e), "path": str(target_to_open)}
+
     @app.get("/api/v1/projects/{project_id}/video/stream")
     def stream_project_video(project_id: str):
         project = repository.get_project(project_id)
@@ -1702,8 +2340,8 @@ def create_app(
     async def list_models(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
         return {
-            "ocr": ["paddle-zh", "paddle-ja", "paddle-ko", "paddle-en", "mock"],
-            "translation": ["gemma", "nllb", "opus", "mock"],
+            "ocr": ["rapidocr", "paddle-zh", "paddle-ja", "paddle-ko", "paddle-en"],
+            "translation": ["gemini", "gemma", "nllb", "opus", "real"],
         }
 
     @app.websocket("/api/v1/ws")
