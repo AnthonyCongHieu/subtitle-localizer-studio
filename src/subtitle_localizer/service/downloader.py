@@ -33,6 +33,19 @@ parser.schedule_video_cleanup = lambda filepath, delay_seconds=0: None
 
 from subtitle_localizer.domain.models import ProjectManifestV1
 from subtitle_localizer.detector.roi import propose_default_roi
+from subtitle_localizer.downloader.proxy_pool import (
+    ProxyPoolManager,
+    ProxyKillSwitchTriggered,
+    sanitize_proxy_url,
+)
+
+class TaskCancelledException(Exception):
+    """Ném ra khi người dùng hủy tác vụ tải."""
+    pass
+
+class TaskPausedException(Exception):
+    """Ném ra khi người dùng tạm dừng hàng đợi."""
+    pass
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -63,7 +76,32 @@ def test_proxy_connection(proxy_url: str) -> Dict[str, Any]:
             "error": "Chưa nhập địa chỉ proxy (đang kết nối trực tiếp bằng IP máy).",
         }
 
-    proxy_url = proxy_url.strip()
+    proxy_url = sanitize_proxy_url(proxy_url.strip())
+    if ("10809" in proxy_url or "10808" in proxy_url) and ("127.0.0.1" in proxy_url or "localhost" in proxy_url):
+        try:
+            from subtitle_localizer.downloader.xray_service import XrayService
+            xray = XrayService.get_instance()
+            enabled = xray.is_enabled if isinstance(xray.is_enabled, bool) else xray.is_enabled()
+            if enabled and not xray.is_running():
+                active_node = xray.get_active_node()
+                name = active_node.name if active_node else "Node Tối Ưu"
+                lat = 45
+                if xray.active_node_latency_ms is not None:
+                    lat = round(xray.active_node_latency_ms)
+                elif xray.quality_nodes:
+                    lat = round(xray.quality_nodes[0].latency_ms)
+                return {
+                    "ok": True,
+                    "ip": f"Auto-Xray Standby ({name})",
+                    "direct_ip": direct_ip,
+                    "is_masked": True,
+                    "latency_ms": lat,
+                    "is_standby": True,
+                    "note": f"Động cơ Auto-Xray đang ở chế độ Chờ (Standby, 0% RAM). Cổng 10809 sẽ tự động kích hoạt ngay khi bạn bấm Tải! Node sẵn sàng: {name} ({lat}ms).",
+                }
+        except Exception:
+            pass
+
     try:
         proxy_handler = urllib.request.ProxyHandler({
             "http": proxy_url,
@@ -90,18 +128,129 @@ def test_proxy_connection(proxy_url: str) -> Dict[str, Any]:
     except Exception as exc:
         err_str = str(exc)
         if "10061" in err_str or "refused" in err_str.lower():
+            if "10809" in proxy_url or "10808" in proxy_url:
+                try:
+                    from subtitle_localizer.downloader.xray_service import XrayService
+                    xray = XrayService.get_instance()
+                    enabled = xray.is_enabled if isinstance(xray.is_enabled, bool) else xray.is_enabled()
+                    if enabled:
+                        active_node = xray.get_active_node()
+                        name = active_node.name if active_node else "Node Tối Ưu"
+                        lat = 45
+                        if xray.active_node_latency_ms is not None:
+                            lat = round(xray.active_node_latency_ms)
+                        elif xray.quality_nodes:
+                            lat = round(xray.quality_nodes[0].latency_ms)
+                        return {
+                            "ok": True,
+                            "ip": f"Auto-Xray Standby ({name})",
+                            "direct_ip": direct_ip,
+                            "is_masked": True,
+                            "latency_ms": lat,
+                            "is_standby": True,
+                            "note": f"Động cơ Auto-Xray đang ở chế độ Chờ (Standby, 0% RAM). Cổng 10809 sẽ tự động kích hoạt ngay khi bạn bấm Tải! Node sẵn sàng: {name} ({lat}ms).",
+                        }
+                except Exception:
+                    pass
             err_str = "Cổng proxy từ chối kết nối (WinError 10061). Hãy kiểm tra phần mềm proxy (Clash, v2ray, ...) đã bật chưa, hoặc để trống ô proxy để kết nối trực tiếp."
         return {"ok": False, "direct_ip": direct_ip, "error": err_str}
+
+def check_proxy_status(proxy_url: Optional[str] = None) -> Dict[str, Any]:
+    """Kiểm tra trạng thái proxy đang dùng và tự động phát hiện các cổng proxy cục bộ (v2rayN, Clash)."""
+    import socket
+    from urllib.parse import urlparse
+
+    COMMON_LOCAL_PROXIES = [
+        {"name": "v2rayN HTTP (10809)", "host": "127.0.0.1", "port": 10809, "url": "http://127.0.0.1:10809"},
+        {"name": "v2rayN SOCKS5 (10808)", "host": "127.0.0.1", "port": 10808, "url": "socks5://127.0.0.1:10808"},
+        {"name": "Clash / Mihomo (7890)", "host": "127.0.0.1", "port": 7890, "url": "http://127.0.0.1:7890"},
+        {"name": "Shadowsocks (1080)", "host": "127.0.0.1", "port": 1080, "url": "socks5://127.0.0.1:1080"},
+    ]
+
+    def _is_port_open(host: str, port: int, timeout: float = 0.25) -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except Exception:
+            return False
+
+    detected = []
+    for p in COMMON_LOCAL_PROXIES:
+        active = _is_port_open(p["host"], p["port"])
+        detected.append({
+            "name": p["name"],
+            "url": p["url"],
+            "active": active,
+        })
+
+    clean_proxy = (proxy_url or "").strip()
+    if not clean_proxy:
+        return {
+            "enabled": False,
+            "proxy_url": None,
+            "is_alive": False,
+            "latency_ms": None,
+            "mode": "direct",
+            "detected_local_proxies": detected,
+        }
+
+    clean_proxy = sanitize_proxy_url(clean_proxy)
+    parsed = urlparse(clean_proxy if "://" in clean_proxy else f"http://{clean_proxy}")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (10809 if "10809" in clean_proxy else 7890 if "7890" in clean_proxy else 80)
+
+    if host in ("127.0.0.1", "localhost") and port in (10809, 10808):
+        try:
+            from subtitle_localizer.downloader.xray_service import XrayService
+            xray = XrayService.get_instance()
+            enabled = xray.is_enabled if isinstance(xray.is_enabled, bool) else xray.is_enabled()
+            if enabled and not xray.is_running():
+                lat = 45
+                if xray.active_node_latency_ms is not None:
+                    lat = round(xray.active_node_latency_ms)
+                elif xray.quality_nodes:
+                    lat = round(xray.quality_nodes[0].latency_ms)
+                return {
+                    "enabled": True,
+                    "proxy_url": clean_proxy,
+                    "is_alive": True,
+                    "is_standby": True,
+                    "latency_ms": lat,
+                    "mode": "auto_xray_standby",
+                    "detected_local_proxies": detected,
+                }
+        except Exception:
+            pass
+
+    is_alive = _is_port_open(host, port)
+    latency_ms = None
+    if is_alive:
+        start = time.perf_counter()
+        try:
+            with socket.create_connection((host, port), timeout=0.8):
+                latency_ms = round((time.perf_counter() - start) * 1000)
+        except Exception:
+            pass
+
+    return {
+        "enabled": True,
+        "proxy_url": clean_proxy,
+        "is_alive": is_alive,
+        "latency_ms": latency_ms,
+        "mode": "proxy" if is_alive else "direct_fallback",
+        "detected_local_proxies": detected,
+    }
 
 def _build_urllib_opener(proxy: Optional[str] = None):
     """Build a urllib opener with optional proxy support."""
     if proxy and str(proxy).strip():
-        handler = urllib.request.ProxyHandler({"http": proxy.strip(), "https": proxy.strip()})
+        sanitized = sanitize_proxy_url(proxy.strip())
+        handler = urllib.request.ProxyHandler({"http": sanitized, "https": sanitized})
         return urllib.request.build_opener(handler)
     return urllib.request.build_opener()
 
-def _open_url_with_fallback(req: urllib.request.Request, proxy: Optional[str] = None, timeout: int = 15):
-    """Mở URL an toàn. Nếu proxy bị lỗi hoặc từ chối kết nối (WinError 10061), tự động fallback sang kết nối trực tiếp."""
+def _open_url_with_fallback(req: urllib.request.Request, proxy: Optional[str] = None, timeout: int = 15, strict_proxy: bool = True):
+    """Mở URL an toàn. Nếu proxy bị lỗi hoặc từ chối kết nối, chỉ fallback sang kết nối trực tiếp nếu strict_proxy=False."""
     full_url = req.full_url
     req_headers = dict(req.headers)
     req_data = req.data
@@ -109,10 +258,13 @@ def _open_url_with_fallback(req: urllib.request.Request, proxy: Optional[str] = 
     unverifiable = getattr(req, "unverifiable", False)
 
     if proxy and str(proxy).strip():
+        sanitized = sanitize_proxy_url(proxy.strip())
         try:
-            opener = _build_urllib_opener(proxy.strip())
+            opener = _build_urllib_opener(sanitized)
             return opener.open(req, timeout=timeout)
         except Exception as exc:
+            if strict_proxy:
+                raise ProxyKillSwitchTriggered(f"Proxy request failed: {exc} (Direct fallback blocked by strict_proxy)")
             err_str = str(exc).lower()
             if "10061" in err_str or "refused" in err_str or "proxy" in err_str or "timed out" in err_str or "unavailable" in err_str:
                 print(f"[Downloader] Proxy {proxy} gap loi ({exc}), tu dong fallback sang ket noi truc tiep...")
@@ -126,6 +278,7 @@ def _open_url_with_fallback(req: urllib.request.Request, proxy: Optional[str] = 
                 return urllib.request.urlopen(clean_req, timeout=timeout)
             raise
     return urllib.request.urlopen(req, timeout=timeout)
+
 
 
 def extract_ytdlp_resolutions(info: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -194,11 +347,13 @@ def extract_ytdlp_resolutions(info: Dict[str, Any]) -> List[Dict[str, Any]]:
     return sorted_res
 
 
-def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, Any]:
+def parse_media_target(target: str, proxy: Optional[str] = None, strict_proxy: bool = True) -> Dict[str, Any]:
     """Phân tích URL hoặc từ khóa để xác định nguồn và thông tin phim/video."""
     target = target.strip()
     if not target:
         raise ValueError("Đường link hoặc từ khóa không được để trống.")
+
+    proxy = sanitize_proxy_url(proxy) if proxy and str(proxy).strip() else None
 
     # 1. Nhận diện Hồng Quả (Hongguo Short Drama)
     is_hongguo_url = "hongguoduanju.com" in target.lower()
@@ -227,7 +382,7 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
             search_url = f"https://hongguoduanju.com/search/{encoded}"
             req = urllib.request.Request(search_url, headers={"User-Agent": USER_AGENT})
             try:
-                with _open_url_with_fallback(req, proxy=proxy, timeout=15) as resp:
+                with _open_url_with_fallback(req, proxy=proxy, timeout=15, strict_proxy=strict_proxy) as resp:
                     html = resp.read().decode("utf-8")
                     m = re.search(r'_ROUTER_DATA\s*=\s*(\{.*?\});', html)
                     if m:
@@ -245,7 +400,7 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
             # Lấy thông tin chi tiết của bộ phim
             detail_url = f"https://hongguoduanju.com/detail?series_id={series_id}"
             req = urllib.request.Request(detail_url, headers={"User-Agent": USER_AGENT})
-            with _open_url_with_fallback(req, proxy=proxy, timeout=15) as resp:
+            with _open_url_with_fallback(req, proxy=proxy, timeout=15, strict_proxy=strict_proxy) as resp:
                 html = resp.read().decode("utf-8")
                 m = re.search(r'_ROUTER_DATA\s*=\s*(\{.*?\});', html)
                 if not m:
@@ -263,7 +418,7 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
                 if vid_list:
                     try:
                         from subtitle_localizer.downloader.hongguo_parser import probe_video_resolutions
-                        probe_res = probe_video_resolutions(vid_list[0], proxy=proxy)
+                        probe_res = probe_video_resolutions(vid_list[0], proxy=proxy, strict_proxy=strict_proxy)
                     except Exception as exc:
                         print(f"[Downloader] Probe video resolutions warning: {exc}")
 
@@ -318,6 +473,8 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
             cmd.append(target)
             proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, encoding="utf-8", errors="replace")
             if proc.returncode != 0 and proxy:
+                if strict_proxy:
+                    raise ProxyKillSwitchTriggered(f"yt-dlp parse failed with proxy: {proc.stderr[:100]} (Direct fallback blocked by strict_proxy)")
                 err_lower = proc.stderr.lower()
                 if any(k in err_lower for k in ("10061", "unable to connect to proxy", "proxyerror", "refused", "timed out")):
                     print(f"[Downloader] yt-dlp parse proxy {proxy} failed, retrying directly...")
@@ -330,6 +487,7 @@ def parse_media_target(target: str, proxy: Optional[str] = None) -> Dict[str, An
                         cmd_direct.extend(["--referer", "https://www.bilibili.com/"])
                     cmd_direct.append(target)
                     proc = subprocess.run(cmd_direct, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, encoding="utf-8", errors="replace")
+
 
             # Nếu bị chặn 403 / login / cookies (đặc biệt với Facebook, YouTube, Bilibili):
             # Tự động thử lấy cookies từ trình duyệt Chrome, Edge, Firefox
@@ -440,6 +598,10 @@ class DownloadTask:
     error: Optional[str] = None
     cover_url: Optional[str] = None
     proxy: Optional[str] = None
+    proxy_list: Optional[List[str]] = None
+    strict_proxy: bool = True
+    cdn_direct_bypass: bool = False
+    auto_xray: bool = False
     rate_limit_delay: float = 0.0
     rotate_device_each_ep: bool = True
     rotation_interval: Optional[int] = None
@@ -525,6 +687,10 @@ class DownloadTask:
             "error": self.error,
             "cover_url": self.cover_url,
             "proxy": self.proxy,
+            "proxy_list": self.proxy_list,
+            "strict_proxy": self.strict_proxy,
+            "cdn_direct_bypass": self.cdn_direct_bypass,
+            "auto_xray": self.auto_xray,
             "rate_limit_delay": self.rate_limit_delay,
             "rotate_device_each_ep": self.rotate_device_each_ep,
             "rotation_interval": self.rotation_interval,
@@ -542,6 +708,7 @@ class DownloadTask:
         }
 
 
+
 class DownloadManager:
     """Quản lý các tác vụ tải video nền (Hồng Quả & Generic) với hàng đợi FIFO tuần tự."""
 
@@ -555,11 +722,51 @@ class DownloadManager:
         self._active_task_id: Optional[str] = None
         self._is_paused: bool = False
         self._cancel_requested: bool = False
+        self._pause_requested: bool = False
         self._current_task: Optional[Dict[str, Any]] = None
         self._last_processed_series_id: Optional[str] = None
         self._stop_scheduler: bool = False
         self._scheduler_thread: Optional[threading.Thread] = None
+        self.proxy_pool: Optional[ProxyPoolManager] = None
         self._ensure_scheduler_started()
+
+    def get_or_create_proxy_pool(
+        self, raw_proxies: Optional[List[str]] = None, strict_proxy: bool = True
+    ) -> ProxyPoolManager:
+        with self.lock:
+            if self.proxy_pool is None:
+                self.proxy_pool = ProxyPoolManager(
+                    raw_proxies=raw_proxies,
+                    strict_proxy=strict_proxy,
+                    max_leases_per_node=2,
+                )
+            elif raw_proxies:
+                self.proxy_pool.load_proxies(raw_proxies)
+                self.proxy_pool.strict_proxy = strict_proxy
+            return self.proxy_pool
+
+    def get_proxy_pool_status(self) -> Dict[str, Any]:
+        with self.lock:
+            is_downloading = bool(self._active_task_id)
+            if self.proxy_pool:
+                if not is_downloading and self.proxy_pool.is_active:
+                    self.proxy_pool.deactivate()
+                res = self.proxy_pool.get_status()
+                res["is_downloading"] = is_downloading
+                return res
+            return {
+                "status": "standby",
+                "is_active": False,
+                "is_downloading": False,
+                "total_nodes": 0,
+                "alive_nodes": 0,
+                "active_leases": 0,
+                "total_bytes_transferred": 0,
+                "total_speed_mbps": 0.0,
+                "strict_proxy": True,
+                "nodes": [],
+                "tunnel_logs": [],
+            }
 
     def _ensure_scheduler_started(self) -> None:
         with self.lock:
@@ -578,19 +785,32 @@ class DownloadManager:
                 return {"status": "idle"}
             return dict(self._current_task)
 
-    def cancel(self) -> None:
+    def cancel(self, task_id: Optional[str] = None) -> None:
         with self._condition:
             self._cancel_requested = True
-            if self._active_task_id:
-                for t in self._tasks:
-                    if t.task_id == self._active_task_id:
-                        t.status = "cancelled"
-                        t.message = "Đã dừng theo yêu cầu người dùng."
-                        t.completed_at = time.time()
-                        break
-            if self._current_task and self._current_task.get("status") == "running":
-                self._current_task["status"] = "cancelling"
-                self._current_task["message"] = "Đang hủy tiến trình tải..."
+            target_id = task_id or self._active_task_id
+            for t in self._tasks:
+                if target_id and t.task_id == target_id:
+                    t.status = "cancelled"
+                    t.message = "Đã dừng theo yêu cầu người dùng."
+                    t.completed_at = time.time()
+                elif not target_id and t.status == "running":
+                    t.status = "cancelled"
+                    t.message = "Đã dừng theo yêu cầu người dùng."
+                    t.completed_at = time.time()
+            if self._current_task:
+                self._current_task["status"] = "cancelled"
+                self._current_task["message"] = "Đã dừng theo yêu cầu người dùng."
+            if self.proxy_pool:
+                self.proxy_pool.deactivate()
+            time.sleep(0.1)
+            has_more = any(t.status in ("pending", "running") and (t.auto_xray or (t.proxy and "10809" in str(t.proxy))) for t in self._tasks if t.status != "cancelled")
+            if not has_more:
+                try:
+                    from subtitle_localizer.downloader.xray_service import XrayService
+                    XrayService.get_instance().stop()
+                except Exception:
+                    pass
             self._condition.notify_all()
 
     def add_to_queue(
@@ -605,14 +825,21 @@ class DownloadManager:
         target_language: str = "vi",
         on_project_created=None,
         proxy: Optional[str] = None,
+        proxy_list: Optional[List[str]] = None,
+        strict_proxy: bool = True,
+        cdn_direct_bypass: bool = False,
         rate_limit_delay: float = 0.0,
         rotate_device_each_ep: bool = True,
         rotation_interval: Optional[int] = None,
         target_resolution: str = "best",
         concurrency: int = 3,
         cookie_source: str = "none",
+        auto_xray: bool = False,
     ) -> DownloadTask:
         task_id = f"task_{uuid.uuid4().hex[:10]}"
+        eff_proxy = proxy
+        if auto_xray and not eff_proxy:
+            eff_proxy = "http://127.0.0.1:10809"
         task = DownloadTask(
             task_id=task_id,
             target_info=target_info,
@@ -624,13 +851,18 @@ class DownloadManager:
             source_language=source_language,
             target_language=target_language,
             target_resolution=target_resolution or "best",
-            proxy=proxy,
+            proxy=eff_proxy,
+            proxy_list=proxy_list,
+            strict_proxy=strict_proxy,
+            cdn_direct_bypass=cdn_direct_bypass,
+            auto_xray=auto_xray,
             rate_limit_delay=rate_limit_delay,
             rotate_device_each_ep=rotate_device_each_ep,
             rotation_interval=rotation_interval,
             concurrency=concurrency,
             cookie_source=cookie_source or "none",
         )
+
         task._on_project_created = on_project_created
 
         with self._condition:
@@ -654,12 +886,38 @@ class DownloadManager:
     def pause_queue(self, task_id: Optional[str] = None) -> Dict[str, Any]:
         with self._condition:
             self._is_paused = True
+            self._pause_requested = True
+            with self.lock:
+                for t in self._tasks:
+                    if t.status == "running":
+                        t.status = "paused"
+                        t.message = "Đã tạm dừng hàng đợi."
+                if self._current_task and self._current_task.get("status") == "running":
+                    self._current_task["status"] = "paused"
+                    self._current_task["message"] = "Đã tạm dừng hàng đợi."
+            if self.proxy_pool:
+                self.proxy_pool.deactivate()
+            time.sleep(0.1)
+            try:
+                from subtitle_localizer.downloader.xray_service import XrayService
+                XrayService.get_instance().stop()
+            except Exception:
+                pass
             self._condition.notify_all()
         return {"success": True, "is_paused": True, "message": "Đã tạm dừng hàng đợi"}
 
     def resume_queue(self, task_id: Optional[str] = None) -> Dict[str, Any]:
         with self._condition:
             self._is_paused = False
+            self._pause_requested = False
+            with self.lock:
+                for t in self._tasks:
+                    if t.status == "paused":
+                        t.status = "pending"
+                        t.message = "Đang chờ tiếp tục tải..."
+                if self._current_task and self._current_task.get("status") == "paused":
+                    self._current_task["status"] = "pending"
+                    self._current_task["message"] = "Đang chờ tiếp tục tải..."
             self._ensure_scheduler_started()
             self._condition.notify_all()
         return {"success": True, "is_paused": False, "message": "Đã tiếp tục hàng đợi"}
@@ -676,10 +934,24 @@ class DownloadManager:
                         if self._current_task:
                             self._current_task["status"] = "cancelled"
                             self._current_task["message"] = task.message
+                        has_more = any(t.status in ("pending", "running") and (t.auto_xray or (t.proxy and "10809" in str(t.proxy))) for t in self._tasks if t.task_id != task_id)
+                        if not has_more:
+                            try:
+                                from subtitle_localizer.downloader.xray_service import XrayService
+                                XrayService.get_instance().stop()
+                            except Exception:
+                                pass
                         self._condition.notify_all()
                         return True
                     else:
                         self._tasks.pop(i)
+                        has_more = any(t.status in ("pending", "running") and (t.auto_xray or (t.proxy and "10809" in str(t.proxy))) for t in self._tasks)
+                        if not has_more:
+                            try:
+                                from subtitle_localizer.downloader.xray_service import XrayService
+                                XrayService.get_instance().stop()
+                            except Exception:
+                                pass
                         self._condition.notify_all()
                         return True
             return False
@@ -858,19 +1130,25 @@ class DownloadManager:
     def start_download(
         self,
         target_info: Dict[str, Any],
+        episodes: Optional[List[int]] = None,
         start_ep: int = 1,
         end_ep: Optional[int] = None,
+        output_dir: Optional[str] = None,
         auto_create_project: bool = True,
         source_language: str = "zh",
         target_language: str = "vi",
         on_project_created=None,
         proxy: Optional[str] = None,
+        proxy_list: Optional[List[str]] = None,
+        strict_proxy: bool = True,
+        cdn_direct_bypass: bool = False,
         rate_limit_delay: float = 2.0,
         rotate_device_each_ep: bool = True,
         rotation_interval: Optional[int] = None,
         target_resolution: str = "best",
         concurrency: int = 3,
         cookie_source: str = "none",
+        auto_xray: bool = False,
     ) -> None:
         with self.lock:
             if self._active_task_id or (self._current_task and self._current_task.get("status") == "running"):
@@ -891,13 +1169,19 @@ class DownloadManager:
 
         self.add_to_queue(
             target_info=target_info,
+            episodes=episodes,
             start_ep=start_ep,
             end_ep=end_ep,
+            output_dir=output_dir,
             auto_create_project=auto_create_project,
             source_language=source_language,
             target_language=target_language,
             on_project_created=on_project_created,
             proxy=proxy,
+            proxy_list=proxy_list,
+            strict_proxy=strict_proxy,
+            cdn_direct_bypass=cdn_direct_bypass,
+            auto_xray=auto_xray,
             rate_limit_delay=rate_limit_delay,
             rotate_device_each_ep=rotate_device_each_ep,
             rotation_interval=rotation_interval,
@@ -905,6 +1189,7 @@ class DownloadManager:
             concurrency=concurrency,
             cookie_source=cookie_source,
         )
+
 
     def _get_vid_list(self, series_id: str, proxy: Optional[str] = None, total_eps: int = 1) -> List[str]:
         count = max(1, total_eps)
@@ -956,6 +1241,7 @@ class DownloadManager:
                         task.message = f"Bắt đầu tải '{task.title}'..."
                         self._active_task_id = task.task_id
                         self._cancel_requested = False
+                        self._pause_requested = False
                         self._current_task = task.to_dict()
                         break
                     else:
@@ -969,6 +1255,20 @@ class DownloadManager:
 
     def _execute_queue_task(self, task: DownloadTask) -> None:
         try:
+            if self.proxy_pool:
+                self.proxy_pool.activate()
+
+            if task.auto_xray or (task.proxy and "10809" in str(task.proxy)):
+                try:
+                    from subtitle_localizer.downloader.xray_service import XrayService
+                    xray_svc = XrayService.get_instance()
+                    if xray_svc.is_enabled and not xray_svc.is_running():
+                        xray_svc.start()
+                    if task.auto_xray and not task.proxy:
+                        task.proxy = f"http://127.0.0.1:{xray_svc.http_port}"
+                except Exception as xerr:
+                    print(f"[Downloader] Auto Xray start warning: {xerr}")
+
             cur_series_id = task.series_id or str(task.target_info.get("series_id", task.title))
             if self._last_processed_series_id is not None and cur_series_id != self._last_processed_series_id:
                 try:
@@ -1031,14 +1331,20 @@ class DownloadManager:
 
         except Exception as exc:
             with self.lock:
-                if task.status != "cancelled":
+                if task.status not in ("cancelled", "paused") and not getattr(self, "_pause_requested", False) and not self._is_paused:
                     task.status = "failed"
                     task.error = str(exc)
                     task.completed_at = time.time()
                     task.message = f"Lỗi tải video: {exc}"
                     self._current_task = task.to_dict()
+                elif task.status != "cancelled":
+                    task.status = "paused"
+                    task.message = "Đã tạm dừng hàng đợi."
+                    if self._current_task:
+                        self._current_task["status"] = "paused"
+                        self._current_task["message"] = task.message
             try:
-                print(f"[Downloader] Task {task.task_id} failed: {exc}")
+                print(f"[Downloader] Task {task.task_id} result note: {exc}")
             except Exception:
                 pass
 
@@ -1050,6 +1356,22 @@ class DownloadManager:
                 pass
             with self._condition:
                 self._active_task_id = None
+                has_more_running = any(t.status == "running" for t in self._tasks)
+                if not has_more_running and self.proxy_pool:
+                    self.proxy_pool.deactivate()
+
+                has_more_xray = any(
+                    t.status in ("pending", "running") and (t.auto_xray or (t.proxy and "10809" in str(t.proxy)))
+                    for t in self._tasks
+                    if t.task_id != task.task_id
+                )
+                if not has_more_xray:
+                    try:
+                        from subtitle_localizer.downloader.xray_service import XrayService
+                        XrayService.get_instance().stop()
+                    except Exception:
+                        pass
+
                 self._condition.notify_all()
 
     def _create_episode_manifest(self, task: DownloadTask, title: str, ep_num: int, final_filepath: Path) -> ProjectManifestV1:
@@ -1085,6 +1407,7 @@ class DownloadManager:
         clean_title: str,
         title: str,
         device_keys: Optional[Dict[str, str]] = None,
+        proxy: Optional[str] = None,
     ) -> Tuple[int, Optional[ProjectManifestV1]]:
         final_filename = f"{clean_title}_Tap_{ep_num:02d}.mp4"
         final_filepath = series_dir / final_filename
@@ -1095,23 +1418,65 @@ class DownloadManager:
                 manifest = self._create_episode_manifest(task, title, ep_num, final_filepath)
             return final_filepath.stat().st_size, manifest
 
+        if self._is_paused or getattr(self, "_pause_requested", False) or getattr(self, "_cancel_requested", False) or task.status in ("paused", "cancelled"):
+            return 0, None
+
         target_res = getattr(task, "target_resolution", "best")
+        effective_proxy = proxy or task.proxy
+        strict_proxy = getattr(task, "strict_proxy", True)
+        cdn_direct_bypass = getattr(task, "cdn_direct_bypass", False)
+        t_start = time.perf_counter()
         try:
             res = parser.resolve_video_url(
                 vid,
-                proxy=task.proxy,
+                proxy=effective_proxy,
                 device_keys=device_keys,
                 target_resolution=target_res,
+                strict_proxy=strict_proxy,
+                cdn_direct_bypass=cdn_direct_bypass,
             )
         except TypeError as type_err:
-            if "target_resolution" in str(type_err):
+            if "cdn_direct_bypass" in str(type_err) or "target_resolution" in str(type_err) or "strict_proxy" in str(type_err):
                 res = parser.resolve_video_url(
                     vid,
-                    proxy=task.proxy,
+                    proxy=effective_proxy,
                     device_keys=device_keys,
                 )
             else:
                 raise
+        except Exception as err:
+            if self._is_paused or getattr(self, "_pause_requested", False) or getattr(self, "_cancel_requested", False) or task.status in ("paused", "cancelled"):
+                return 0, None
+            err_str = str(err)
+            is_proxy_fail = any(k in err_str for k in ("curl: (35)", "Recv failure", "Connection was reset", "10061", "refused", "timed out"))
+            if is_proxy_fail and (task.auto_xray or (effective_proxy and "10809" in effective_proxy)):
+                try:
+                    from subtitle_localizer.downloader.xray_service import XrayService
+                    xray = XrayService.get_instance()
+                    if xray.is_enabled:
+                        print(f"[Downloader] Ep {ep_num} phát hiện node lỗi ({err_str}). Tự động nhảy sang node tiếp theo...")
+                        new_node = xray.report_active_node_failure(err_str)
+                        if new_node:
+                            time.sleep(1.0)
+                            res = parser.resolve_video_url(
+                                vid,
+                                proxy=effective_proxy,
+                                device_keys=device_keys,
+                                target_resolution=target_res,
+                                strict_proxy=strict_proxy,
+                                cdn_direct_bypass=cdn_direct_bypass,
+                            )
+                        else:
+                            raise
+                    else:
+                        raise
+                except Exception:
+                    raise
+            else:
+                raise
+
+        if self._is_paused or getattr(self, "_pause_requested", False) or getattr(self, "_cancel_requested", False) or task.status in ("paused", "cancelled"):
+            return 0, None
 
         src_url = res.get("url", "") if isinstance(res, dict) else ""
         mp4_name = src_url.split("/")[-1] if src_url else f"{vid}.mp4"
@@ -1152,6 +1517,15 @@ class DownloadManager:
         if task.auto_create_project and self.repository:
             manifest = self._create_episode_manifest(task, title, ep_num, final_filepath)
 
+        elapsed_sec = max(0.001, time.perf_counter() - t_start)
+        if self.proxy_pool and effective_proxy:
+            self.proxy_pool.record_transfer(
+                proxy_url=effective_proxy,
+                bytes_count=file_sz,
+                duration_sec=elapsed_sec,
+                task_name=f"Ep_{ep_num:02d}",
+            )
+
         return file_sz, manifest
 
     def _download_hongguo_task(self, task: DownloadTask, series_dir: Path) -> None:
@@ -1181,9 +1555,27 @@ class DownloadManager:
         except Exception:
             concurrency = 3
 
+        # Configure ProxyPoolManager for per-thread isolated proxy leasing
+        candidate_proxies: List[str] = []
+        if getattr(task, "proxy_list", None):
+            candidate_proxies = [str(p).strip() for p in task.proxy_list if p and str(p).strip()]
+        elif task.proxy and str(task.proxy).strip():
+            candidate_proxies = [str(task.proxy).strip()]
+
+        proxy_pool = self.get_or_create_proxy_pool(
+            raw_proxies=candidate_proxies,
+            strict_proxy=task.strict_proxy,
+        ) if candidate_proxies else None
+        if proxy_pool:
+            proxy_pool.activate()
+
         if concurrency <= 1:
             # Tuần tự theo 1 luồng: bảo toàn cơ chế rate-limit delay và rotation interval
             for step, ep_num in enumerate(target_eps):
+                if self._is_paused or getattr(self, "_pause_requested", False) or task.status == "paused":
+                    task.status = "paused"
+                    task.message = "Đã tạm dừng hàng đợi."
+                    return
                 if self._cancel_requested or task.status == "cancelled":
                     task.status = "cancelled"
                     task.message = "Đã dừng theo yêu cầu người dùng."
@@ -1226,9 +1618,15 @@ class DownloadManager:
                     )
                     self._current_task = task.to_dict()
 
-                file_sz, manifest = self._download_hongguo_single_episode(
-                    task, series_dir, ep_num, vid, clean_title, title, cur_device_keys
-                )
+                if proxy_pool:
+                    with proxy_pool.lease_proxy(task_name=f"Ep_{ep_num}", timeout=30.0) as leased_proxy:
+                        file_sz, manifest = self._download_hongguo_single_episode(
+                            task, series_dir, ep_num, vid, clean_title, title, cur_device_keys, proxy=leased_proxy
+                        )
+                else:
+                    file_sz, manifest = self._download_hongguo_single_episode(
+                        task, series_dir, ep_num, vid, clean_title, title, cur_device_keys, proxy=task.proxy
+                    )
                 downloaded_bytes_session += file_sz
 
                 if manifest:
@@ -1239,7 +1637,7 @@ class DownloadManager:
                     if getattr(task, "_on_project_created", None):
                         task._on_project_created(manifest)
         else:
-            # Đa luồng song song (Multi-threaded download with Thread-Safe Device Pool & Anti-Spam Jitter)
+            # Đa luồng song song (Multi-threaded download with Proxy Pool & Thread-Safe Device Pool)
             completed_count = 0
             dev_lock = threading.Lock()
             current_shared_device = [None]
@@ -1247,20 +1645,20 @@ class DownloadManager:
             rot_interval = task.rotation_interval if (task.rotation_interval is not None and task.rotation_interval > 0) else 5
 
             def _worker_wrapper(idx: int, ep_num: int, vid: str):
-                if self._cancel_requested or task.status == "cancelled":
+                if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
                     return 0, None
 
                 # 1. Staggered launch delay to prevent WAF burst rate-limiting
                 stagger_delay = (idx % concurrency) * 0.1 + random.uniform(0.02, 0.05)
                 slept = 0.0
                 while slept < stagger_delay:
-                    if self._cancel_requested or task.status == "cancelled":
+                    if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
                         return 0, None
                     chunk = min(0.05, stagger_delay - slept)
                     time.sleep(chunk)
                     slept += chunk
 
-                if self._cancel_requested or task.status == "cancelled":
+                if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
                     return 0, None
 
                 # 2. Get active device from pool with automatic rotation
@@ -1275,18 +1673,43 @@ class DownloadManager:
                             print(f"[Downloader] Batch rotation error: {rot_err}")
                     active_dev = current_shared_device[0]
 
-                if self._cancel_requested or task.status == "cancelled":
+                if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
                     return 0, None
 
-                sz, mani = self._download_hongguo_single_episode(
-                    task,
-                    series_dir,
-                    ep_num,
-                    vid,
-                    clean_title,
-                    title,
-                    device_keys=active_dev,
-                )
+                try:
+                    if proxy_pool:
+                        with proxy_pool.lease_proxy(task_name=f"Ep_{ep_num}", timeout=30.0) as leased_proxy:
+                            if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
+                                return 0, None
+                            sz, mani = self._download_hongguo_single_episode(
+                                task,
+                                series_dir,
+                                ep_num,
+                                vid,
+                                clean_title,
+                                title,
+                                device_keys=active_dev,
+                                proxy=leased_proxy,
+                            )
+                    else:
+                        sz, mani = self._download_hongguo_single_episode(
+                            task,
+                            series_dir,
+                            ep_num,
+                            vid,
+                            clean_title,
+                            title,
+                            device_keys=active_dev,
+                            proxy=task.proxy,
+                        )
+                except (TaskCancelledException, TaskPausedException, ProxyKillSwitchTriggered):
+                    if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
+                        return 0, None
+                    raise
+                except Exception:
+                    if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
+                        return 0, None
+                    raise
 
                 with dev_lock:
                     completed_since_rotation[0] += 1
@@ -1294,47 +1717,82 @@ class DownloadManager:
 
             with ThreadPoolExecutor(max_workers=concurrency) as executor:
                 future_to_ep = {}
-                for idx, ep_num in enumerate(target_eps):
+                ep_iter = iter(enumerate(target_eps))
+
+                # Nạp sliding window: chỉ submit tối đa số lượng worker đồng thời (concurrency)
+                for _ in range(concurrency):
+                    if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
+                        break
+                    try:
+                        idx, ep_num = next(ep_iter)
+                    except StopIteration:
+                        break
                     i = ep_num - 1
                     vid = vid_list[i] if 0 <= i < len(vid_list) else (f"{series_id}_fail_ep_{ep_num:02d}" if "fail" in str(series_id).lower() else f"{series_id}_vid_{ep_num:02d}")
-                    f = executor.submit(
-                        _worker_wrapper,
-                        idx,
-                        ep_num,
-                        vid,
-                    )
+                    f = executor.submit(_worker_wrapper, idx, ep_num, vid)
                     future_to_ep[f] = ep_num
 
-                for future in concurrent.futures.as_completed(future_to_ep):
+                while future_to_ep:
+                    if self._is_paused or getattr(self, "_pause_requested", False) or task.status == "paused":
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        task.status = "paused"
+                        task.message = "Đã tạm dừng hàng đợi."
+                        return
+
                     if self._cancel_requested or task.status == "cancelled":
                         executor.shutdown(wait=False, cancel_futures=True)
                         task.status = "cancelled"
                         task.message = "Đã dừng theo yêu cầu người dùng."
                         return
 
-                    ep_num = future_to_ep[future]
-                    try:
-                        file_sz, manifest = future.result()
-                        completed_count += 1
-                        downloaded_bytes_session += file_sz
-                        elapsed = max(0.001, time.time() - start_time)
-                        speed_mbps = round((downloaded_bytes_session * 8 / 1_000_000) / elapsed, 2)
-                        with self.lock:
-                            task.update_progress(
-                                current_ep=ep_num,
-                                step_idx=completed_count,
-                                total_steps=total_range,
-                                speed_mbps=speed_mbps,
-                                msg=f"Đã tải {completed_count}/{total_range} tập (xong tập {ep_num}, tốc độ {speed_mbps:.1f} MB/s)...",
-                            )
-                            if manifest:
-                                task.created_projects.append(manifest.to_dict())
-                            self._current_task = task.to_dict()
-                        if manifest and getattr(task, "_on_project_created", None):
-                            task._on_project_created(manifest)
-                    except Exception as exc:
-                        print(f"[Downloader] Worker error for episode {ep_num}: {exc}")
-                        raise
+                    done, _ = concurrent.futures.wait(
+                        future_to_ep.keys(),
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+
+                    for future in done:
+                        ep_num = future_to_ep.pop(future, None)
+                        if ep_num is None:
+                            continue
+
+                        try:
+                            file_sz, manifest = future.result()
+                            if file_sz and file_sz > 0:
+                                completed_count += 1
+                                downloaded_bytes_session += file_sz
+                                elapsed = max(0.001, time.time() - start_time)
+                                speed_mbps = round((downloaded_bytes_session * 8 / 1_000_000) / elapsed, 2)
+                                with self.lock:
+                                    task.update_progress(
+                                        current_ep=ep_num,
+                                        step_idx=completed_count,
+                                        total_steps=total_range,
+                                        speed_mbps=speed_mbps,
+                                        msg=f"Đã tải {completed_count}/{total_range} tập (xong tập {ep_num}, tốc độ {speed_mbps:.1f} MB/s)...",
+                                    )
+                                    if manifest:
+                                        task.created_projects.append(manifest.to_dict())
+                                    self._current_task = task.to_dict()
+                                if manifest and getattr(task, "_on_project_created", None):
+                                    task._on_project_created(manifest)
+                        except Exception as exc:
+                            if self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested:
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                return
+                            print(f"[Downloader] Worker error for episode {ep_num}: {exc}")
+                            raise
+
+                        # Chỉ nạp tập tiếp theo nếu hàng đợi chưa bị pause hoặc cancel
+                        if not (self._is_paused or getattr(self, "_pause_requested", False) or task.status in ("paused", "cancelled") or self._cancel_requested):
+                            try:
+                                next_idx, next_ep = next(ep_iter)
+                                ni = next_ep - 1
+                                nvid = vid_list[ni] if 0 <= ni < len(vid_list) else (f"{series_id}_fail_ep_{next_ep:02d}" if "fail" in str(series_id).lower() else f"{series_id}_vid_{next_ep:02d}")
+                                nf = executor.submit(_worker_wrapper, next_idx, next_ep, nvid)
+                                future_to_ep[nf] = next_ep
+                            except StopIteration:
+                                pass
+
 
     def _download_generic_task(self, task: DownloadTask, series_dir: Path) -> None:
         url = task.target_info.get("url") or task.target_info.get("target") or ""
@@ -1404,23 +1862,49 @@ class DownloadManager:
                 cmd.extend(["--cookies-from-browser", cookie_browser])
 
             if use_proxy and str(use_proxy).strip():
-                cmd.extend(["--proxy", use_proxy.strip()])
+                cmd.extend(["--proxy", sanitize_proxy_url(use_proxy.strip())])
             cmd.append(url)
             return cmd
 
         cookie_src = getattr(task, "cookie_source", "none") or "none"
+        strict_proxy = getattr(task, "strict_proxy", True)
+
+        # Build candidate proxies from proxy_list or proxy
+        candidate_proxies: List[str] = []
+        if getattr(task, "proxy_list", None):
+            for p in task.proxy_list:
+                if p and str(p).strip():
+                    candidate_proxies.append(sanitize_proxy_url(p.strip()))
+        elif task.proxy and str(task.proxy).strip():
+            candidate_proxies.append(sanitize_proxy_url(task.proxy.strip()))
+
         attempts = []
-        if cookie_src != "none":
-            attempts.append({"proxy": task.proxy, "cookies": cookie_src})
-        else:
-            attempts.append({"proxy": task.proxy, "cookies": None})
-            if task.proxy:
+        if candidate_proxies:
+            for p in candidate_proxies:
+                if cookie_src != "none":
+                    attempts.append({"proxy": p, "cookies": cookie_src})
+                else:
+                    attempts.append({"proxy": p, "cookies": None})
+            if not strict_proxy:
+                # Direct unproxied fallback only permitted if explicitly opt-in (strict_proxy=False)
                 attempts.append({"proxy": None, "cookies": None})
-            if not is_youtube:
-                # Fallback to browser cookies only for non-YouTube platforms where cookies might be needed
-                attempts.append({"proxy": None, "cookies": "chrome"})
-                attempts.append({"proxy": None, "cookies": "edge"})
-                attempts.append({"proxy": None, "cookies": "firefox"})
+                if not is_youtube:
+                    attempts.append({"proxy": None, "cookies": "chrome"})
+                    attempts.append({"proxy": None, "cookies": "edge"})
+                    attempts.append({"proxy": None, "cookies": "firefox"})
+        else:
+            if strict_proxy and (task.proxy or getattr(task, "proxy_list", None)):
+                raise ProxyKillSwitchTriggered("No active proxies available and strict_proxy is enabled.")
+            # Unproxied direct connection when no proxy was configured
+            if cookie_src != "none":
+                attempts.append({"proxy": None, "cookies": cookie_src})
+            else:
+                attempts.append({"proxy": None, "cookies": None})
+                if not is_youtube:
+                    attempts.append({"proxy": None, "cookies": "chrome"})
+                    attempts.append({"proxy": None, "cookies": "edge"})
+                    attempts.append({"proxy": None, "cookies": "firefox"})
+
 
         success = False
         last_error = ""

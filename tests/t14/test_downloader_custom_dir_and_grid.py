@@ -388,6 +388,47 @@ class TestDownloaderCustomDirAndGrid(unittest.TestCase):
             cover_file = series_dir / "cover.jpg"
             self.assertTrue(cover_file.exists(), "Expected cover.jpg in drama folder after task execution")
 
+    def test_start_download_with_custom_output_dir_and_episodes(self) -> None:
+        """Verify /api/v1/downloader/start passes output_dir and episodes to the queued task."""
+        custom_dir = self.temp_path / "custom_start_download_dir"
+        target = {
+            "platform": "generic",
+            "series_id": "test_start_dir_01",
+            "title": "Drama_Test_Start_Dir",
+            "total_episodes": 10,
+        }
+        res = self.client.post(
+            "/api/v1/downloader/start",
+            headers=self.headers,
+            json={
+                "target_info": target,
+                "output_dir": str(custom_dir),
+                "episodes": [1, 2, 3],
+                "start_ep": 1,
+                "end_ep": 3,
+                "auto_create_project": False,
+            },
+        )
+        self.assertEqual(res.status_code, 200, f"start_download failed: {res.text}")
+        status_res = self.client.get("/api/v1/downloader/queue/list", headers=self.headers)
+        self.assertEqual(status_res.status_code, 200)
+        tasks = status_res.json().get("tasks", [])
+        matched = [t for t in tasks if t.get("series_id") == "test_start_dir_01" or t.get("title") == "Drama_Test_Start_Dir"]
+        self.assertTrue(len(matched) > 0, "Task not found in queue")
+        task = matched[0]
+        self.assertEqual(task.get("output_dir"), str(custom_dir))
+        self.assertEqual(task.get("episodes"), [1, 2, 3])
+
+    def test_proxy_status_endpoint(self) -> None:
+        """Verify /api/v1/downloader/proxy/status returns proxy connectivity and detected local proxies."""
+        res = self.client.get("/api/v1/downloader/proxy/status", headers=self.headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("mode", data)
+        self.assertIn("detected_local_proxies", data)
+        self.assertIsInstance(data["detected_local_proxies"], list)
+
 
 if __name__ == "__main__":
     unittest.main()
+

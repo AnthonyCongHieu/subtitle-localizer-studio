@@ -20,9 +20,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
 from urllib.parse import urlsplit, parse_qsl
+from typing import Dict, Any, Optional, List, Union, Tuple
 import requests
+from .proxy_pool import sanitize_proxy_url, ProxyKillSwitchTriggered
 
 try:
     from Crypto.Cipher import AES
@@ -325,9 +326,32 @@ def curl_request(
     post_body: Optional[bytes] = None,
     timeout: int = DEFAULT_TIMEOUT,
     proxy: Optional[str] = None,
+    strict_proxy: bool = True,
 ) -> bytes:
-    """Minimal HTTP request helper — mimics Go's curlRequest with dead proxy fallback."""
-    proxies = {"http": proxy, "https": proxy} if proxy and str(proxy).strip() else None
+    """HTTP request helper with anti-TLS fingerprinting (curl_cffi chrome120) and zero-leak proxy enforcement."""
+    sanitized_proxy = sanitize_proxy_url(proxy) if proxy and str(proxy).strip() else None
+    if proxy is not None and not sanitized_proxy and strict_proxy:
+        raise ProxyKillSwitchTriggered("Strict proxy mode enabled but proxy string is invalid. Direct IP leak blocked.")
+    proxies = {"http": sanitized_proxy, "https": sanitized_proxy} if sanitized_proxy else None
+
+    # Try curl_cffi with chrome120 impersonation to bypass Akamai/TLS fingerprint bot detection
+    try:
+        from curl_cffi import requests as cffi_requests
+        if post_body is not None:
+            resp = cffi_requests.post(url, headers=headers, data=post_body, timeout=timeout, proxies=proxies, impersonate="chrome120")
+        else:
+            resp = cffi_requests.get(url, headers=headers, timeout=timeout, proxies=proxies, impersonate="chrome120")
+        resp.raise_for_status()
+        return resp.content
+    except ImportError:
+        pass
+    except Exception as exc:
+        if sanitized_proxy and strict_proxy:
+            raise ProxyKillSwitchTriggered(f"Strict proxy failure via curl_cffi: {exc} (Direct IP leak blocked)")
+        if not sanitized_proxy:
+            raise
+
+    # Fallback to requests if curl_cffi not present or didn't run
     try:
         if post_body is not None:
             resp = requests.post(url, headers=headers, data=post_body, timeout=timeout, proxies=proxies)
@@ -337,7 +361,10 @@ def curl_request(
         return resp.content
     except Exception as exc:
         if proxies:
-            print(f"[hongguo_parser] Proxy {proxy} gap loi ({exc}), tu dong chuyen sang ket noi truc tiep...")
+            if strict_proxy:
+                raise ProxyKillSwitchTriggered(f"Strict proxy failure: {exc} (Direct IP leak blocked)")
+            err_short = "từ chối kết nối (offline)" if ("10061" in str(exc) or "refused" in str(exc).lower()) else str(exc)[:60]
+            print(f"[hongguo_parser] Proxy {proxy} {err_short}, tự động chuyển sang kết nối trực tiếp (Direct Mode)...")
             try:
                 if post_body is not None:
                     resp = requests.post(url, headers=headers, data=post_body, timeout=timeout)
@@ -351,6 +378,7 @@ def curl_request(
         raise
 
 
+
 # ─── Main endpoint (matching 1.go Handle / resolveVideoURL) ──────────────────
 
 def handle_video_request(
@@ -360,11 +388,20 @@ def handle_video_request(
     proxy: Optional[str] = None,
     device_keys: Optional[Dict[str, str]] = None,
     target_resolution: str = "best",
+    strict_proxy: bool = True,
 ) -> Dict[str, Any]:
     """
     Top-level handler. Given a video_id, returns the flattened response payload.
     """
-    return resolve_video_url(video_id, request, max_retries, proxy=proxy, device_keys=device_keys, target_resolution=target_resolution)
+    return resolve_video_url(
+        video_id,
+        request,
+        max_retries,
+        proxy=proxy,
+        device_keys=device_keys,
+        target_resolution=target_resolution,
+        strict_proxy=strict_proxy,
+    )
 
 
 def resolve_video_url(
@@ -374,6 +411,8 @@ def resolve_video_url(
     proxy: Optional[str] = None,
     device_keys: Optional[Dict[str, str]] = None,
     target_resolution: str = "best",
+    strict_proxy: bool = True,
+    cdn_direct_bypass: bool = False,
 ) -> Dict[str, Any]:
     """
     Full flow (with retries):
@@ -411,7 +450,7 @@ def resolve_video_url(
         )
 
         try:
-            resp = curl_request(signed_url, headers, post_body, 30, proxy=proxy)
+            resp = curl_request(signed_url, headers, post_body, 30, proxy=proxy, strict_proxy=strict_proxy)
         except Exception as exc:
             last_err = Exception(f"video_model request failed: {exc}")
             backoff = (2 ** attempt) + random.uniform(0.5, 1.5)
@@ -445,6 +484,8 @@ def resolve_video_url(
                 max_retries=3,
                 proxy=proxy,
                 target_resolution=target_resolution,
+                strict_proxy=strict_proxy,
+                cdn_direct_bypass=cdn_direct_bypass,
             )
             return result
         except Exception as exc:
@@ -548,6 +589,8 @@ def download_and_decrypt_video(
     max_retries: int = 3,
     proxy: Optional[str] = None,
     target_resolution: str = "best",
+    strict_proxy: bool = True,
+    cdn_direct_bypass: bool = False,
 ) -> Dict[str, Any]:
     """
     Call fallback_api → parse video_info.data → pick requested/best quality →
@@ -562,7 +605,7 @@ def download_and_decrypt_video(
         headers = {"User-Agent": USER_AGENT}
 
         try:
-            resp = curl_request(current_url, headers, None, 30, proxy=proxy)
+            resp = curl_request(current_url, headers, None, 30, proxy=proxy, strict_proxy=strict_proxy)
         except Exception as exc:
             last_err = Exception(f"fallback_api request failed: {exc}")
         else:
@@ -616,6 +659,8 @@ def download_and_decrypt_video(
                                         real_main_url,
                                         content_key,
                                         proxy,
+                                        strict_proxy,
+                                        cdn_direct_bypass,
                                     )
                                     local_url = future.result()
                                     if local_url:
@@ -638,7 +683,7 @@ def download_and_decrypt_video(
                     current_device_keys.get("platform", ""),
                 )
             try:
-                new_url, new_keys = refresh_fallback_url(video_id)
+                new_url, new_keys = refresh_fallback_url(video_id, proxy=proxy, strict_proxy=strict_proxy)
                 if new_url:
                     current_url = new_url
                     current_device_keys = new_keys
@@ -655,10 +700,14 @@ def download_decrypt_and_serve(
     video_url: str,
     content_key: Optional[bytes],
     proxy: Optional[str] = None,
+    strict_proxy: bool = True,
+    cdn_direct_bypass: bool = False,
 ) -> Optional[str]:
     """Use ffmpeg to stream-copy the main video into a local MP4 file."""
     pipeline_start = time.perf_counter()
-    local_url = stream_copy_video_with_ffmpeg(request, video_url, content_key, proxy=proxy)
+    local_url = stream_copy_video_with_ffmpeg(
+        request, video_url, content_key, proxy=proxy, strict_proxy=strict_proxy, cdn_direct_bypass=cdn_direct_bypass
+    )
     pipeline_seconds = time.perf_counter() - pipeline_start
     print(f"[timing] video_pipeline_seconds={pipeline_seconds:.3f}")
     return local_url
@@ -669,6 +718,8 @@ def stream_copy_video_with_ffmpeg(
     video_url: str,
     content_key: Optional[bytes],
     proxy: Optional[str] = None,
+    strict_proxy: bool = True,
+    cdn_direct_bypass: bool = False,
 ) -> str:
     """Let ffmpeg pull the remote MP4 directly and write a local playable file."""
     stream_start = time.perf_counter()
@@ -678,10 +729,15 @@ def stream_copy_video_with_ffmpeg(
     filename = f"video_{time.time_ns()}.mp4"
     filepath = src_dir / filename
 
+    if cdn_direct_bypass:
+        sanitized_proxy = None
+    else:
+        sanitized_proxy = sanitize_proxy_url(proxy) if proxy and str(proxy).strip() else None
+
     ffmpeg_bin = get_ffmpeg_binary()
     command = [ffmpeg_bin, "-y"]
-    if proxy:
-        command.extend(["-http_proxy", proxy])
+    if sanitized_proxy:
+        command.extend(["-http_proxy", sanitized_proxy])
     if content_key:
         command.extend(["-decryption_key", content_key.hex()])
     command.extend([
@@ -702,7 +758,7 @@ def stream_copy_video_with_ffmpeg(
             stderr=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as exc:
-        if proxy:
+        if sanitized_proxy and not strict_proxy:
             direct_cmd = [c for i, c in enumerate(command) if c != "-http_proxy" and (i == 0 or command[i - 1] != "-http_proxy")]
             try:
                 subprocess.run(
@@ -713,6 +769,8 @@ def stream_copy_video_with_ffmpeg(
                 )
             except subprocess.CalledProcessError as exc2:
                 raise Exception(f"Failed to stream video with ffmpeg: {exc2}")
+        elif sanitized_proxy and strict_proxy:
+            raise ProxyKillSwitchTriggered(f"Failed to stream video with ffmpeg over proxy ({exc}). Direct IP fallback prevented by strict proxy kill-switch.")
         else:
             raise Exception(f"Failed to stream video with ffmpeg: {exc}")
 
@@ -723,10 +781,36 @@ def stream_copy_video_with_ffmpeg(
     return f"{current_domain}/src/{filename}"
 
 
-def download_video_bytes(video_url: str, proxy: Optional[str] = None) -> bytes:
-    """Download the source video bytes."""
+def download_video_bytes(video_url: str, proxy: Optional[str] = None, strict_proxy: bool = True) -> bytes:
+    """Download the source video bytes with anti-fingerprinting and leak prevention."""
     download_start = time.perf_counter()
-    proxies = {"http": proxy, "https": proxy} if proxy else None
+    sanitized_proxy = sanitize_proxy_url(proxy) if proxy and str(proxy).strip() else None
+    proxies = {"http": sanitized_proxy, "https": sanitized_proxy} if sanitized_proxy else None
+
+    try:
+        from curl_cffi import requests as cffi_requests
+        resp = cffi_requests.get(
+            video_url,
+            headers={
+                "User-Agent": "com.phoenix.read/71332",
+                "Referer": "https://novel.snssdk.com/",
+            },
+            timeout=120,
+            proxies=proxies,
+            impersonate="chrome120",
+        )
+        resp.raise_for_status()
+        download_seconds = time.perf_counter() - download_start
+        print(f"[timing] download_seconds={download_seconds:.3f} (curl_cffi chrome120)")
+        return resp.content
+    except ImportError:
+        pass
+    except Exception as exc:
+        if sanitized_proxy and strict_proxy:
+            raise ProxyKillSwitchTriggered(f"Failed to download video over proxy via curl_cffi ({exc}). Direct IP leak blocked.")
+        if not sanitized_proxy:
+            raise
+
     try:
         resp = requests.get(
             video_url,
@@ -742,7 +826,10 @@ def download_video_bytes(video_url: str, proxy: Optional[str] = None) -> bytes:
         print(f"[timing] download_seconds={download_seconds:.3f}")
         return resp.content
     except Exception as exc:
+        if sanitized_proxy and strict_proxy:
+            raise ProxyKillSwitchTriggered(f"Failed to download video over proxy ({exc}). Direct IP leak blocked.")
         raise Exception(f"Failed to download video: {exc}")
+
 
 
 def decrypt_video_bytes(encrypted_data: bytes, content_key: Optional[bytes]) -> bytes:
@@ -777,7 +864,7 @@ def save_video_bytes(request, decrypted_data: bytes) -> str:
     return f"{current_domain}/src/{filename}"
 
 
-def refresh_fallback_url(video_id: str) -> Tuple[str, Dict[str, str]]:
+def refresh_fallback_url(video_id: str, proxy: Optional[str] = None, strict_proxy: bool = True) -> Tuple[str, Dict[str, str]]:
     """Re-fetch fallback_api URL with a new device."""
     device_keys = get_device_keys()
     target_url = build_video_model_url(
@@ -801,7 +888,7 @@ def refresh_fallback_url(video_id: str) -> Tuple[str, Dict[str, str]]:
         target_url, post_payload, device_keys
     )
 
-    resp = curl_request(signed_url, headers, post_body, 30)
+    resp = curl_request(signed_url, headers, post_body, 30, proxy=proxy, strict_proxy=strict_proxy)
     data = json.loads(resp)
 
     fallback_api, _ = extract_fallback_api(data, video_id)
@@ -1073,7 +1160,7 @@ def select_best_quality(video_list: Dict[str, Any], target_resolution: str = "be
 _PROBE_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 
 
-def probe_video_resolutions(video_id: str, proxy: Optional[str] = None) -> Dict[str, Any]:
+def probe_video_resolutions(video_id: str, proxy: Optional[str] = None, strict_proxy: bool = True) -> Dict[str, Any]:
     """
     Query ByteDance server to probe REAL available video resolutions and exact byte sizes
     for episode video_id. Returns real data (not mock data).
@@ -1107,12 +1194,12 @@ def probe_video_resolutions(video_id: str, proxy: Optional[str] = None) -> Dict[
         signed_url, headers, post_body = sign_json_request_with_liushen(
             target_url, post_payload, current_device_keys
         )
-        resp = curl_request(signed_url, headers, post_body, 30, proxy=proxy)
+        resp = curl_request(signed_url, headers, post_body, 30, proxy=proxy, strict_proxy=strict_proxy)
         data = json.loads(resp)
         fallback_api, video_model = extract_fallback_api(data, video_id)
 
         fb_headers = {"User-Agent": USER_AGENT}
-        fb_resp = curl_request(fallback_api, fb_headers, None, 30, proxy=proxy)
+        fb_resp = curl_request(fallback_api, fb_headers, None, 30, proxy=proxy, strict_proxy=strict_proxy)
         fb_data = json.loads(fb_resp)
         video_data = fb_data.get("video_info", {}).get("data", {})
         video_list = video_data.get("video_list", {})
