@@ -8,6 +8,8 @@ interface RoiOverlayProps {
   containerWidth: number;
   containerHeight: number;
   disabled?: boolean;
+  scale?: number;
+  rotation?: number;
 }
 
 type DragMode = 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | null;
@@ -18,6 +20,8 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
   containerWidth,
   containerHeight,
   disabled = false,
+  scale = 1,
+  rotation = 0,
 }) => {
   const [dragMode, setDragMode] = useState<DragMode>(null);
   const dragStartRef = useRef<{
@@ -56,8 +60,15 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
     const handleMouseMove = (e: MouseEvent) => {
       if (!dragStartRef.current || containerWidth === 0 || containerHeight === 0) return;
 
-      const deltaX = (e.clientX - dragStartRef.current.startX) / containerWidth;
-      const deltaY = (e.clientY - dragStartRef.current.startY) / containerHeight;
+      // Chuẩn hóa biến đổi chuột: chia cho scale và xoay theo ma trận quay ngược để con trỏ bám 1:1
+      const effectiveScale = scale && scale > 0 ? scale : 1;
+      const rad = ((rotation || 0) * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const rawDx = (e.clientX - dragStartRef.current.startX) / (containerWidth * effectiveScale);
+      const rawDy = (e.clientY - dragStartRef.current.startY) / (containerHeight * effectiveScale);
+      const deltaX = rawDx * cos + rawDy * sin;
+      const deltaY = -rawDx * sin + rawDy * cos;
       const orig = dragStartRef.current.origRegion;
 
       let newX = orig.x;
@@ -65,29 +76,36 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
       let newW = orig.width;
       let newH = orig.height;
 
-      const minW = 0.05;
-      const minH = 0.03;
+      const minW = 0.03;
+      const minH = 0.02;
+
+      // Cho phép kéo thả và mở rộng vùng quét ra ngoài khung hình (tối đa 30% ngoài viền)
+      // giúp bắt trọn vẹn phụ đề nằm sát mép đáy hoặc mép cạnh
+      const boundMinX = -0.30;
+      const boundMaxX = 1.30;
+      const boundMinY = -0.30;
+      const boundMaxY = 1.30;
 
       if (dragMode === 'move') {
-        newX = Math.max(0, Math.min(1.0 - orig.width, orig.x + deltaX));
-        newY = Math.max(0, Math.min(1.0 - orig.height, orig.y + deltaY));
+        newX = Math.max(boundMinX, Math.min(boundMaxX - orig.width, orig.x + deltaX));
+        newY = Math.max(boundMinY, Math.min(boundMaxY - orig.height, orig.y + deltaY));
       } else {
-        // Co giãn các góc và cạnh
+        // Co giãn các góc và cạnh linh hoạt vượt ra ngoài biên
         if (dragMode.includes('w')) {
           const maxLeft = orig.x + orig.width - minW;
-          newX = Math.max(0, Math.min(maxLeft, orig.x + deltaX));
+          newX = Math.max(boundMinX, Math.min(maxLeft, orig.x + deltaX));
           newW = orig.width + (orig.x - newX);
         }
         if (dragMode.includes('e')) {
-          newW = Math.max(minW, Math.min(1.0 - orig.x, orig.width + deltaX));
+          newW = Math.max(minW, Math.min(boundMaxX - orig.x, orig.width + deltaX));
         }
         if (dragMode.includes('n')) {
           const maxTop = orig.y + orig.height - minH;
-          newY = Math.max(0, Math.min(maxTop, orig.y + deltaY));
+          newY = Math.max(boundMinY, Math.min(maxTop, orig.y + deltaY));
           newH = orig.height + (orig.y - newY);
         }
         if (dragMode.includes('s')) {
-          newH = Math.max(minH, Math.min(1.0 - orig.y, orig.height + deltaY));
+          newH = Math.max(minH, Math.min(boundMaxY - orig.y, orig.height + deltaY));
         }
       }
 
@@ -112,12 +130,12 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragMode, containerWidth, containerHeight, region, onChange]);
+  }, [dragMode, containerWidth, containerHeight, region, onChange, scale, rotation]);
 
   if (containerWidth === 0 || containerHeight === 0) return null;
 
   return (
-    <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden select-none">
+    <div className="absolute inset-0 pointer-events-none z-50 overflow-visible select-none">
       {/* 1. Vùng tối bên ngoài (Mặt nạ lấy nét - Focus Mask) */}
       <svg className="absolute inset-0 w-full h-full pointer-events-none">
         <defs>
@@ -141,9 +159,9 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
         />
       </svg>
 
-      {/* 2. Khung viền chữ nhật ROI tương tác */}
+      {/* 2. Khung viền chữ nhật ROI tương tác - Cấp cao nhất (z-50) */}
       <div
-        className="absolute pointer-events-auto border-2 border-indigo-400 bg-indigo-500/10 rounded cursor-move shadow-[0_0_15px_rgba(99,102,241,0.35)] transition-shadow hover:shadow-[0_0_20px_rgba(99,102,241,0.6)]"
+        className="absolute pointer-events-auto border-2 border-indigo-400 bg-indigo-500/20 rounded cursor-move shadow-[0_0_20px_rgba(99,102,241,0.5)] transition-shadow hover:shadow-[0_0_30px_rgba(99,102,241,0.8)] z-50"
         style={{
           left: `${boxLeft}px`,
           top: `${boxTop}px`,
@@ -170,37 +188,37 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
 
         {/* 4 Tay cầm ở 4 góc */}
         <div
-          className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nwse-resize shadow hover:scale-125 transition-transform"
+          className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nwse-resize shadow hover:scale-125 transition-transform z-50 pointer-events-auto"
           onMouseDown={(e) => handleMouseDown('nw', e)}
         />
         <div
-          className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nesw-resize shadow hover:scale-125 transition-transform"
+          className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nesw-resize shadow hover:scale-125 transition-transform z-50 pointer-events-auto"
           onMouseDown={(e) => handleMouseDown('ne', e)}
         />
         <div
-          className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nesw-resize shadow hover:scale-125 transition-transform"
+          className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nesw-resize shadow hover:scale-125 transition-transform z-50 pointer-events-auto"
           onMouseDown={(e) => handleMouseDown('sw', e)}
         />
         <div
-          className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nwse-resize shadow hover:scale-125 transition-transform"
+          className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border border-indigo-600 rounded-sm cursor-nwse-resize shadow hover:scale-125 transition-transform z-50 pointer-events-auto"
           onMouseDown={(e) => handleMouseDown('se', e)}
         />
 
         {/* 4 Tay cầm ở 4 cạnh */}
         <div
-          className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-6 h-2.5 bg-white border border-indigo-600 rounded-sm cursor-ns-resize shadow hover:scale-110 transition-transform"
+          className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-6 h-2.5 bg-white border border-indigo-600 rounded-sm cursor-ns-resize shadow hover:scale-110 transition-transform z-50 pointer-events-auto"
           onMouseDown={(e) => handleMouseDown('n', e)}
         />
         <div
-          className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-6 h-2.5 bg-white border border-indigo-600 rounded-sm cursor-ns-resize shadow hover:scale-110 transition-transform"
+          className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-6 h-2.5 bg-white border border-indigo-600 rounded-sm cursor-ns-resize shadow hover:scale-110 transition-transform z-50 pointer-events-auto"
           onMouseDown={(e) => handleMouseDown('s', e)}
         />
         <div
-          className="absolute -left-1.5 top-1/2 -translate-y-1/2 h-6 w-2.5 bg-white border border-indigo-600 rounded-sm cursor-ew-resize shadow hover:scale-110 transition-transform"
+          className="absolute -left-1.5 top-1/2 -translate-y-1/2 h-6 w-2.5 bg-white border border-indigo-600 rounded-sm cursor-ew-resize shadow hover:scale-110 transition-transform z-50 pointer-events-auto"
           onMouseDown={(e) => handleMouseDown('w', e)}
         />
         <div
-          className="absolute -right-1.5 top-1/2 -translate-y-1/2 h-6 w-2.5 bg-white border border-indigo-600 rounded-sm cursor-ew-resize shadow hover:scale-110 transition-transform"
+          className="absolute -right-1.5 top-1/2 -translate-y-1/2 h-6 w-2.5 bg-white border border-indigo-600 rounded-sm cursor-ew-resize shadow hover:scale-110 transition-transform z-50 pointer-events-auto"
           onMouseDown={(e) => handleMouseDown('e', e)}
         />
       </div>

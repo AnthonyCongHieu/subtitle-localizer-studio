@@ -16,13 +16,21 @@ import {
   Tv,
   AlignJustify,
   Smartphone,
+  Move,
+  RotateCcw,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  ArrowUpToLine,
+  ArrowDownToLine,
+  MoveVertical,
 } from 'lucide-react';
 import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../../types/api';
 import { apiClient } from '../../api/client';
 
 import { AspectRatioType } from '../../types/presets';
 
-export type SidebarTab = 'media' | 'roi' | 'subtitles' | 'ai' | 'export';
+export type SidebarTab = 'media' | 'transform' | 'roi' | 'subtitles' | 'ai' | 'export';
 export type CueFilterMode = 'all' | 'untranslated' | 'translated';
 
 interface CapcutSidebarProps {
@@ -42,9 +50,21 @@ interface CapcutSidebarProps {
   onLanguageChange?: (source: string, target: string) => void;
   isFlippedH?: boolean;
   isFlippedV?: boolean;
+  onToggleFlipH?: () => void;
+  onToggleFlipV?: () => void;
 
   aspectRatio?: AspectRatioType;
   onAspectRatioChange?: (ratio: AspectRatioType) => void;
+
+  videoPosition?: { x: number; y: number };
+  onPositionChange?: (pos: { x: number; y: number }) => void;
+  scale?: number;
+  onScaleChange?: (scale: number) => void;
+  rotation?: number;
+  onRotationChange?: (rot: number) => void;
+  onResetTransform?: () => void;
+  interactionMode?: 'video' | 'roi';
+  onInteractionModeChange?: (mode: 'video' | 'roi') => void;
 }
 
 const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
@@ -64,9 +84,21 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
   onLanguageChange,
   isFlippedH = false,
   isFlippedV = false,
+  onToggleFlipH,
+  onToggleFlipV,
 
   aspectRatio = 'original',
   onAspectRatioChange,
+
+  videoPosition = { x: 0, y: 0 },
+  onPositionChange,
+  scale = 1.0,
+  onScaleChange,
+  rotation = 0,
+  onRotationChange,
+  onResetTransform,
+  interactionMode = 'video',
+  onInteractionModeChange,
 }) => {
   const [activeTab, setActiveTab] = useState<SidebarTab | null>('subtitles');
   const [cueFilter, setCueFilter] = useState<CueFilterMode>('all');
@@ -137,6 +169,10 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
         mask_mode: maskMode,
         flip_h: applyFlipToExport && isFlippedH,
         flip_v: applyFlipToExport && isFlippedV,
+        video_x: videoPosition.x,
+        video_y: videoPosition.y,
+        video_scale: scale,
+        rotation: rotation,
       });
       setExportMessage(`Xuất video thành công: ${res.output_path}`);
     } catch (err: any) {
@@ -240,7 +276,32 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab(activeTab === 'roi' ? null : 'roi')}
+          onClick={() => {
+            const next = activeTab === 'transform' ? null : 'transform';
+            setActiveTab(next);
+            if (next === 'transform') {
+              onInteractionModeChange?.('video');
+            }
+          }}
+          className={`w-12 py-2 flex flex-col items-center justify-center gap-1 rounded-lg text-[10px] font-medium transition ${
+            activeTab === 'transform'
+              ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/40'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+          title="Biến đổi video (Kéo vị trí X/Y, Tỷ lệ, Xoay chuẩn CapCut)"
+        >
+          <Move className="w-4 h-4" />
+          <span>Biến Đổi</span>
+        </button>
+
+        <button
+          onClick={() => {
+            const next = activeTab === 'roi' ? null : 'roi';
+            setActiveTab(next);
+            if (next === 'roi') {
+              onInteractionModeChange?.('roi');
+            }
+          }}
           className={`w-12 py-2 flex flex-col items-center justify-center gap-1 rounded-lg text-[10px] font-medium transition ${
             activeTab === 'roi'
               ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/40'
@@ -302,6 +363,7 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
           <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
             <h3 className="text-xs font-semibold text-white uppercase tracking-wider flex items-center gap-1.5">
               {activeTab === 'media' && <><FolderOpen className="w-3.5 h-3.5 text-indigo-400" /> Media & Dự Án</>}
+              {activeTab === 'transform' && <><Move className="w-3.5 h-3.5 text-indigo-400" /> Biến Đổi Video</>}
               {activeTab === 'roi' && <><Crosshair className="w-3.5 h-3.5 text-indigo-400" /> Vùng Quét Phụ Đề</>}
               {activeTab === 'subtitles' && <><Subtitles className="w-3.5 h-3.5 text-indigo-400" /> Phụ Đề ({cues.length})</>}
               {activeTab === 'ai' && <><Sparkles className="w-3.5 h-3.5 text-indigo-400" /> AI Dịch & Cấu Hình</>}
@@ -318,6 +380,283 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
 
           {/* Thân bảng chi tiết */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
+            {/* PANEL BIẾN ĐỔI VIDEO: CHUẨN CAPCUT PC */}
+            {activeTab === 'transform' && (
+              <div className="space-y-4">
+                <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <span className="text-white font-medium text-xs flex items-center gap-1.5">
+                      <Move className="w-3.5 h-3.5 text-indigo-400" />
+                      Biến đổi (Transform)
+                    </span>
+                    {onResetTransform && (
+                      <button
+                        type="button"
+                        onClick={onResetTransform}
+                        className="text-[10px] text-slate-400 hover:text-rose-400 flex items-center gap-1 transition"
+                        title="Đặt lại toàn bộ về mặc định"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        Đặt lại
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Chế độ tương tác trên màn hình Player */}
+                  <div className="flex items-center bg-slate-900 p-1 rounded-lg border border-slate-800 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => onInteractionModeChange?.('video')}
+                      className={`flex-1 py-1 rounded font-medium flex items-center justify-center gap-1.5 transition ${
+                        interactionMode === 'video'
+                          ? 'bg-indigo-600 text-white shadow font-semibold'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Move className="w-3 h-3" />
+                      <span>Kéo Video</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onInteractionModeChange?.('roi')}
+                      className={`flex-1 py-1 rounded font-medium flex items-center justify-center gap-1.5 transition ${
+                        interactionMode === 'roi'
+                          ? 'bg-indigo-600 text-white shadow font-semibold'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Crosshair className="w-3 h-3" />
+                      <span>Quét Sub (ROI)</span>
+                    </button>
+                  </div>
+
+                  {/* 1. Tỷ lệ (Scale %) */}
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-300 font-medium">Tỷ lệ (Scale):</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={10}
+                          max={300}
+                          value={Math.round((scale || 1.0) * 100)}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10);
+                            if (!isNaN(val) && onScaleChange) {
+                              onScaleChange(Math.max(0.1, Math.min(3.0, val / 100)));
+                            }
+                          }}
+                          className="w-14 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-right font-mono text-cyan-300 text-[11px]"
+                        />
+                        <span className="text-slate-400 text-[11px]">%</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min={10}
+                      max={300}
+                      step={1}
+                      value={Math.round((scale || 1.0) * 100)}
+                      onChange={(e) => onScaleChange?.(parseInt(e.target.value, 10) / 100)}
+                      className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                      <span>10%</span>
+                      <button
+                        type="button"
+                        onClick={() => onScaleChange?.(1.0)}
+                        className="hover:text-indigo-400 underline"
+                      >
+                        100% (Gốc)
+                      </button>
+                      <span>300%</span>
+                    </div>
+                  </div>
+
+                  {/* 2. Vị trí (Position X, Y in px) */}
+                  <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-300 font-medium">Vị trí (Position):</span>
+                      <button
+                        type="button"
+                        onClick={() => onPositionChange?.({ x: 0, y: 0 })}
+                        className="text-[10px] text-indigo-400 hover:text-indigo-300 transition"
+                        title="Căn giữa Canvas (0, 0)"
+                      >
+                        Về tâm (0, 0)
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {/* Vị trí X */}
+                      <div className="bg-slate-900 p-2 rounded-lg border border-slate-800 flex items-center justify-between">
+                        <span className="text-slate-400 font-mono text-[11px]">X:</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            value={videoPosition.x}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10) || 0;
+                              onPositionChange?.({ ...videoPosition, x: val });
+                            }}
+                            className="w-16 bg-slate-950 border border-slate-700/80 rounded px-1.5 py-0.5 text-right font-mono text-cyan-300 text-[11px]"
+                          />
+                          <span className="text-slate-500 text-[10px]">px</span>
+                        </div>
+                      </div>
+                      {/* Vị trí Y */}
+                      <div className="bg-slate-900 p-2 rounded-lg border border-slate-800 flex items-center justify-between">
+                        <span className="text-slate-400 font-mono text-[11px]">Y:</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            value={videoPosition.y}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10) || 0;
+                              onPositionChange?.({ ...videoPosition, y: val });
+                            }}
+                            className="w-16 bg-slate-950 border border-slate-700/80 rounded px-1.5 py-0.5 text-right font-mono text-cyan-300 text-[11px]"
+                          />
+                          <span className="text-slate-500 text-[10px]">px</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. Xoay (Rotation in deg) */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-300 font-medium">Xoay (Rotation):</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={-180}
+                          max={180}
+                          value={rotation || 0}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10) || 0;
+                            onRotationChange?.(val);
+                          }}
+                          className="w-14 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-right font-mono text-cyan-300 text-[11px]"
+                        />
+                        <span className="text-slate-400 text-[11px]">°</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min={-180}
+                      max={180}
+                      step={1}
+                      value={rotation || 0}
+                      onChange={(e) => onRotationChange?.(parseInt(e.target.value, 10))}
+                      className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                      <span>-180°</span>
+                      <button
+                        type="button"
+                        onClick={() => onRotationChange?.(0)}
+                        className="hover:text-indigo-400 underline"
+                      >
+                        0° (Gốc)
+                      </button>
+                      <span>180°</span>
+                    </div>
+                  </div>
+
+                  {/* 4. Căn lề nhanh chuẩn CapCut (Quick Alignment) */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
+                    <span className="text-slate-300 font-medium text-[11px] block">Căn lề nhanh:</span>
+                    <div className="grid grid-cols-6 gap-1 bg-slate-900 p-1.5 rounded-lg border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => onPositionChange?.({ ...videoPosition, x: -80 })}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded flex justify-center items-center transition"
+                        title="Căn trái (Left)"
+                      >
+                        <AlignLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onPositionChange?.({ ...videoPosition, x: 0 })}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded flex justify-center items-center transition"
+                        title="Căn giữa ngang (Center X)"
+                      >
+                        <AlignCenter className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onPositionChange?.({ ...videoPosition, x: 80 })}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded flex justify-center items-center transition"
+                        title="Căn phải (Right)"
+                      >
+                        <AlignRight className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onPositionChange?.({ ...videoPosition, y: -60 })}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded flex justify-center items-center transition"
+                        title="Căn trên (Top)"
+                      >
+                        <ArrowUpToLine className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onPositionChange?.({ ...videoPosition, y: 0 })}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded flex justify-center items-center transition"
+                        title="Căn giữa dọc (Center Y)"
+                      >
+                        <MoveVertical className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onPositionChange?.({ ...videoPosition, y: 60 })}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded flex justify-center items-center transition"
+                        title="Căn dưới (Bottom)"
+                      >
+                        <ArrowDownToLine className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 5. Lật Video (Flip Horizontal & Vertical) */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
+                    <span className="text-slate-300 font-medium text-[11px] block">Lật hình (Flip):</span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={onToggleFlipH}
+                        className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition ${
+                          isFlippedH
+                            ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/60'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <FlipHorizontal className="w-3.5 h-3.5" />
+                        <span>Lật ngang</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onToggleFlipV}
+                        className={`p-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition ${
+                          isFlippedV
+                            ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/60'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <FlipVertical className="w-3.5 h-3.5" />
+                        <span>Lật dọc</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Hướng dẫn thao tác kéo chuột */}
+                  <div className="p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-900/40 text-[11px] text-indigo-300/90 leading-relaxed">
+                    💡 <span className="font-semibold text-white">Mẹo tương tác:</span> Bạn có thể nhấp và kéo trực tiếp trên thân video trong Player để di chuyển tự do, kéo 8 mấu viền ngoài để phóng to/thu nhỏ, hoặc kéo nút tròn bên dưới để xoay.
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* PANEL PHỤ ĐỀ: XEM CỤ THỂ ĐÃ THAY VS CHƯA THAY */}
             {activeTab === 'subtitles' && (
               <div className="space-y-3">
@@ -773,21 +1112,25 @@ const CapcutSidebarComponent: React.FC<CapcutSidebarProps> = ({
                     <select
                       value={sourceLang}
                       onChange={(e) => onLanguageChange && onLanguageChange(e.target.value, targetLang)}
-                      className="bg-slate-950 border border-slate-800 rounded p-1.5 text-slate-200"
+                      className="bg-slate-950 border border-slate-800 rounded p-1.5 text-slate-200 text-xs"
                     >
-                      <option value="zh">Tiếng Trung (zh)</option>
-                      <option value="en">Tiếng Anh (en)</option>
-                      <option value="ja">Tiếng Nhật (ja)</option>
-                      <option value="ko">Tiếng Hàn (ko)</option>
+                      <option value="zh">🇨🇳 Tiếng Trung (zh)</option>
+                      <option value="en">🇬🇧 Tiếng Anh (en)</option>
+                      <option value="vi">🇻🇳 Tiếng Việt (vi)</option>
+                      <option value="auto">🌐 Tự động (auto)</option>
+                      <option value="ja">🇯🇵 Tiếng Nhật (ja)</option>
+                      <option value="ko">🇰🇷 Tiếng Hàn (ko)</option>
                     </select>
 
                     <select
                       value={targetLang}
                       onChange={(e) => onLanguageChange && onLanguageChange(sourceLang, e.target.value)}
-                      className="bg-slate-950 border border-slate-800 rounded p-1.5 text-slate-200"
+                      className="bg-slate-950 border border-slate-800 rounded p-1.5 text-slate-200 text-xs"
                     >
-                      <option value="vi">Tiếng Việt (vi)</option>
-                      <option value="en">Tiếng Anh (en)</option>
+                      <option value="vi">🇻🇳 Tiếng Việt (vi)</option>
+                      <option value="en">🇬🇧 Tiếng Anh (en)</option>
+                      <option value="zh">🇨🇳 Tiếng Trung (zh)</option>
+                      <option value="none">Trích xuất gốc (Không dịch)</option>
                     </select>
                   </div>
                 </div>

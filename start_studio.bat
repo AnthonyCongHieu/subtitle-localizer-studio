@@ -88,12 +88,12 @@ echo [*] Buoc 2: Kiem tra cac thu vien can thiet (14 thu vien core)...
 if %errorlevel% neq 0 (
     echo [!] Phat hien thieu mot so thu vien Python tren may nay.
     echo [*] Dang tu dong cai dat tat ca thu vien tu requirements.txt...
-    echo [*] (Qua trinh nay chi dien ra trong lan dau tien khoi dong, vui long doi vai phut)...
+    echo [*] Qua trinh nay chi dien ra trong lan dau tien khoi dong, vui long doi vai phut...
     echo.
     "%PY%" -m pip install --upgrade pip
     "%PY%" -m pip install -r "%ROOT%requirements.txt"
     if %errorlevel% neq 0 (
-        echo [*] Thu cai dat voi quyen nguoi dung (--user)...
+        echo [*] Thu cai dat voi quyen nguoi dung --user...
         "%PY%" -m pip install --user -r "%ROOT%requirements.txt"
     )
     if %errorlevel% neq 0 (
@@ -121,7 +121,7 @@ if %errorlevel% equ 0 (
     set "USE_VITE=1"
     echo [OK] Da tim thay Node.js / npm.
     if not exist "%ROOT%web\node_modules" (
-        echo [*] Phat hien chua co node_modules. Dang tu dong cai dat (npm install)...
+        echo [*] Phat hien chua co node_modules. Dang tu dong cai dat npm install...
         cd /d "%ROOT%web"
         call npm install
         cd /d "%ROOT%"
@@ -130,7 +130,7 @@ if %errorlevel% equ 0 (
 ) else (
     echo [!] May nay chua cai Node.js hoac npm.
     if exist "%ROOT%web\dist\index.html" (
-        echo [*] Studio se tu dong su dung Web UI build san (hoat dong truc tiep tren Backend port 8899).
+        echo [*] Studio se tu dong su dung Web UI build san tren Backend port 8899.
         echo [*] Ban van su dung day du 100%% tinh nang ma khong can cai Node.js!
     ) else (
         echo [!] Khuyen nghi: Cai dat Node.js tai https://nodejs.org/ de chay giao dien web tot nhat.
@@ -149,7 +149,7 @@ if %errorlevel% neq 0 (
     if exist "%ROOT%ffmpeg.exe" (
         echo [OK] Da tim thay ffmpeg.exe trong thu muc phan mem.
     ) else (
-        echo [!] Luu y: FFmpeg chua co trong PATH (chuc nang xuat video MP4 co the can FFmpeg).
+        echo [!] Luu y: FFmpeg chua co trong PATH, chuc nang xuat video MP4 co the can FFmpeg.
     )
 )
 
@@ -161,14 +161,14 @@ timeout /t 3 /nobreak > nul
 
 :: 7. Khoi dong Frontend & Mo trinh duyet
 if "%USE_VITE%"=="1" (
-    echo [*] Buoc 6: Khoi dong Web Studio UI qua Vite Dev (port 5199)...
+    echo [*] Buoc 6: Khoi dong Web Studio UI qua Vite Dev - port 5199...
     cd /d "%ROOT%web"
     start "SLS-Frontend" cmd /c "npm run dev"
     cd /d "%ROOT%"
     timeout /t 3 /nobreak > nul
     start "" http://localhost:5199
 ) else (
-    echo [*] Buoc 6: Mo Web Studio UI truc tiep tu Backend (port 8899)...
+    echo [*] Buoc 6: Mo Web Studio UI truc tiep tu Backend - port 8899...
     start "" http://localhost:8899
 )
 

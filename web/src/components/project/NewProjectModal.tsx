@@ -20,7 +20,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   const [title, setTitle] = useState('');
   const [videoPath, setVideoPath] = useState('');
   const [selectedPresetId, setSelectedPresetId] = useState<string>('');
-  const [sourceLang, setSourceLang] = useState('zh');
+  const [sourceLang, setSourceLang] = useState('auto');
   const [targetLang, setTargetLang] = useState('vi');
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
@@ -31,8 +31,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
     if (presets.length > 0) {
       const def = getDefaultPreset(presets);
       setSelectedPresetId(def.id);
-      setSourceLang(def.source_lang);
-      setTargetLang(def.target_lang);
+      setSourceLang(def.source_lang || 'auto');
+      setTargetLang(def.target_lang || 'vi');
     }
   }, [presets, isOpen]);
 
@@ -241,10 +241,12 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 onChange={(e) => setSourceLang(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 text-xs"
               >
-                <option value="zh">Tiếng Trung (Chinese - 中文)</option>
-                <option value="ja">Tiếng Nhật (Japanese - 日本語)</option>
-                <option value="ko">Tiếng Hàn (Korean - 한국어)</option>
-                <option value="en">Tiếng Anh (English)</option>
+                <option value="zh">🇨🇳 Tiếng Trung (Chinese - 中文)</option>
+                <option value="en">🇬🇧 Tiếng Anh (English)</option>
+                <option value="vi">🇻🇳 Tiếng Việt (Vietnamese)</option>
+                <option value="auto">🌐 Tự động nhận diện (Auto-detect)</option>
+                <option value="ja">🇯🇵 Tiếng Nhật (Japanese - 日本語)</option>
+                <option value="ko">🇰🇷 Tiếng Hàn (Korean - 한국어)</option>
               </select>
             </div>
 
@@ -255,9 +257,10 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 onChange={(e) => setTargetLang(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 text-xs"
               >
-                <option value="vi">Tiếng Việt (Vietnamese)</option>
-                <option value="en">Tiếng Anh (English)</option>
-                <option value="none">Không dịch (OCR-only)</option>
+                <option value="vi">🇻🇳 Tiếng Việt (Vietnamese)</option>
+                <option value="en">🇬🇧 Tiếng Anh (English)</option>
+                <option value="zh">🇨🇳 Tiếng Trung (Chinese)</option>
+                <option value="none">Trích xuất gốc (Không dịch / OCR-only)</option>
               </select>
             </div>
           </div>

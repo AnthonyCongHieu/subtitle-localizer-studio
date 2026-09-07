@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+
+logger = logging.getLogger("subtitle_localizer.server")
+from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, Response
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 try:
     from pydantic import BaseModel, field_validator
 except ImportError:
     from pydantic import BaseModel, validator as field_validator
+
+from subtitle_localizer.service.pipeline_settings import (
+    GlobalPipelineSettings,
+    get_global_pipeline_settings,
+    save_pipeline_settings,
+    check_hardware_capabilities,
+)
 
 from subtitle_localizer.domain.models import (
     CommandEnvelopeV1,
@@ -46,6 +56,10 @@ class Mp4ExportRequest(BaseModel):
     mask_mode: str = "blur"
     flip_h: bool = False
     flip_v: bool = False
+    video_x: float = 0.0
+    video_y: float = 0.0
+    video_scale: float = 1.0
+    rotation: float = 0.0
 
 
 class BatchRunRequest(BaseModel):
@@ -259,6 +273,23 @@ class VideoSearchRequest(BaseModel):
     must_not_contain: Optional[str] = None
     auto_translate: bool = True
     translate_titles: bool = True
+
+
+class TestTranslationRequest(BaseModel):
+    text: str
+    source_lang: str = "zh"
+    target_lang: str = "vi"
+    provider: str = "gemini"
+    gemini_model: str = "gemini-2.5-flash"
+    prompt_tone: str = "dramatic"
+    use_glossary: bool = True
+
+
+class TestDubbingRequest(BaseModel):
+    text: str
+    voice: str = "vi-VN-NamMinhNeural"
+    rate: str = "+0%"
+    pitch: str = "+0Hz"
 
 
 def create_app(
@@ -937,7 +968,9 @@ def create_app(
         if not cues:
             raise HTTPException(status_code=400, detail="Dự án chưa có phụ đề để lồng tiếng")
 
-        voice = (body or {}).get("voice", "vi-VN-NamMinhNeural")
+        settings = get_global_pipeline_settings()
+        voice = (body or {}).get("voice") or settings.dubbing.voice
+        rate = (body or {}).get("rate") or settings.dubbing.rate
         project_output = resolved_output_root / project_id
         project_output.mkdir(parents=True, exist_ok=True)
         out_voiceover = project_output / f"voiceover_{project_id}.mp3"
@@ -955,6 +988,7 @@ def create_app(
             voice=voice,
             output_path=out_voiceover,
             total_duration=duration,
+            rate=rate,
         )
 
         return {
@@ -979,6 +1013,10 @@ def create_app(
         use_translated: bool = True,
         flip_h: bool = False,
         flip_v: bool = False,
+        video_x: float = 0.0,
+        video_y: float = 0.0,
+        video_scale: float = 1.0,
+        rotation: float = 0.0,
     ) -> str:
         project = repository.get_project(project_id)
         if not project:
@@ -1038,10 +1076,14 @@ def create_app(
             )
 
             if region:
-                roi_x = int(region.x * vw)
-                roi_y = int(region.y * vh)
-                roi_w = max(2, int(region.width * vw))
-                roi_h = max(2, int(region.height * vh))
+                rx1 = max(0, min(vw - 2, int(region.x * vw)))
+                ry1 = max(0, min(vh - 2, int(region.y * vh)))
+                rx2 = max(rx1 + 2, min(vw, int((region.x + region.width) * vw)))
+                ry2 = max(ry1 + 2, min(vh, int((region.y + region.height) * vh)))
+                roi_x = rx1
+                roi_y = ry1
+                roi_w = max(2, rx2 - rx1)
+                roi_h = max(2, ry2 - ry1)
             else:
                 roi_x = 0
                 roi_y = int(vh * 0.8)
@@ -1375,6 +1417,135 @@ def create_app(
         pool.save_to_file("gemini_keys_pool.json")
         return {"status": "success", "pool_status": pool.get_status()}
 
+    @app.get("/api/v1/settings/pipeline")
+    async def get_pipeline_settings_endpoint(
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Lấy toàn bộ cấu hình Pipeline toàn cục hiện tại."""
+        verify_auth(authorization)
+        return get_global_pipeline_settings().dict()
+
+    @app.post("/api/v1/settings/pipeline")
+    async def update_pipeline_settings_endpoint(
+        settings: GlobalPipelineSettings,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Lưu cập nhật cấu hình Pipeline toàn cục vào file JSON và áp dụng cho hệ thống."""
+        verify_auth(authorization)
+        save_pipeline_settings(settings)
+        return {"status": "success", "settings": settings.dict()}
+
+    @app.get("/api/v1/settings/hardware-check")
+    async def get_hardware_capabilities_endpoint(
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Kiểm tra tài nguyên phần cứng: CPU, GPU NVIDIA NVENC, ONNX Runtime Providers & FFmpeg."""
+        verify_auth(authorization)
+        return check_hardware_capabilities()
+
+    @app.post("/api/v1/settings/capcut-check")
+    async def test_capcut_endpoint(
+        body: Optional[Dict[str, Any]] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Kiểm tra kết nối và độ trễ tới máy chủ CapCut Cloud API."""
+        verify_auth(authorization)
+        from subtitle_localizer.service.capcut_api import CapCutSubtitleClient
+        endpoint = (body or {}).get("endpoint") or "https://edit-api-sg.capcut.com"
+        session_token = (body or {}).get("session_token") or ""
+        client = CapCutSubtitleClient(endpoint=endpoint, session_token=session_token)
+        return client.test_connection()
+
+    @app.post("/api/v1/settings/test-translation")
+    async def test_translation_endpoint(
+        req: TestTranslationRequest,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Thử nghiệm dịch tức thì 1 câu văn mẫu để kiểm tra chất lượng dịch thuật."""
+        verify_auth(authorization)
+        import time
+        from subtitle_localizer.translation.real import _refine_subtitles
+        t0 = time.time()
+
+        text = req.text.strip()
+        if not text:
+            return {"original": "", "translated": "", "provider_used": "none", "latency_ms": 0}
+
+        translated = ""
+        provider_used = req.provider
+
+        if req.provider == "gemini":
+            from subtitle_localizer.translation.key_pool import get_global_gemini_pool
+            pool = get_global_gemini_pool()
+            if pool.total_keys > 0:
+                import json
+                import urllib.request
+                import urllib.error
+                key = pool.get_next_key(wait_timeout=2.0)
+                if key:
+                    tone_desc = {
+                        "dramatic": "kịch tính, hấp dẫn, chuẩn phim truyền hình",
+                        "daily": "đời thường, gần gũi, tự nhiên",
+                        "humorous": "hài hước, dí dỏm, tiếng lóng giới trẻ",
+                        "literal": "sát nghĩa từ ngữ gốc",
+                    }.get(req.prompt_tone, "tự nhiên chuẩn phim")
+                    prompt = (
+                        f"Bạn là chuyên gia dịch thuật phim truyền hình. Dịch câu sau từ {req.source_lang} sang {req.target_lang}.\n"
+                        f"Phong cách: {tone_desc}.\n"
+                        f"Chỉ trả về duy nhất câu đã dịch, không kèm ngoặc kép, lời chào hay giải thích.\n"
+                        f"Văn bản: {text}"
+                    )
+                    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{req.gemini_model}:generateContent?key={key}"
+                    req_obj = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+                    try:
+                        with urllib.request.urlopen(req_obj, timeout=12) as resp:
+                            if resp.status == 200:
+                                res_json = json.loads(resp.read().decode("utf-8"))
+                                translated = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    except Exception as e:
+                        logger.warning(f"Test Gemini translation failed: {e}")
+
+        # Fallback hoặc Google Web nếu Gemini không có kết quả
+        if not translated:
+            try:
+                from deep_translator import GoogleTranslator
+                src = "zh-CN" if req.source_lang == "zh" else req.source_lang
+                tgt = "vi" if req.target_lang == "vi" else req.target_lang
+                translated = GoogleTranslator(source=src, target=tgt).translate(text)
+                provider_used = "google_web (fallback)" if req.provider == "gemini" else "google_web"
+            except Exception as e:
+                translated = f"[Lỗi dịch: {e}]"
+
+        if req.use_glossary and not translated.startswith("[Lỗi"):
+            translated = _refine_subtitles(translated, text)
+
+        elapsed_ms = round((time.time() - t0) * 1000, 1)
+        return {
+            "original": text,
+            "translated": translated,
+            "provider_used": provider_used,
+            "latency_ms": elapsed_ms,
+        }
+
+    @app.post("/api/v1/settings/test-tts")
+    async def test_tts_endpoint(
+        req: TestDubbingRequest,
+        authorization: Optional[str] = Header(None),
+    ):
+        """Thử nghiệm tạo giọng đọc mẫu cho 1 câu thoại ngắn và stream audio về UI."""
+        verify_auth(authorization)
+        from subtitle_localizer.dubbing.tts import synthesize_text
+        text = req.text.strip() or "Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio."
+        audio_bytes = await synthesize_text(
+            text=text,
+            voice=req.voice,
+            rate=req.rate,
+        )
+        if not audio_bytes:
+            raise HTTPException(status_code=500, detail="Không thể tạo giọng đọc thử nghiệm")
+        return Response(content=audio_bytes, media_type="audio/mpeg")
+
     @app.post("/api/v1/projects/{project_id}/commands")
     async def execute_command(
         project_id: str,
@@ -1456,6 +1627,10 @@ def create_app(
             use_translated=request.use_translated,
             flip_h=request.flip_h,
             flip_v=request.flip_v,
+            video_x=request.video_x,
+            video_y=request.video_y,
+            video_scale=request.video_scale,
+            rotation=request.rotation,
         )
         return {"status": "completed", "output_path": rendered_path}
 

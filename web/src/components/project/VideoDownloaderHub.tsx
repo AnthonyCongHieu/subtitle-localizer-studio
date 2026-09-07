@@ -1773,10 +1773,12 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                             onChange={(e) => setSourceLang(e.target.value)}
                             className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200"
                           >
-                            <option value="zh">Tiếng Trung (zh)</option>
-                            <option value="en">Tiếng Anh (en)</option>
-                            <option value="ja">Tiếng Nhật (ja)</option>
-                            <option value="ko">Tiếng Hàn (ko)</option>
+                            <option value="zh">🇨🇳 Tiếng Trung (zh)</option>
+                            <option value="en">🇬🇧 Tiếng Anh (en)</option>
+                            <option value="vi">🇻🇳 Tiếng Việt (vi)</option>
+                            <option value="auto">🌐 Tự động (auto)</option>
+                            <option value="ja">🇯🇵 Tiếng Nhật (ja)</option>
+                            <option value="ko">🇰🇷 Tiếng Hàn (ko)</option>
                           </select>
                         </div>
                         <div>
@@ -1786,8 +1788,10 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                             onChange={(e) => setTargetLang(e.target.value)}
                             className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200"
                           >
-                            <option value="vi">Tiếng Việt (vi)</option>
-                            <option value="en">Tiếng Anh (en)</option>
+                            <option value="vi">🇻🇳 Tiếng Việt (vi)</option>
+                            <option value="en">🇬🇧 Tiếng Anh (en)</option>
+                            <option value="zh">🇨🇳 Tiếng Trung (zh)</option>
+                            <option value="none">Trích xuất gốc (Không dịch)</option>
                           </select>
                         </div>
                       </div>

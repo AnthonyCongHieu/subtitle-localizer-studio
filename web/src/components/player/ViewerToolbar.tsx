@@ -20,6 +20,8 @@ import {
   Maximize2,
   Minimize2,
   Sliders,
+  Move,
+  Crop,
 } from 'lucide-react';
 
 export type { ZoomMode };
@@ -55,6 +57,10 @@ export interface ViewerToolbarProps {
   onSubtitlePlacementChange?: (mode: SubtitlePlacementMode) => void;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  videoPosition?: { x: number; y: number };
+  onPositionChange?: (pos: { x: number; y: number }) => void;
+  interactionMode?: 'video' | 'roi';
+  onInteractionModeChange?: (mode: 'video' | 'roi') => void;
 }
 
 const ViewerToolbarComponent: React.FC<ViewerToolbarProps> = ({
@@ -88,6 +94,10 @@ const ViewerToolbarComponent: React.FC<ViewerToolbarProps> = ({
   onSubtitlePlacementChange,
   isFullscreen = false,
   onToggleFullscreen,
+  videoPosition = { x: 0, y: 0 },
+  onPositionChange,
+  interactionMode = 'video',
+  onInteractionModeChange,
 }) => {
   const [showBlurSlider, setShowBlurSlider] = useState(false);
 
@@ -96,26 +106,73 @@ const ViewerToolbarComponent: React.FC<ViewerToolbarProps> = ({
     isFlippedV ||
     rotation !== 0 ||
     zoomLevel !== 'fit' ||
-    aspectRatio !== 'original';
+    aspectRatio !== 'original' ||
+    videoPosition.x !== 0 ||
+    videoPosition.y !== 0;
 
   const zoomNumericValue =
     typeof zoomLevel === 'number' ? Math.round(zoomLevel * 100) : 100;
 
   return (
     <div className="h-10 w-full bg-slate-900 border-b border-slate-800 px-3 flex items-center justify-between text-xs select-none shrink-0 rounded-t-xl gap-2 overflow-x-auto no-scrollbar">
-      {/* Bên Trái: Tên Video + Độ Phân Giải */}
-      <div className="flex items-center gap-2 min-w-0 shrink-0">
-        <FileVideo className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-        <span
-          className="font-semibold text-slate-200 truncate text-[11px] max-w-[130px] sm:max-w-[200px]"
-          title={videoTitle || 'Video Input'}
-        >
-          {videoTitle || 'Video Input'}
-        </span>
-        {videoDimensions && videoDimensions.width > 0 && (
-          <span className="text-[10px] text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 font-mono shrink-0 hidden sm:inline">
-            {videoDimensions.width}×{videoDimensions.height}
+      {/* Bên Trái: Tên Video + Chế Độ Thao Tác (Video vs ROI) */}
+      <div className="flex items-center gap-2.5 min-w-0 shrink-0">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <FileVideo className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+          <span
+            className="font-semibold text-slate-200 truncate text-[11px] max-w-[110px] sm:max-w-[160px]"
+            title={videoTitle || 'Video Input'}
+          >
+            {videoTitle || 'Video Input'}
           </span>
+          {videoDimensions && videoDimensions.width > 0 && (
+            <span className="text-[10px] text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 font-mono shrink-0 hidden sm:inline">
+              {videoDimensions.width}×{videoDimensions.height}
+            </span>
+          )}
+        </div>
+
+        {/* Bộ chuyển đổi chế độ tương tác: Biến đổi Video vs Quét Sub ROI */}
+        <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 shrink-0">
+          <button
+            type="button"
+            onClick={() => onInteractionModeChange?.('video')}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition ${
+              interactionMode === 'video'
+                ? 'bg-indigo-600 text-white shadow-sm font-semibold'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+            title="Chế độ Kéo di chuyển / Co giãn / Xoay Video (Chuẩn CapCut)"
+          >
+            <Move className="w-2.5 h-2.5" />
+            <span>Kéo Video</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onInteractionModeChange?.('roi')}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition ${
+              interactionMode === 'roi'
+                ? 'bg-indigo-600 text-white shadow-sm font-semibold'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+            title="Chế độ Quét Sub: Điều chỉnh khung nhận diện phụ đề (ROI)"
+          >
+            <Crop className="w-2.5 h-2.5" />
+            <span>Quét Sub</span>
+          </button>
+        </div>
+
+        {/* Huy hiệu Vị trí X, Y lệch tâm (Nhấp để reset về 0, 0) */}
+        {(videoPosition.x !== 0 || videoPosition.y !== 0) && (
+          <button
+            type="button"
+            onClick={() => onPositionChange?.({ x: 0, y: 0 })}
+            className="hidden md:flex items-center gap-1 bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 px-1.5 py-0.5 rounded text-[10px] font-mono hover:bg-indigo-900 transition"
+            title="Nhấp để đặt lại video về tâm Canvas (X: 0, Y: 0)"
+          >
+            <span>X: {videoPosition.x}</span>
+            <span>Y: {videoPosition.y}</span>
+          </button>
         )}
       </div>
 

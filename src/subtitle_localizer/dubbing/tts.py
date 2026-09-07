@@ -273,6 +273,7 @@ async def generate_timed_voiceover(
     batch_size: int = 5,
     max_stretch_rate: float = 1.45,
     export_cues_dir: Optional[Path | str] = None,
+    rate: str = "+0%",
 ) -> Path:
     """
     Sinh toàn bộ giọng thuyết minh cho các câu phụ đề theo đúng mốc thời gian start_pts của video.
@@ -307,7 +308,7 @@ async def generate_timed_voiceover(
 
     # Xử lý tuần tự từng câu với khoảng nghỉ nhỏ để ổn định đường truyền
     for idx, (cue, cleaned_text) in enumerate(valid_cues):
-        mp3_res = await synthesize_text(cleaned_text, voice=voice)
+        mp3_res = await synthesize_text(cleaned_text, voice=voice, rate=rate)
         if not mp3_res:
             logger.warning(f"Bỏ qua câu {cue.cue_id} do không nhận được audio")
             continue

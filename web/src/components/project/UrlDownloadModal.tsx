@@ -1585,10 +1585,12 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                     onChange={(e) => setSourceLang(e.target.value)}
                     className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-xs text-slate-200"
                   >
-                    <option value="zh">Trung (zh)</option>
-                    <option value="en">Anh (en)</option>
-                    <option value="ja">Nhật (ja)</option>
-                    <option value="ko">Hàn (ko)</option>
+                    <option value="zh">🇨🇳 Trung (zh)</option>
+                    <option value="en">🇬🇧 Anh (en)</option>
+                    <option value="vi">🇻🇳 Việt (vi)</option>
+                    <option value="auto">🌐 Tự động</option>
+                    <option value="ja">🇯🇵 Nhật (ja)</option>
+                    <option value="ko">🇰🇷 Hàn (ko)</option>
                   </select>
                   <span className="text-slate-400 text-[11px]">&rarr; Đích:</span>
                   <select
@@ -1596,8 +1598,10 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                     onChange={(e) => setTargetLang(e.target.value)}
                     className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-xs text-slate-200"
                   >
-                    <option value="vi">Việt (vi)</option>
-                    <option value="en">Anh (en)</option>
+                    <option value="vi">🇻🇳 Việt (vi)</option>
+                    <option value="en">🇬🇧 Anh (en)</option>
+                    <option value="zh">🇨🇳 Trung (zh)</option>
+                    <option value="none">Gốc (Không dịch)</option>
                   </select>
                 </div>
               </div>

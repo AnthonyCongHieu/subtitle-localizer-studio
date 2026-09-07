@@ -76,10 +76,32 @@ export class StudioApiClient {
   }
 
   async saveRegions(projectId: string, regions: RegionTrackV1[]): Promise<RegionTrackV1[]> {
+    // Tự động kẹp tọa độ trong phạm vi hợp lệ [0.0, 1.0] để người dùng trên Web UI có thể kéo ra ngoài mép khung hình
+    // mà khi lưu xuống backend API vẫn tuân thủ chặt chẽ schema kiểm tra không bị lỗi 422
+    const sanitizedRegions = regions.map((r) => {
+      const rx = Number(r.x) || 0;
+      const ry = Number(r.y) || 0;
+      const rw = Number(r.width) || 0.1;
+      const rh = Number(r.height) || 0.1;
+
+      const x1 = Math.max(0.0, Math.min(0.99, rx));
+      const y1 = Math.max(0.0, Math.min(0.99, ry));
+      const x2 = Math.max(x1 + 0.01, Math.min(1.0, rx + rw));
+      const y2 = Math.max(y1 + 0.01, Math.min(1.0, ry + rh));
+
+      return {
+        ...r,
+        x: Math.round(x1 * 10000) / 10000,
+        y: Math.round(y1 * 10000) / 10000,
+        width: Math.round((x2 - x1) * 10000) / 10000,
+        height: Math.round((y2 - y1) * 10000) / 10000,
+      };
+    });
+
     const res = await fetch(`${API_BASE}/projects/${projectId}/regions`, {
       method: 'PUT',
       headers: this.headers(),
-      body: JSON.stringify(regions),
+      body: JSON.stringify(sanitizedRegions),
     });
     if (!res.ok) throw new Error('Không thể lưu vùng nhận diện phụ đề');
     return res.json();
@@ -110,6 +132,10 @@ export class StudioApiClient {
       mask_mode?: string;
       flip_h?: boolean;
       flip_v?: boolean;
+      video_x?: number;
+      video_y?: number;
+      video_scale?: number;
+      rotation?: number;
     },
   ): Promise<{ status: 'completed'; output_path: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/export/mp4`, {
@@ -638,6 +664,88 @@ export class StudioApiClient {
     if (!res.ok) throw new Error('Không thể xóa lịch sử tải xuống');
     return res.json();
   }
+
+  // -------------------------------------------------------------------------
+  // Pipeline Settings & Live Test Endpoints
+  // -------------------------------------------------------------------------
+  async getPipelineSettings(): Promise<GlobalPipelineSettings> {
+    const res = await fetch(`${API_BASE}/settings/pipeline`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể tải cấu hình Pipeline');
+    return res.json();
+  }
+
+  async savePipelineSettings(settings: GlobalPipelineSettings): Promise<{ status: string; settings: GlobalPipelineSettings }> {
+    const res = await fetch(`${API_BASE}/settings/pipeline`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) throw new Error('Không thể lưu cấu hình Pipeline');
+    return res.json();
+  }
+
+  async getHardwareInfo(): Promise<HardwareInfoResponse> {
+    const res = await fetch(`${API_BASE}/settings/hardware-check`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error('Không thể kiểm tra phần cứng');
+    return res.json();
+  }
+
+  async testTranslation(req: {
+    text: string;
+    source_lang?: string;
+    target_lang?: string;
+    provider?: string;
+    gemini_model?: string;
+    prompt_tone?: string;
+    use_glossary?: boolean;
+  }): Promise<TestTranslationResult> {
+    const res = await fetch(`${API_BASE}/settings/test-translation`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw new Error('Lỗi khi kiểm tra dịch thử');
+    return res.json();
+  }
+
+  async testDubbing(req: {
+    text: string;
+    voice?: string;
+    rate?: string;
+    pitch?: string;
+  }): Promise<Blob> {
+    const res = await fetch(`${API_BASE}/settings/test-tts`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) throw new Error('Lỗi khi tạo giọng đọc thử nghiệm');
+    return res.blob();
+  }
+
+  async testCapCutConnection(req?: {
+    endpoint?: string;
+    session_token?: string;
+  }): Promise<{
+    ok: boolean;
+    endpoint: string;
+    latency_ms: number;
+    message: string;
+    status_code?: number;
+    has_token?: boolean;
+  }> {
+    const res = await fetch(`${API_BASE}/settings/capcut-check`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(req || {}),
+    });
+    if (!res.ok) throw new Error('Lỗi khi kiểm tra kết nối CapCut Cloud API');
+    return res.json();
+  }
 }
 
 export interface DirectoryValidateResponse {
@@ -874,6 +982,105 @@ export interface VideoSearchOptions {
 export interface VideoSearchResponse {
   results: VideoSearchResultItem[];
   platform: string;
+}
+
+export type ExtractionMethod = 'ocr' | 'asr_whisper' | 'vlm_gemini' | 'demux_stream';
+
+export interface ExtractionSettings {
+  // Phân chia 2 Master Mode:
+  // - "local": Chạy hoàn toàn cục bộ trên máy, tận dụng GPU RTX 3050 & 16 CPU cores (0đ, 100% offline)
+  // - "api": Chạy qua đám mây Cloud AI (Google Gemini hoặc CapCut ByteDance)
+  mode?: 'local' | 'api';
+  local_engine?: 'rapidocr' | 'whisper' | 'demux';
+  api_provider?: 'gemini' | 'capcut';
+  capcut_api_endpoint?: string;
+  capcut_session_token?: string;
+
+  method?: ExtractionMethod;
+
+  // 1. OCR (Thị giác khung hình)
+  engine: 'rapidocr' | 'paddle' | 'mock';
+  default_source_lang?: 'zh' | 'en' | 'vi' | 'auto';
+  sample_fps: number;
+  diff_threshold: number;
+  enable_gap_rescue: boolean;
+  enable_roi_tightening: boolean;
+
+  // 2. ASR (Faster-Whisper CUDA)
+  whisper_model?: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
+  whisper_device?: 'cuda' | 'cpu';
+  whisper_compute_type?: 'float16' | 'int8_float16' | 'int8';
+  whisper_vad_filter?: boolean;
+
+  // 3. VLM Multimodal AI (Gemini Video)
+  vlm_provider?: 'gemini' | 'qwen_vl_local';
+  vlm_prompt_style?: string;
+
+  // 4. Bóc tách luồng phụ đề có sẵn (Demux)
+  demux_fallback_to_ocr?: boolean;
+  demux_stream_lang?: string;
+}
+
+export type OcrSettings = ExtractionSettings;
+
+export interface TranslationSettings {
+  provider: 'gemini' | 'google_web' | 'local_model';
+  target_language?: 'vi' | 'en' | 'zh' | 'none';
+  gemini_model: string;
+  batch_size: number;
+  prompt_tone: 'dramatic' | 'daily' | 'humorous' | 'literal';
+  use_glossary: boolean;
+}
+
+export interface DubbingSettings {
+  voice: string;
+  rate: string;
+  pitch: string;
+  ducking_volume: number;
+}
+
+export interface RenderSettings {
+  ffmpeg_encoder: 'auto' | 'nvenc' | 'qsv' | 'cpu';
+  default_mask_style: string;
+  default_blur_strength: number;
+  burn_subtitles: boolean;
+}
+
+export interface GlobalPipelineSettings {
+  ocr: OcrSettings;
+  translation: TranslationSettings;
+  dubbing: DubbingSettings;
+  render: RenderSettings;
+}
+
+export interface HardwareInfoResponse {
+  os: string;
+  cpu: {
+    cores: number;
+    model: string;
+  };
+  gpu: {
+    has_gpu: boolean;
+    name: string;
+    driver: string;
+    vram_total_mb: number;
+    cuda_available: boolean;
+  };
+  onnx_providers: string[];
+  ffmpeg: {
+    available: boolean;
+    version: string;
+    has_nvenc: boolean;
+    has_qsv: boolean;
+    recommended_encoder: string;
+  };
+}
+
+export interface TestTranslationResult {
+  original: string;
+  translated: string;
+  provider_used: string;
+  latency_ms: number;
 }
 
 export const apiClient = new StudioApiClient();

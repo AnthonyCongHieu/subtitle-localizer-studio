@@ -16,7 +16,7 @@ import { VideoPlayer } from './components/player/VideoPlayer';
 import { BottomTimeline } from './components/timeline/BottomTimeline';
 import { CapcutSidebar } from './components/sidebar/CapcutSidebar';
 import { DashboardBatchHub } from './components/project/DashboardBatchHub';
-import { PresetManagerModal } from './components/project/PresetManagerModal';
+import { GlobalSettingsView } from './components/project/GlobalSettingsView';
 import { NewProjectModal } from './components/project/NewProjectModal';
 import { DownloadQueueHub } from './components/project/DownloadQueueHub';
 import { VideoDownloaderHub } from './components/project/VideoDownloaderHub';
@@ -37,18 +37,19 @@ import {
   ListPlus,
   Download,
   Activity,
+  Settings,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
   const loggerCount = useAppLoggerCount();
-  // Chế độ màn hình: Màn hình Ngoài (Dashboard), Giao diện Studio, Hàng Đợi, hoặc Trung Tâm Tải Video
-  const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader'>('dashboard');
+  // Chế độ màn hình: Dashboard, Studio, Hàng Đợi, Trung Tâm Tải Video, hoặc Thiết Lập Hệ Thống
+  const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings'>('dashboard');
   const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>('search');
+  const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render'>('ocr');
 
   // Quản lý Chuẩn Cấu Hình (Preset Profiles)
   const [presets, setPresets] = useState<PresetProfile[]>(() => getStoredPresets());
   const [activePresetId, setActivePresetId] = useState<string>(() => getDefaultPreset().id);
-  const [isPresetModalOpen, setIsPresetModalOpen] = useState<boolean>(false);
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState<boolean>(false);
 
   // Trạng thái dự án và video hiện tại
@@ -57,7 +58,7 @@ export const App: React.FC = () => {
   const [videoUrl, setVideoUrl] = useState<string>('');
   const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
   const [cues, setCues] = useState<SubtitleCueV1[]>([]);
-  const [sourceLang, setSourceLang] = useState<string>('zh');
+  const [sourceLang, setSourceLang] = useState<string>('auto');
   const [targetLang, setTargetLang] = useState<string>('vi');
 
   // Tỉ lệ khung hình (Aspect Ratio) & Fit Mode
@@ -74,6 +75,8 @@ export const App: React.FC = () => {
   });
 
   // Trạng thái biến đổi video và lớp phủ hiển thị
+  const [videoPosition, setVideoPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [interactionMode, setInteractionMode] = useState<'video' | 'roi'>('video');
   const [isFlippedH, setIsFlippedH] = useState<boolean>(false);
   const [isFlippedV, setIsFlippedV] = useState<boolean>(false);
   const [rotation, setRotation] = useState<number>(0);
@@ -398,12 +401,13 @@ export const App: React.FC = () => {
   };
 
   const handleResetTransform = () => {
+    setVideoPosition({ x: 0, y: 0 });
     setIsFlippedH(false);
     setIsFlippedV(false);
     setRotation(0);
     setZoomLevel('fit');
     setAspectRatio('original');
-    appLogger.info('Đã khôi phục khung nhìn về mặc định (Fit, 0°, Không lật)', 'Hiển thị');
+    appLogger.info('Đã khôi phục khung nhìn về mặc định (Tâm 0,0, Fit, 0°, Không lật)', 'Hiển thị');
   };
 
   return (
@@ -436,6 +440,15 @@ export const App: React.FC = () => {
             }}
           />
         )
+      ) : viewMode === 'settings' ? (
+        <GlobalSettingsView
+          initialTab={settingsTab}
+          presets={presets}
+          onSavePresets={handleSavePresets}
+          onSelectPreset={(p) => applyPresetProfile(p)}
+          onSwitchToDashboard={() => setViewMode('dashboard')}
+          onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
+        />
       ) : viewMode === 'dashboard' ? (
         <DashboardBatchHub
           projects={projects}
@@ -443,7 +456,14 @@ export const App: React.FC = () => {
           onSelectProject={selectProject}
           onNewProject={() => setIsNewProjectModalOpen(true)}
           onDeleteProject={handleDeleteProject}
-          onOpenPresetManager={() => setIsPresetModalOpen(true)}
+          onOpenPresetManager={() => {
+            setSettingsTab('render');
+            setViewMode('settings');
+          }}
+          onOpenSettingsTab={(tab) => {
+            setSettingsTab(tab || 'ocr');
+            setViewMode('settings');
+          }}
           onRefreshProjects={loadProjects}
           onBatchProjectsCreated={(newProjs) => {
             setProjects((prev) => [...prev, ...newProjs]);
@@ -501,6 +521,19 @@ export const App: React.FC = () => {
               >
                 <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
                 <span>Hàng Đợi</span>
+              </button>
+
+              {/* Nút Thiết Lập Hệ Thống */}
+              <button
+                onClick={() => {
+                  setSettingsTab('ocr');
+                  setViewMode('settings');
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold shadow transition active:scale-95"
+                title="Mở Trang Thiết Lập Toàn Cục (OCR, AI, TTS, Render)"
+              >
+                <Settings className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Thiết Lập</span>
               </button>
 
               <div className="h-4 w-px bg-slate-800" />
@@ -663,9 +696,21 @@ export const App: React.FC = () => {
               }}
               isFlippedH={isFlippedH}
               isFlippedV={isFlippedV}
+              onToggleFlipH={() => setIsFlippedH((prev) => !prev)}
+              onToggleFlipV={() => setIsFlippedV((prev) => !prev)}
 
               aspectRatio={aspectRatio}
               onAspectRatioChange={setAspectRatio}
+
+              videoPosition={videoPosition}
+              onPositionChange={setVideoPosition}
+              scale={zoomLevel === 'fit' ? 1.0 : zoomLevel}
+              onScaleChange={(s) => setZoomLevel(s)}
+              rotation={rotation}
+              onRotationChange={(deg) => setRotation(normalizeRotation(deg))}
+              onResetTransform={handleResetTransform}
+              interactionMode={interactionMode}
+              onInteractionModeChange={setInteractionMode}
             />
 
             <VideoPlayer
@@ -685,6 +730,10 @@ export const App: React.FC = () => {
                 setAspectRatio(r);
                 appLogger.info(`Đổi tỉ lệ khung hình: ${r}`, 'Canvas');
               }}
+              videoPosition={videoPosition}
+              onPositionChange={setVideoPosition}
+              interactionMode={interactionMode}
+              onInteractionModeChange={setInteractionMode}
               fitMode={fitMode}
               onToggleFitMode={() => {
                 setFitMode((m) => {
@@ -773,14 +822,6 @@ export const App: React.FC = () => {
         </>
       )}
 
-      {/* Modal Quản Lý Chuẩn (Preset Manager) */}
-      <PresetManagerModal
-        isOpen={isPresetModalOpen}
-        onClose={() => setIsPresetModalOpen(false)}
-        presets={presets}
-        onSavePresets={handleSavePresets}
-        onSelectPreset={(p) => applyPresetProfile(p)}
-      />
 
       {/* Modal Tạo Dự Án Mới */}
       <NewProjectModal

@@ -53,7 +53,7 @@ export const RoiSelector: React.FC<RoiSelectorProps> = ({ region, onUpdateRegion
   };
 
   const handleYChange = (newYPercent: number) => {
-    const yVal = Math.min(0.95, Math.max(0.30, newYPercent / 100));
+    const yVal = Math.min(1.10, Math.max(0.10, newYPercent / 100));
     onUpdateRegion({
       region_id: region?.region_id || 'roi-default',
       x: region?.x ?? 0.08,
@@ -64,7 +64,7 @@ export const RoiSelector: React.FC<RoiSelectorProps> = ({ region, onUpdateRegion
   };
 
   const handleHChange = (newHPercent: number) => {
-    const hVal = Math.min(0.40, Math.max(0.05, newHPercent / 100));
+    const hVal = Math.min(0.50, Math.max(0.02, newHPercent / 100));
     onUpdateRegion({
       region_id: region?.region_id || 'roi-default',
       x: region?.x ?? 0.08,
@@ -75,8 +75,8 @@ export const RoiSelector: React.FC<RoiSelectorProps> = ({ region, onUpdateRegion
   };
 
   const handleWChange = (newWPercent: number) => {
-    const wVal = Math.min(1.0, Math.max(0.50, newWPercent / 100));
-    const xVal = Math.max(0, (1.0 - wVal) / 2);
+    const wVal = Math.min(1.20, Math.max(0.40, newWPercent / 100));
+    const xVal = (1.0 - wVal) / 2;
     onUpdateRegion({
       region_id: region?.region_id || 'roi-default',
       x: parseFloat(xVal.toFixed(3)),
@@ -183,8 +183,8 @@ export const RoiSelector: React.FC<RoiSelectorProps> = ({ region, onUpdateRegion
               </div>
               <input
                 type="range"
-                min="40"
-                max="95"
+                min="10"
+                max="110"
                 step="1"
                 value={currentY}
                 onChange={(e) => handleYChange(parseInt(e.target.value))}
@@ -200,8 +200,8 @@ export const RoiSelector: React.FC<RoiSelectorProps> = ({ region, onUpdateRegion
               </div>
               <input
                 type="range"
-                min="5"
-                max="35"
+                min="2"
+                max="50"
                 step="1"
                 value={currentH}
                 onChange={(e) => handleHChange(parseInt(e.target.value))}
@@ -217,8 +217,8 @@ export const RoiSelector: React.FC<RoiSelectorProps> = ({ region, onUpdateRegion
               </div>
               <input
                 type="range"
-                min="50"
-                max="100"
+                min="40"
+                max="120"
                 step="1"
                 value={currentW}
                 onChange={(e) => handleWChange(parseInt(e.target.value))}

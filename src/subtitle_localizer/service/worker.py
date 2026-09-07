@@ -69,11 +69,16 @@ class BackgroundWorker:
             active_roi = manifest.regions[0] if manifest.regions else None
             roi_tuple = (active_roi.x, active_roi.y, active_roi.width, active_roi.height) if active_roi else None
 
+            from subtitle_localizer.service.pipeline_settings import get_global_pipeline_settings
+            pipeline_settings = get_global_pipeline_settings()
+            self.sampler.sample_fps = max(0.5, float(pipeline_settings.ocr.sample_fps))
+            self.sampler.diff_threshold = float(pipeline_settings.ocr.diff_threshold)
+
             crops, pts_list = self.sampler.sample_video_frames(
                 video_path=video_path,
                 roi_norm=roi_tuple,
                 max_duration_seconds=max_duration_seconds,
-                diff_threshold=3.5,
+                diff_threshold=pipeline_settings.ocr.diff_threshold,
             )
             if not crops or not pts_list:
                 raise RuntimeError(f"No video frames could be decoded: {video_path}")
@@ -105,7 +110,14 @@ class BackgroundWorker:
                     )
                     self.repo.save_stage_run(project_id, st)
 
-            ocr_provider = self.ocr_registry.get_provider_for_language(manifest.source_language)
+            engine_name = getattr(pipeline_settings.ocr, "engine", "rapidocr")
+            if engine_name == "paddle":
+                provider_key = f"paddle-{manifest.source_language}" if f"paddle-{manifest.source_language}" in self.ocr_registry._providers else "paddle-zh"
+                ocr_provider = self.ocr_registry.get_provider(provider_key) or self.ocr_registry.get_provider_for_language(manifest.source_language)
+            elif engine_name == "mock":
+                ocr_provider = self.ocr_registry.get_provider("mock") or self.ocr_registry.get_provider_for_language(manifest.source_language)
+            else:
+                ocr_provider = self.ocr_registry.get_provider_for_language(manifest.source_language)
             try:
                 ocr_provider.load()
             except Exception:
@@ -133,7 +145,7 @@ class BackgroundWorker:
 
                 # Auto Gap-Rescue Pass: Tự động phân tích các khoảng trống nghi ngờ giữa các câu
                 # và quét sâu để cứu các câu phụ đề mờ hoặc chớp nhoáng (Zero-Miss Automation)
-                if observations and len(observations) >= 4:
+                if pipeline_settings.ocr.enable_gap_rescue and observations and len(observations) >= 4:
                     pre_cues = self.reconstructor.build_cues(observations)
                     if len(pre_cues) >= 2:
                         gap_intervals = []
@@ -175,7 +187,7 @@ class BackgroundWorker:
                 ocr_provider = None
 
             # Smart ROI Tightening (Tự co giãn để tránh che nội dung quá nhiều mà vẫn che đủ sub)
-            if active_roi and observations and crops and hasattr(crops[0], "shape"):
+            if pipeline_settings.ocr.enable_roi_tightening and active_roi and observations and crops and hasattr(crops[0], "shape"):
                 crop_h, crop_w = crops[0].shape[:2]
                 tight_roi = compute_tight_roi_from_observations(
                     observations=observations,
@@ -194,12 +206,17 @@ class BackgroundWorker:
                 zh_cnt = sum(1 for c in all_raw if '\u4e00' <= c <= '\u9fff')
                 ja_cnt = sum(1 for c in all_raw if ('\u3040' <= c <= '\u309f') or ('\u30a0' <= c <= '\u30ff'))
                 ko_cnt = sum(1 for c in all_raw if '\uac00' <= c <= '\ud7af')
+                vi_vowels = set("áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ")
+                vi_cnt = sum(1 for c in all_raw if c in vi_vowels)
+
                 if ja_cnt > 0:
                     effective_source_lang = "ja"
                 elif ko_cnt > 0:
                     effective_source_lang = "ko"
                 elif zh_cnt > 0:
                     effective_source_lang = "zh"
+                elif vi_cnt > 0:
+                    effective_source_lang = "vi"
                 else:
                     effective_source_lang = "en"
                 manifest.source_language = effective_source_lang

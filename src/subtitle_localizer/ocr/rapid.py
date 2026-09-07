@@ -7,11 +7,18 @@ import sys
 import threading
 from pathlib import Path
 from importlib import metadata
+import unicodedata
 import numpy as np
 
 from subtitle_localizer.domain.models import ModelDescriptorV1, OcrObservationV1
 from subtitle_localizer.ocr.base import OcrProvider
 from subtitle_localizer.ocr.preprocessing import build_ocr_candidates
+
+
+VIETNAMESE_VOWELS = (
+    "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ"
+    "ÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ"
+)
 
 
 def _is_chinese_or_non_latin(text: str) -> bool:
@@ -24,6 +31,46 @@ def _is_chinese_or_non_latin(text: str) -> bool:
         r"\s*\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?\s*=\s*\d+(?:\.\d+)?[,.，。…]*\s*",
         text,
     ) is not None
+
+
+def _is_valid_language_text(text: str, language: str) -> bool:
+    """Kiểm tra tính hợp lệ của dòng chữ OCR theo ngôn ngữ đã chọn."""
+    if not text or not text.strip():
+        return False
+    if re.fullmatch(r"\s*\d+[,.，。]*\s*", text):
+        return False
+    if re.fullmatch(
+        r"\s*\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?\s*=\s*\d+(?:\.\d+)?[,.，。…]*\s*",
+        text,
+    ):
+        return False
+
+    lang = (language or "auto").lower()
+    if lang == "zh":
+        return _is_chinese_or_non_latin(text)
+    elif lang == "en":
+        return re.search(r"[A-Za-z]", text) is not None
+    elif lang == "vi":
+        return (
+            re.search(r"[A-Za-z]", text) is not None
+            or any(c in VIETNAMESE_VOWELS for c in text)
+        )
+    return (
+        re.search(r"[\u3400-\u4dbf\u4e00-\u9fffA-Za-z]", text) is not None
+        or any(c in VIETNAMESE_VOWELS for c in text)
+    )
+
+
+def _normalize_ocr_text(text: str, language: str) -> str:
+    """Chuẩn hóa văn bản Unicode NFC và khoảng trắng cho tiếng Anh/Việt."""
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFC", text.strip())
+    lang = (language or "auto").lower()
+    if lang in ("en", "vi"):
+        normalized = re.sub(r"\s+([,.:;?!])", r"\1", normalized)
+        normalized = re.sub(r"\s{2,}", " ", normalized)
+    return normalized
 
 
 def _rectangle(box: Any) -> List[float]:
@@ -96,7 +143,7 @@ class RapidOcrProvider(OcrProvider):
             sha256="0" * 64,
             format="onnx",
             license="Apache-2.0",
-            languages=["zh", "ja", "ko", "en"],
+            languages=["zh", "en", "vi", "ja", "ko"],
             runtime="onnxruntime",
         )
 
@@ -368,13 +415,15 @@ class RapidOcrProvider(OcrProvider):
                     for item in result:
                         text = str(item[1]).strip()
                         score = float(item[2])
-                        if language == "zh" and not _is_chinese_or_non_latin(text):
+                        if not _is_valid_language_text(text, language):
                             continue
-                        if score >= 0.75 and text:
+                        min_score = 0.68 if language in ("en", "vi") else 0.75
+                        if score >= min_score and text:
                             box = _rectangle(item[0])
                             text, score, box, line_verified_han_edge = self._reread_line(
                                 img_data, box, text, score, engine=engine
                             )
+                            text = _normalize_ocr_text(text, language)
                             verified_han_edge = verified_han_edge or line_verified_han_edge
                             lines.append(text)
                             confidences.append(score)

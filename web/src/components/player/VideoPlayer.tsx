@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { RoiOverlay } from '../roi/RoiOverlay';
 import { ViewerToolbar } from './ViewerToolbar';
+import { VideoTransformOverlay } from './VideoTransformOverlay';
 import { RegionTrackV1, SubtitleCueV1 } from '../../types/api';
 import {
   AspectRatioType,
@@ -52,6 +53,10 @@ interface VideoPlayerProps {
   onToggleSubtitleOverlay: () => void;
   subtitlePlacement?: SubtitlePlacementMode;
   onSubtitlePlacementChange?: (mode: SubtitlePlacementMode) => void;
+  videoPosition?: { x: number; y: number };
+  onPositionChange?: (pos: { x: number; y: number }) => void;
+  interactionMode?: 'video' | 'roi';
+  onInteractionModeChange?: (mode: 'video' | 'roi') => void;
 }
 
 export type { MaskStyleType, SubtitlePlacementMode };
@@ -163,6 +168,10 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   onToggleSubtitleOverlay,
   subtitlePlacement = 'roi',
   onSubtitlePlacementChange,
+  videoPosition = { x: 0, y: 0 },
+  onPositionChange,
+  interactionMode = 'video',
+  onInteractionModeChange,
 }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const videoBoxRef = useRef<HTMLDivElement>(null);
@@ -349,14 +358,15 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onTogglePlay, handleToggleFullscreen]);
 
-  // Style biến đổi video (Lật ngang, Lật dọc, Xoay, Zoom)
-  // Transform áp dụng cho wrapper chứa video + mask + subtitle cùng nhau
-  // để đảm bảo overlay luôn bám đúng vị trí khi zoom/xoay
+  // Trạng thái đang kéo biến đổi video để tắt CSS transition, giúp bám chuột mượt 1:1
+  const [isDraggingVideo, setIsDraggingVideo] = useState(false);
+
+  // Style biến đổi video (Vị trí X, Y, Lật ngang, Lật dọc, Xoay, Zoom)
   const scaleZoom = zoomLevel === 'fit' ? 1.0 : zoomLevel;
   const contentTransformStyle: React.CSSProperties = {
-    transform: `scaleX(${isFlippedH ? -1 : 1}) scaleY(${isFlippedV ? -1 : 1}) rotate(${rotation}deg) scale(${scaleZoom})`,
+    transform: `translate(${videoPosition.x}px, ${videoPosition.y}px) scale(${scaleZoom}) rotate(${rotation}deg) scaleX(${isFlippedH ? -1 : 1}) scaleY(${isFlippedV ? -1 : 1})`,
     transformOrigin: 'center center',
-    transition: 'transform 120ms ease-out',
+    transition: isDraggingVideo ? 'none' : 'transform 100ms ease-out',
   };
 
   return (
@@ -394,6 +404,10 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
           onSubtitlePlacementChange={onSubtitlePlacementChange}
           isFullscreen={isFullscreen}
           onToggleFullscreen={handleToggleFullscreen}
+          videoPosition={videoPosition}
+          onPositionChange={onPositionChange}
+          interactionMode={interactionMode}
+          onInteractionModeChange={onInteractionModeChange}
         />
       )}
 
@@ -401,12 +415,12 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
       {videoUrl ? (
         <div
           ref={viewportRef}
-          className="flex-1 min-h-0 min-w-0 w-full flex items-center justify-center relative overflow-hidden p-3 bg-slate-950"
+          className="flex-1 min-h-0 min-w-0 w-full flex items-center justify-center relative overflow-hidden p-5 bg-slate-950"
         >
           {/* Khung Canvas chuẩn CapCut với pixel cố định tính toán qua ResizeObserver (chống co rút 300px) */}
           <div
             ref={videoBoxRef}
-            className={`relative overflow-hidden bg-black flex items-center justify-center transition-all duration-100 ${
+            className={`relative bg-black flex items-center justify-center transition-all duration-100 ${
               isFullscreen
                 ? 'w-screen h-screen max-w-none max-h-none rounded-none border-none'
                 : 'rounded-xl border border-slate-800/90 shadow-2xl'
@@ -422,10 +436,10 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
                   }
             }
           >
-            {/* === Wrapper Transform: CHỈ chứa Video === */}
-            {/* Zoom/Xoay/Lật chỉ ảnh hưởng video, không ảnh hưởng overlay (zoom chỉ dùng cho xuất) */}
+            {/* === Wrapper Transform: CHỈ chứa Video (Giữ bo góc và clip video) === */}
+            {/* Zoom/Xoay/Lật chỉ ảnh hưởng video, không ảnh hưởng overlay */}
             <div
-              className="relative w-full h-full"
+              className="relative w-full h-full overflow-hidden rounded-xl"
               style={contentTransformStyle}
               onClick={handleVideoClick}
             >
@@ -449,10 +463,28 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
               />
             </div>
 
-            {/* Lớp Phủ Che Sub Gốc (Preview Mask Bám Chuẩn Tọa Độ ROI - cùng coordinate space với ROI) */}
+            {/* === 2. Lớp Phủ Biến Đổi Video Chuẩn CapCut (Kéo di chuyển, 8 mấu co giãn, 1 mấu xoay) === */}
+            {boxDimensions.width > 0 && boxDimensions.height > 0 && (
+              <VideoTransformOverlay
+                containerWidth={boxDimensions.width}
+                containerHeight={boxDimensions.height}
+                position={videoPosition}
+                scale={scaleZoom}
+                rotation={rotation}
+                isFlippedH={isFlippedH}
+                isFlippedV={isFlippedV}
+                onPositionChange={onPositionChange || (() => {})}
+                onScaleChange={(s) => onZoomChange(s)}
+                onRotationChange={onRotationChange || (() => {})}
+                onDragStateChange={setIsDraggingVideo}
+                isActive={interactionMode === 'video'}
+              />
+            )}
+
+            {/* === 3. Lớp Phủ Che Sub Gốc (Preview Mask Bám Chuẩn Tọa Độ ROI) === */}
             {previewMask && boxDimensions.width > 0 && (
               <div
-                className={`absolute pointer-events-none ${getMaskStyleClass(maskStyle)} z-10`}
+                className={`absolute pointer-events-none ${getMaskStyleClass(maskStyle)} z-30`}
                 style={{
                   left: `${Math.round(region.x * boxDimensions.width)}px`,
                   top: `${Math.round(region.y * boxDimensions.height)}px`,
@@ -463,10 +495,10 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
               />
             )}
 
-            {/* Lớp Phủ Hiển Thị Phụ Đề Dịch Tiếng Việt (cùng coordinate space với ROI) */}
+            {/* === 4. Lớp Phủ Hiển Thị Phụ Đề Dịch Tiếng Việt === */}
             {showSubtitleOverlay && activeCue && boxDimensions.width > 0 && (
               <div
-                className={`absolute pointer-events-none flex justify-center z-20 transition-all duration-75 px-4 ${
+                className={`absolute pointer-events-none flex justify-center z-40 transition-all duration-75 px-4 ${
                   subtitlePlacement === 'bottom'
                     ? 'bottom-[6%] left-0 right-0 items-end'
                     : 'items-center'
@@ -499,14 +531,17 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
               </div>
             )}
 
-            {/* Lớp phủ ROI Overlay: cùng coordinate space với Mask → luôn khớp chính xác */}
+            {/* === 5. KHUNG QUÉT SUB (ROI OVERLAY) - Ở CẤP CAO NHẤT (Z-50) === */}
+            {/* Luôn ở cấp cao nhất của Canvas, nổi trên tất cả mọi thứ, luôn tương tác được */}
             {showRoi && boxDimensions.width > 0 && boxDimensions.height > 0 && (
-              <RoiOverlay
-                region={region}
-                onChange={onUpdateRegion}
-                containerWidth={boxDimensions.width}
-                containerHeight={boxDimensions.height}
-              />
+              <div className="absolute inset-0 pointer-events-none z-50 overflow-visible">
+                <RoiOverlay
+                  region={region}
+                  onChange={onUpdateRegion}
+                  containerWidth={boxDimensions.width}
+                  containerHeight={boxDimensions.height}
+                />
+              </div>
             )}
 
             {/* Thanh điều khiển âm lượng: NGOÀI transform wrapper → không bị zoom */}
