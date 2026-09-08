@@ -15,12 +15,11 @@ class WebFoundationTest(unittest.TestCase):
         self.assertTrue((web_dir / "src" / "types" / "api.ts").exists())
         self.assertTrue((web_dir / "src" / "types" / "presets.ts").exists())
         self.assertTrue((web_dir / "src" / "api" / "client.ts").exists())
-        self.assertTrue((web_dir / "src" / "components" / "layout" / "AppLayout.tsx").exists())
+        self.assertTrue((web_dir / "src" / "components" / "layout" / "StudioHeader.tsx").exists())
         self.assertTrue((web_dir / "src" / "components" / "project" / "DashboardBatchHub.tsx").exists())
-        self.assertTrue((web_dir / "src" / "components" / "project" / "PresetManagerModal.tsx").exists())
         self.assertTrue((web_dir / "src" / "components" / "project" / "NewProjectModal.tsx").exists())
         self.assertTrue((web_dir / "src" / "components" / "player" / "VideoPlayer.tsx").exists())
-        self.assertTrue((web_dir / "src" / "components" / "player" / "ViewerToolbar.tsx").exists())
+        self.assertTrue((web_dir / "src" / "components" / "player" / "VideoTransformOverlay.tsx").exists())
         self.assertTrue((web_dir / "src" / "components" / "timeline" / "BottomTimeline.tsx").exists())
 
     def test_package_json_validity(self) -> None:

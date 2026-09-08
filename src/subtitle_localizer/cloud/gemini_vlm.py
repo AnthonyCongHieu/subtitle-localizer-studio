@@ -130,7 +130,7 @@ class GeminiVideoVlmExtractor:
 
                 # Chờ video chuyển trạng thái ACTIVE
                 wait_time = 0
-                while video_file.state == "PROCESSING" and wait_time < 90:
+                while video_file.state == "PROCESSING" and wait_time < 300:
                     time.sleep(2)
                     wait_time += 2
                     video_file = client.files.get(name=remote_file_name)

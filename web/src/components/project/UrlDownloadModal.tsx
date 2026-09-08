@@ -12,6 +12,7 @@ import {
 } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
 import { EpisodeSelectorGrid } from './EpisodeSelectorGrid';
+import { appLogger } from '../common/GlobalActivityLogger';
 import {
   Download,
   Link,
@@ -323,7 +324,7 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
 
   const handleSavePlatformCookie = async () => {
     if (!customCookieInput.trim()) {
-      alert('Vui lòng nhập chuỗi Cookie');
+      appLogger.warn('Vui lòng nhập chuỗi Cookie hợp lệ', 'Xác thực');
       return;
     }
     setIsSavingCookie(true);
@@ -331,11 +332,13 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     try {
       const res = await apiClient.savePlatformCookie(customPlatform, customCookieInput.trim());
       setCookieFeedback(res.message);
+      appLogger.success(res.message || 'Đã lưu Cookie nền tảng thành công!', 'Xác thực');
       setCustomCookieInput('');
       loadAuthStatus();
       setTimeout(() => setCookieFeedback(null), 4000);
     } catch (err: any) {
       setCookieFeedback(`Lỗi: ${err?.message}`);
+      appLogger.error(`Lỗi lưu cookie: ${err?.message}`, 'Xác thực');
     } finally {
       setIsSavingCookie(false);
     }
@@ -346,8 +349,9 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     try {
       await apiClient.deletePlatformCookie(plat);
       loadAuthStatus();
+      appLogger.info(`Đã xóa cookie của nền tảng ${plat}`, 'Xác thực');
     } catch (err: any) {
-      alert(`Lỗi: ${err?.message}`);
+      appLogger.error(`Lỗi xóa cookie: ${err?.message}`, 'Xác thực');
     }
   };
 
@@ -500,7 +504,7 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
   const handleAddToQueue = async () => {
     if (!targetInfo) return;
     if (selectedEpisodes.length === 0) {
-      alert('Vui lòng chọn ít nhất 1 tập để thêm vào hàng đợi.');
+      appLogger.warn('Vui lòng chọn ít nhất 1 tập để thêm vào hàng đợi', 'Hàng đợi');
       return;
     }
     setIsAddingToQueue(true);
@@ -527,12 +531,13 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
         cookie_source: cookieSource,
       });
       setQueueAddSuccess(`Đã thêm "${targetInfo.title}" (${selectedEpisodes.length} tập) vào hàng đợi tải (Vị trí #${res.position})!`);
+      appLogger.success(`Đã thêm "${targetInfo.title}" (${selectedEpisodes.length} tập) vào hàng đợi (#${res.position})`, 'Hàng đợi');
       // Gộp luồng: Tự động chuyển ngay sang tab Hàng Đợi Tải để theo dõi tiến trình
       setModalTab('queue');
       fetchQueueTasks(false);
       setTimeout(() => setQueueAddSuccess(null), 5000);
     } catch (err: any) {
-      alert(`Lỗi thêm vào hàng đợi: ${err?.message}`);
+      appLogger.error(`Lỗi thêm vào hàng đợi: ${err?.message}`, 'Hàng đợi');
     } finally {
       setIsAddingToQueue(false);
     }
@@ -558,14 +563,16 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
         await apiClient.resumeQueue();
         setIsQueuePaused(false);
         showQueueFeedback('Đã tiếp tục điều phối hàng đợi tải');
+        appLogger.info('Đã tiếp tục điều phối hàng đợi tải', 'Hàng đợi');
       } else {
         await apiClient.pauseQueue();
         setIsQueuePaused(true);
         showQueueFeedback('Đã tạm dừng hàng đợi tải');
+        appLogger.warn('Đã tạm dừng hàng đợi tải', 'Hàng đợi');
       }
       fetchQueueTasks(true);
     } catch (err: any) {
-      alert(`Lỗi thao tác: ${err?.message}`);
+      appLogger.error(`Lỗi thao tác: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -576,9 +583,10 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     try {
       await apiClient.deleteQueueTask(taskId);
       showQueueFeedback(`Đã xóa "${title}" khỏi hàng đợi`);
+      appLogger.info(`Đã xóa "${title}" khỏi hàng đợi`, 'Hàng đợi');
       fetchQueueTasks(true);
     } catch (err: any) {
-      alert(`Lỗi xóa tác vụ: ${err?.message}`);
+      appLogger.error(`Lỗi xóa tác vụ: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -587,12 +595,13 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
       const res = await apiClient.retryQueueTask(taskId);
       if (res.success) {
         showQueueFeedback(`Đã kích hoạt tải lại "${title}"`);
+        appLogger.success(`Đã kích hoạt tải lại "${title}"`, 'Hàng đợi');
         fetchQueueTasks(true);
       } else {
-        alert(res.message);
+        appLogger.warn(res.message || 'Không thể thử lại tác vụ', 'Hàng đợi');
       }
     } catch (err: any) {
-      alert(`Lỗi thử lại tác vụ: ${err?.message}`);
+      appLogger.error(`Lỗi thử lại tác vụ: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -601,7 +610,7 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
       await apiClient.reorderQueue(taskId, direction);
       fetchQueueTasks(true);
     } catch (err: any) {
-      alert(`Lỗi đổi thứ tự: ${err?.message}`);
+      appLogger.error(`Lỗi đổi thứ tự: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -609,18 +618,19 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     const target = item.target_info || {};
     const coverUrl = target.cover_url;
     if (!coverUrl) {
-      alert('Bộ phim này không có ảnh bìa để tải.');
+      appLogger.warn('Bộ phim này không có ảnh bìa để tải', 'Tải ảnh');
       return;
     }
     try {
       const res = await apiClient.downloadCover(coverUrl, item.output_dir || outputDir || 'uploads');
       if (res.success) {
         showQueueFeedback(`Đã tải ảnh bìa phim "${target.title}"!`);
+        appLogger.success(`Đã tải ảnh bìa phim "${target.title}"`, 'Tải ảnh');
       } else {
-        alert(res.message || 'Lỗi tải ảnh bìa');
+        appLogger.warn(res.message || 'Lỗi tải ảnh bìa', 'Tải ảnh');
       }
     } catch (err: any) {
-      alert(`Lỗi tải ảnh bìa: ${err?.message}`);
+      appLogger.error(`Lỗi tải ảnh bìa: ${err?.message}`, 'Tải ảnh');
     }
   };
 
@@ -737,9 +747,10 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
       setCustomDeviceId(res.device_id);
       setCustomInstallId(res.install_id);
       setDeviceRotateMessage(`Cấp mới thành công: Device ID ${res.device_id}`);
+      appLogger.success(`Đã cấp mới thiết bị giả lập: Device ID ${res.device_id}`, 'Thiết bị');
       setTimeout(() => setDeviceRotateMessage(null), 5000);
     } catch (err: any) {
-      alert(`Không thể cấp thiết bị mới: ${err?.message}`);
+      appLogger.error(`Không thể cấp thiết bị mới: ${err?.message}`, 'Thiết bị');
     } finally {
       setIsRotatingDevice(false);
     }
@@ -747,7 +758,7 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
 
   const handleSaveCustomDevice = async () => {
     if (!customDeviceId.trim() || !customInstallId.trim()) {
-      alert('Vui lòng điền đủ Device ID và Install ID.');
+      appLogger.warn('Vui lòng điền đủ Device ID và Install ID', 'Thiết bị');
       return;
     }
     setIsSavingCustomDevice(true);
@@ -756,9 +767,10 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
       setDeviceInfo(res);
       setShowCustomDeviceInput(false);
       setDeviceRotateMessage('Đã cập nhật thông tin thiết bị tùy chỉnh!');
+      appLogger.success('Đã lưu thông tin thiết bị tùy chỉnh thành công!', 'Thiết bị');
       setTimeout(() => setDeviceRotateMessage(null), 4000);
     } catch (err: any) {
-      alert(`Lỗi lưu thiết bị: ${err?.message}`);
+      appLogger.error(`Lỗi lưu thiết bị: ${err?.message}`, 'Thiết bị');
     } finally {
       setIsSavingCustomDevice(false);
     }
@@ -779,18 +791,24 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
     const url = proxyUrl.trim();
     if (!url) {
       setProxyTestResult({ ok: false, error: 'Vui lòng nhập địa chỉ proxy.' });
+      appLogger.warn('Vui lòng nhập địa chỉ proxy trước khi kiểm tra', 'Proxy');
       return;
     }
     setIsTestingProxy(true);
     setProxyTestResult(null);
+    appLogger.loading(`Đang kiểm tra kết nối proxy: ${url}...`, { taskKey: 'modal-test-proxy', category: 'Proxy' });
     try {
       const result = await apiClient.testProxy(url);
       setProxyTestResult(result);
       if (result.ok) {
         localStorage.setItem('sls_proxy_url', url);
+        appLogger.success(`Proxy hoạt động tốt (${result.latency_ms}ms, IP: ${result.ip || 'OK'})`, { taskKey: 'modal-test-proxy', category: 'Proxy' });
+      } else {
+        appLogger.warn(`Proxy có lỗi: ${result.error || 'Thất bại'}`, { taskKey: 'modal-test-proxy', category: 'Proxy' });
       }
     } catch (err: any) {
       setProxyTestResult({ ok: false, error: err?.message || 'Không thể kiểm tra proxy.' });
+      appLogger.error(`Lỗi kiểm tra proxy: ${err?.message || 'Không thể kết nối'}`, { taskKey: 'modal-test-proxy', category: 'Proxy' });
     } finally {
       setIsTestingProxy(false);
     }
@@ -802,8 +820,9 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
       if (taskStatus) {
         setTaskStatus({ ...taskStatus, status: 'cancelling', message: 'Đang gửi lệnh dừng...' });
       }
+      appLogger.warn('Đã gửi lệnh dừng tiến trình tải', 'Tải video');
     } catch (err: any) {
-      alert(`Lỗi khi dừng: ${err?.message}`);
+      appLogger.error(`Lỗi khi dừng: ${err?.message}`, 'Tải video');
     }
   };
 
@@ -1617,8 +1636,6 @@ export const UrlDownloadModal: React.FC<UrlDownloadModalProps> = ({
                     <option value="en">🇬🇧 Anh (en)</option>
                     <option value="vi">🇻🇳 Việt (vi)</option>
                     <option value="auto">🌐 Tự động</option>
-                    <option value="ja">🇯🇵 Nhật (ja)</option>
-                    <option value="ko">🇰🇷 Hàn (ko)</option>
                   </select>
                   <span className="text-slate-400 text-[11px]">&rarr; Đích:</span>
                   <select

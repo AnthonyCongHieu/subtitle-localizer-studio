@@ -149,11 +149,20 @@ class ProjectRepository:
         return ProjectManifestV1.from_dict(data)
 
     def list_projects(self) -> List[ProjectManifestV1]:
-        """Danh sách tất cả projects đã lưu."""
-        conn = self.db.get_connection()
-        cursor = conn.execute("SELECT manifest_json FROM projects ORDER BY updated_at DESC;")
-        rows = cursor.fetchall()
-        return [ProjectManifestV1.from_dict(json.loads(row["manifest_json"])) for row in rows]
+        """Danh sách tất cả projects đã lưu với cơ chế tự phục hồi self-healing nếu gặp lỗi disk malformed."""
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.execute("SELECT manifest_json FROM projects ORDER BY updated_at DESC;")
+            rows = cursor.fetchall()
+            return [ProjectManifestV1.from_dict(json.loads(row["manifest_json"])) for row in rows]
+        except Exception as e:
+            if "malformed" in str(e).lower() and hasattr(self.db, "recover_corrupted_database"):
+                self.db.recover_corrupted_database()
+                conn = self.db.get_connection()
+                cursor = conn.execute("SELECT manifest_json FROM projects ORDER BY updated_at DESC;")
+                rows = cursor.fetchall()
+                return [ProjectManifestV1.from_dict(json.loads(row["manifest_json"])) for row in rows]
+            raise
 
     def update_project_revision(self, manifest: ProjectManifestV1, expected_revision: int) -> bool:
         """

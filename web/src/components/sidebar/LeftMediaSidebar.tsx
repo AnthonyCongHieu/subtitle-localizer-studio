@@ -10,6 +10,7 @@ import {
   Upload,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   X,
   Loader2,
   ArrowUpDown,
@@ -24,26 +25,28 @@ import {
   Save,
   RefreshCw,
 } from 'lucide-react';
-import { ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
+import { ProjectManifestV1, SubtitleCueV1, RegionTrackV1 } from '../../types/api';
 import { PresetProfile, BUILTIN_PRESETS } from '../../types/presets';
 import { apiClient } from '../../api/client';
 import { sortProjectsNaturally } from '../../utils/drama';
+import { appLogger } from '../common/GlobalActivityLogger';
 
 export type LeftSidebarTab = 'media' | 'subtitles' | 'dubbing' | 'presets';
 export type CueFilterMode = 'all' | 'untranslated' | 'translated';
 
-export const detectVoiceProvider = (voice: string): string => {
-  if (['Puck', 'Kore', 'Fenrir', 'Aoede'].includes(voice)) return 'gemini';
-  if (
-    voice.startsWith('BV') ||
-    voice.startsWith('vi_female_huong') ||
-    voice.includes('_streaming') ||
-    voice.includes('_dsp')
-  ) {
-    return 'capcut';
-  }
-  return 'edge';
-};
+export {
+  detectVoiceProvider,
+  VOICE_CATALOG,
+  type VoiceItem,
+  VOICE_CATEGORIES,
+  type VoiceCategory,
+  MALE_VOICE_OPTIONS,
+  FEMALE_VOICE_OPTIONS,
+} from '../../constants/voiceCatalog';
+import {
+  detectVoiceProvider,
+  VOICE_CATALOG,
+} from '../../constants/voiceCatalog';
 
 interface LeftMediaSidebarProps {
   projects: ProjectManifestV1[];
@@ -56,6 +59,11 @@ interface LeftMediaSidebarProps {
   onRefreshProject?: () => void;
   onSeekToCue: (startPts: number) => void;
   onUpdateCue?: (cue: SubtitleCueV1) => void;
+  onSplitCue?: (
+    splitTime?: number,
+    targetCueId?: string,
+    customTexts?: { text1?: string; text2?: string; trans1?: string; trans2?: string }
+  ) => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
   onBatchScanProjects?: (projectIds: string[]) => void;
@@ -69,6 +77,10 @@ interface LeftMediaSidebarProps {
   onUpdatePreset?: (preset: PresetProfile) => void;
   selectedCueId?: string | null;
   onUpdateActiveProject?: (patch: Partial<ProjectManifestV1>) => void;
+  currentRoi?: RegionTrackV1;
+  isScanning?: boolean;
+  statusMessage?: string | null;
+  width?: number;
 }
 
 export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
@@ -82,6 +94,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   onRefreshProject,
   onSeekToCue,
   onUpdateCue,
+  onSplitCue: _onSplitCue,
   isCollapsed = false,
   onToggleCollapse,
   onBatchScanProjects: _onBatchScanProjects,
@@ -95,12 +108,17 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   onUpdatePreset,
   selectedCueId: _selectedCueId,
   onUpdateActiveProject,
+  currentRoi,
+  isScanning = false,
+  statusMessage,
+  width,
 }) => {
   const [activeTab, setActiveTab] = useState<LeftSidebarTab>('subtitles');
   const [searchQuery, setSearchQuery] = useState('');
   const [cueFilter, setCueFilter] = useState<CueFilterMode>('all');
   const [editingCueId, setEditingCueId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState<string>('');
+  const splitTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Media tab state: Tự động sort & Chọn nhiều tập
   const [mediaSearchQuery, setMediaSearchQuery] = useState('');
@@ -120,6 +138,8 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   const [selectedFemaleVoice, setSelectedFemaleVoice] = useState('vi-VN-HoaiMyNeural');
   const [isTestingVoice, setIsTestingVoice] = useState(false);
   const [testVoiceMsg, setTestVoiceMsg] = useState<string | null>(null);
+  const [dubbingSpeed, setDubbingSpeed] = useState<number>(1.0);
+  const [voiceCategoryFilter, setVoiceCategoryFilter] = useState<'all' | 'capcut' | 'edge' | 'gemini'>('all');
 
   // Đồng bộ cấu hình lồng tiếng riêng của video hiện tại nếu có
   useEffect(() => {
@@ -135,8 +155,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   // Preset CRUD state
   const [isCreatingPreset, setIsCreatingPreset] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
-  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
-  const [editingPresetName, setEditingPresetName] = useState('');
+  const [editingPreset, setEditingPreset] = useState<PresetProfile | null>(null);
 
   // Nạp cấu hình giọng đọc từ Backend Pipeline Settings
   useEffect(() => {
@@ -152,6 +171,15 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
             voice = pipe.dubbing.voice_male || 'BV075_streaming';
           }
           setSelectedVoice(voice);
+          if (pipe.dubbing.mode) {
+            setDubbingMode(pipe.dubbing.mode === 'multi' ? 'multi' : 'single');
+          }
+          if (pipe.dubbing.voice_male) {
+            setSelectedMaleVoice(pipe.dubbing.voice_male);
+          }
+          if (pipe.dubbing.voice_female) {
+            setSelectedFemaleVoice(pipe.dubbing.voice_female);
+          }
         }
       })
       .catch(() => {});
@@ -165,6 +193,15 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
           voice = updated.dubbing.voice_male || 'BV075_streaming';
         }
         setSelectedVoice(voice);
+        if (updated.dubbing.mode) {
+          setDubbingMode(updated.dubbing.mode === 'multi' ? 'multi' : 'single');
+        }
+        if (updated.dubbing.voice_male) {
+          setSelectedMaleVoice(updated.dubbing.voice_male);
+        }
+        if (updated.dubbing.voice_female) {
+          setSelectedFemaleVoice(updated.dubbing.voice_female);
+        }
       }
     };
     window.addEventListener('pipeline-settings-updated', handleSettingsUpdate);
@@ -182,8 +219,25 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   const [isDubbingAll, setIsDubbingAll] = useState<boolean>(false);
   const [dubAllMsg, setDubAllMsg] = useState<string | null>(null);
   const [testVoiceAudioUrl, setTestVoiceAudioUrl] = useState<string | null>(null);
+  const [currentTestingVoice, setCurrentTestingVoice] = useState<string>('');
   const cueAudioRef = useRef<HTMLAudioElement | null>(null);
   const testAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Tự động phát âm thanh mẫu trên thanh Trình phát DOM đồng bộ và giải phóng bộ nhớ blob URL
+  useEffect(() => {
+    if (testVoiceAudioUrl && testAudioRef.current) {
+      testAudioRef.current.currentTime = 0;
+      testAudioRef.current.play().catch(() => {});
+    }
+  }, [testVoiceAudioUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (testVoiceAudioUrl) {
+        URL.revokeObjectURL(testVoiceAudioUrl);
+      }
+    };
+  }, [testVoiceAudioUrl]);
 
   const handleRetranslateCue = async (cue: SubtitleCueV1, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -193,8 +247,9 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
       const updatedCue = await apiClient.retranslateCue(activeProject.project_id, cue.cue_id);
       if (onUpdateCue) onUpdateCue(updatedCue);
       if (onRefreshCues) onRefreshCues();
+      appLogger.success('Đã dịch lại câu phụ đề thành công!', 'Dịch thuật');
     } catch (err: any) {
-      alert(`Lỗi khi dịch lại câu: ${err?.message || 'Thất bại'}`);
+      appLogger.error(`Lỗi khi dịch lại câu: ${err?.message || 'Thất bại'}`, 'Dịch thuật');
     } finally {
       setRetranslatingCueId(null);
     }
@@ -251,8 +306,9 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
       }
       if (onRefreshCues) onRefreshCues();
       if (onRefreshProject) onRefreshProject();
+      appLogger.success('Đã lồng tiếng câu phụ đề thành công!', 'Lồng tiếng');
     } catch (err: any) {
-      alert(`Lỗi khi lồng tiếng câu: ${err?.message || 'Thất bại'}`);
+      appLogger.error(`Lỗi khi lồng tiếng câu: ${err?.message || 'Thất bại'}`, 'Lồng tiếng');
     } finally {
       setDubbingCueId(null);
     }
@@ -264,12 +320,14 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
     setDubAllMsg('Đang tạo thuyết minh lồng tiếng toàn bộ video...');
     try {
       const prov = detectVoiceProvider(dubbingMode === 'single' ? selectedVoice : selectedMaleVoice);
+      const rateStr = dubbingSpeed === 1.0 ? '+0%' : (dubbingSpeed > 1 ? `+${Math.round((dubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - dubbingSpeed) * 100)}%`);
       const res = await apiClient.runDubbing(activeProject.project_id, {
         mode: dubbingMode,
         voice: selectedVoice,
         voice_male: selectedMaleVoice,
         voice_female: selectedFemaleVoice,
         provider: prov,
+        rate: rateStr,
       });
       setDubAllMsg('✓ Lồng tiếng toàn video hoàn tất! Đã đồng bộ với Timeline.');
       if (onUpdateActiveProject) {
@@ -288,6 +346,34 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
     }
   };
 
+  const handleDubbingModeChange = async (mode: 'single' | 'multi') => {
+    setDubbingMode(mode);
+    try {
+      const current = await apiClient.getPipelineSettings();
+      if (current) {
+        const updated = {
+          ...current,
+          dubbing: {
+            ...current.dubbing,
+            mode,
+          },
+          batch: {
+            ...(current.batch || {}),
+            dubbing_mode: mode === 'multi' ? ('gender_multi' as const) : ('single' as const),
+          },
+        };
+        await apiClient.savePipelineSettings(updated);
+        window.dispatchEvent(
+          new CustomEvent('pipeline-settings-updated', {
+            detail: { ...updated, _source: 'LeftMediaSidebar' },
+          })
+        );
+      }
+    } catch (err) {
+      console.warn('Lỗi lưu chế độ lồng tiếng:', err);
+    }
+  };
+
   const handleVoiceChange = async (newVoice: string) => {
     setSelectedVoice(newVoice);
     setTestVoiceAudioUrl(null);
@@ -300,6 +386,11 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
           dubbing: {
             ...current.dubbing,
             voice: newVoice,
+            provider: detectVoiceProvider(newVoice) as any,
+          },
+          batch: {
+            ...(current.batch || {}),
+            dubbing_voice: newVoice,
           },
         };
         await apiClient.savePipelineSettings(updated);
@@ -311,6 +402,62 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
       }
     } catch (err) {
       console.warn('Lỗi lưu giọng đọc sang backend:', err);
+    }
+  };
+
+  const handleMaleVoiceChange = async (newMaleVoice: string) => {
+    setSelectedMaleVoice(newMaleVoice);
+    try {
+      const current = await apiClient.getPipelineSettings();
+      if (current) {
+        const updated = {
+          ...current,
+          dubbing: {
+            ...current.dubbing,
+            voice_male: newMaleVoice,
+          },
+          batch: {
+            ...(current.batch || {}),
+            dubbing_voice_male: newMaleVoice,
+          },
+        };
+        await apiClient.savePipelineSettings(updated);
+        window.dispatchEvent(
+          new CustomEvent('pipeline-settings-updated', {
+            detail: { ...updated, _source: 'LeftMediaSidebar' },
+          })
+        );
+      }
+    } catch (err) {
+      console.warn('Lỗi lưu giọng nam sang backend:', err);
+    }
+  };
+
+  const handleFemaleVoiceChange = async (newFemaleVoice: string) => {
+    setSelectedFemaleVoice(newFemaleVoice);
+    try {
+      const current = await apiClient.getPipelineSettings();
+      if (current) {
+        const updated = {
+          ...current,
+          dubbing: {
+            ...current.dubbing,
+            voice_female: newFemaleVoice,
+          },
+          batch: {
+            ...(current.batch || {}),
+            dubbing_voice_female: newFemaleVoice,
+          },
+        };
+        await apiClient.savePipelineSettings(updated);
+        window.dispatchEvent(
+          new CustomEvent('pipeline-settings-updated', {
+            detail: { ...updated, _source: 'LeftMediaSidebar' },
+          })
+        );
+      }
+    } catch (err) {
+      console.warn('Lỗi lưu giọng nữ sang backend:', err);
     }
   };
 
@@ -426,35 +573,34 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
     }
   };
 
-  // Thử giọng đọc mẫu
+  // Thử giọng đọc mẫu - Đồng bộ hóa 100% trực tiếp vào Trình phát DOM
   const handleTestVoice = async (voiceToTest?: string) => {
     const targetVoice = voiceToTest || (dubbingMode === 'single' ? selectedVoice : selectedMaleVoice);
+    setCurrentTestingVoice(targetVoice);
     setIsTestingVoice(true);
     setTestVoiceMsg(`Đang tạo âm thanh mẫu (${targetVoice})...`);
+
     if (testAudioRef.current) {
       testAudioRef.current.pause();
-      testAudioRef.current = null;
     }
+
     try {
       const prov = detectVoiceProvider(targetVoice);
+      const rateStr = dubbingSpeed === 1.0 ? '+0%' : (dubbingSpeed > 1 ? `+${Math.round((dubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - dubbingSpeed) * 100)}%`);
       const blob = await apiClient.testDubbing({
         text: 'Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio.',
         voice: targetVoice,
         provider: prov,
+        rate: rateStr,
       });
+
+      if (testVoiceAudioUrl) {
+        URL.revokeObjectURL(testVoiceAudioUrl);
+      }
+
       const url = URL.createObjectURL(blob);
       setTestVoiceAudioUrl(url);
       setTestVoiceMsg(`▶ Đang phát giọng đọc mẫu (${targetVoice})...`);
-      const audio = new Audio(url);
-      testAudioRef.current = audio;
-      audio.onended = () => {
-        setTestVoiceMsg('✓ Đã phát xong giọng đọc mẫu');
-        setTimeout(() => setTestVoiceMsg(null), 3000);
-      };
-      audio.onerror = () => {
-        setTestVoiceMsg('Lỗi phát âm thanh trên trình duyệt');
-      };
-      await audio.play();
     } catch (err: any) {
       setTestVoiceMsg(`Chưa thể phát giọng đọc thử: ${err?.message || 'Lỗi kết nối'}`);
     } finally {
@@ -530,7 +676,10 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   }
 
   return (
-    <aside className="w-88 xl:w-96 bg-slate-950 border-r border-slate-800/80 flex flex-col shrink-0 select-none z-20 min-h-0 overflow-hidden shadow-lg transition-all duration-200">
+    <aside
+      style={width ? { width: `${width}px` } : undefined}
+      className="w-88 xl:w-96 bg-slate-950 border-r border-slate-800/80 flex flex-col shrink-0 select-none z-20 min-h-0 overflow-hidden shadow-lg"
+    >
       {/* 1. Header Tab Bar (4 Tab Chuẩn CapCut PC) */}
       <div className="h-11 bg-slate-900/60 border-b border-slate-800/80 px-2 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px] flex-1 mr-2">
@@ -797,6 +946,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
             </div>
           </div>
 
+
           {/* Danh sách phụ đề cuộn được */}
           <div className="flex-1 overflow-y-auto space-y-2 pr-1 text-xs">
             {filteredCues.map((cue, idx) => {
@@ -838,13 +988,14 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                   {isEditing ? (
                     <div className="space-y-1.5 pt-1" onClick={(e) => e.stopPropagation()}>
                       <textarea
+                        ref={splitTextareaRef}
                         value={editingText}
                         onChange={(e) => setEditingText(e.target.value)}
                         className="w-full bg-slate-950 border border-indigo-500 rounded-lg p-2 text-xs text-white focus:outline-none"
                         rows={2}
                         autoFocus
                       />
-                      <div className="flex justify-end gap-1.5">
+                      <div className="flex items-center justify-end gap-1.5 ml-auto">
                         <button
                           type="button"
                           onClick={handleCancelEdit}
@@ -852,17 +1003,17 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                         >
                           Hủy
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleSaveEdit(cue)}
-                          className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold flex items-center gap-1"
-                        >
-                          <Check className="w-3 h-3" />
-                          <span>Lưu</span>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveEdit(cue)}
+                            className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold flex items-center gap-1"
+                          >
+                            <Check className="w-3 h-3" />
+                            <span>Lưu</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
+                    ) : (
                     <div className="flex items-start justify-between gap-1 group/item">
                       <div
                         className={`text-xs font-semibold select-text leading-snug ${
@@ -885,7 +1036,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                     </div>
                   )}
 
-                  {/* Thanh công cụ cho từng câu: Dịch lại AI, Lồng tiếng đơn, Nghe audio */}
+                  {/* Thanh công cụ cho từng câu: Dịch lại AI, Lồng tiếng đơn, Nghe audio, Tách câu */}
                   <div className="flex items-center justify-between gap-1 pt-1.5 mt-1 border-t border-slate-800/80 flex-wrap">
                     <div className="flex items-center gap-1">
                       <button
@@ -915,30 +1066,35 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                         <Volume2 className="w-2.5 h-2.5 text-emerald-400" />
                         <span>{playingCueAudioId === cue.cue_id ? 'Đang phát' : 'Nghe'}</span>
                       </button>
-                    </div>
+                      </div>
 
                     <div className="flex items-center gap-1">
-                      <select
-                        value={perCueVoices[cue.cue_id] || selectedVoice}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          setPerCueVoices((prev) => ({ ...prev, [cue.cue_id]: e.target.value }));
-                        }}
-                        className="bg-slate-950 border border-slate-800 rounded px-1 py-0.5 text-[9px] text-slate-300 focus:outline-none focus:border-amber-500 max-w-[90px] truncate"
-                        title="Chọn giọng đọc riêng cho câu này"
-                      >
-                        <option value="vi-VN-NamMinhNeural">Nam Minh</option>
-                        <option value="vi-VN-HoaiMyNeural">Hoài My</option>
-                        <option value="BV075_streaming">Thanh Niên</option>
-                        <option value="BV074_streaming">Cô Gái</option>
-                        <option value="BV421_vivn_streaming">Ngọt Ngào</option>
-                        <option value="BV562_streaming">Mai (Đài TH)</option>
-                        <option value="vi_female_huong">Hương (Bắc)</option>
-                        <option value="BV560_streaming">Alex</option>
-                        <option value="Puck">Puck</option>
-                        <option value="Kore">Kore</option>
-                      </select>
+                      <div className="relative flex items-center">
+                        <select
+                          value={perCueVoices[cue.cue_id] || selectedVoice}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            setPerCueVoices((prev) => ({ ...prev, [cue.cue_id]: e.target.value }));
+                          }}
+                          className="bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-lg px-2 py-1 pr-5 text-[10px] text-slate-200 appearance-none focus:outline-none focus:border-indigo-500 max-w-[105px] truncate cursor-pointer transition shadow-sm font-medium"
+                          title="Chọn giọng đọc riêng cho câu này"
+                        >
+                          <option value="vi-VN-NamMinhNeural">Nam Minh</option>
+                          <option value="vi-VN-HoaiMyNeural">Hoài My</option>
+                          <option value="BV075_streaming">Thanh Niên</option>
+                          <option value="BV074_streaming">Cô Gái</option>
+                          <option value="BV421_vivn_streaming">Ngọt Ngào</option>
+                          <option value="BV562_streaming">Mai (Đài TH)</option>
+                          <option value="vi_female_huong">Hương (Bắc)</option>
+                          <option value="BV560_streaming">Alex</option>
+                          <option value="Puck">Puck</option>
+                          <option value="Kore">Kore</option>
+                          <option value="Fenrir">Fenrir</option>
+                          <option value="Aoede">Aoede</option>
+                        </select>
+                        <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 pointer-events-none" />
+                      </div>
 
                       <button
                         type="button"
@@ -961,9 +1117,21 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
             })}
 
             {filteredCues.length === 0 && (
-              <div className="p-8 text-center text-slate-500 text-xs">
-                Chưa có câu phụ đề nào. Hãy bấm "Bắt Đầu Quét Sub" ở góc trên hoặc bảng phải để nhận diện.
-              </div>
+              isScanning ? (
+                <div className="p-8 text-center flex flex-col items-center justify-center gap-3 text-slate-300 text-xs">
+                  <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="font-medium text-indigo-300">
+                    {statusMessage || 'Đang thực thi tiến trình quét phụ đề...'}
+                  </div>
+                  <div className="text-[11px] text-slate-500 max-w-xs leading-relaxed">
+                    Hệ thống đang trích xuất frame, chạy OCR và tinh chỉnh ranh giới. Danh sách câu sẽ tự động xuất hiện khi hoàn thành.
+                  </div>
+                </div>
+              ) : (
+                <div className="p-8 text-center text-slate-500 text-xs">
+                  Chưa có câu phụ đề nào. Hãy bấm "Bắt Đầu Quét Sub" ở góc trên hoặc bảng phải để nhận diện.
+                </div>
+              )
             )}
           </div>
         </div>
@@ -987,7 +1155,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setDubbingMode('single')}
+                  onClick={() => handleDubbingModeChange('single')}
                   className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
                     dubbingMode === 'single'
                       ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
@@ -998,7 +1166,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDubbingMode('multi')}
+                  onClick={() => handleDubbingModeChange('multi')}
                   className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
                     dubbingMode === 'multi'
                       ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
@@ -1010,75 +1178,158 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
               </div>
             </div>
 
-            {/* Khi chọn Đơn Giọng: 1 Giọng Đọc Duy Nhất */}
+            {/* Khi chọn Đơn Giọng: Danh Sách Thẻ Giọng Đọc & Bộ Lọc Nhà Cung Cấp */}
             {dubbingMode === 'single' && (
-              <div className="space-y-1.5 pt-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-slate-400 text-[10px] block">Chọn giọng đọc chính:</label>
-                  {detectVoiceProvider(selectedVoice) === 'capcut' && (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                      🎬 CapCut Cloud TTS
-                    </span>
-                  )}
-                  {detectVoiceProvider(selectedVoice) === 'edge' && (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
-                      ⚡ Microsoft Edge-TTS
-                    </span>
-                  )}
-                  {detectVoiceProvider(selectedVoice) === 'gemini' && (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                      🌟 Gemini AI TTS
-                    </span>
-                  )}
+              <div className="space-y-2 pt-1">
+                {/* Bộ lọc loại giọng đọc */}
+                <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[10px] select-none">
+                  {[
+                    { id: 'all', label: 'Tất cả' },
+                    { id: 'capcut', label: '🎬 CapCut Trend' },
+                    { id: 'edge', label: '⚡ Edge-TTS' },
+                    { id: 'gemini', label: '🌟 Gemini AI' },
+                  ].map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setVoiceCategoryFilter(cat.id as any)}
+                      className={`px-2 py-1 rounded-full font-semibold shrink-0 transition cursor-pointer ${
+                        voiceCategoryFilter === cat.id
+                          ? 'bg-amber-500 text-slate-950 shadow-sm'
+                          : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
                 </div>
-                <select
-                  value={selectedVoice}
-                  onChange={(e) => handleVoiceChange(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
-                >
-                  <optgroup label="🇻🇳 Giọng Đọc Chuẩn Edge TTS (Miễn phí & Tự nhiên)">
-                    <option value="vi-VN-NamMinhNeural">Nam Minh (Nam trầm ấm, kịch tính, chuẩn đài)</option>
-                    <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ truyền cảm, dịu dàng, chuẩn phim)</option>
-                  </optgroup>
 
-                  <optgroup label="🎬 Giọng Đọc CapCut Hot Trend (Review Phim & TikTok)">
-                    <option value="BV075_streaming">Thanh Niên Tự Tin (Review phim)</option>
-                    <option value="BV074_streaming">Cô Gái Hoạt Ngôn (Tươi sáng, thu hút)</option>
-                    <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (Tâm sự, nhẹ nhàng)</option>
-                    <option value="BV562_streaming">Mai (Thuyết minh chuẩn đài truyền hình)</option>
-                    <option value="vi_female_huong">Hương (Nữ phổ thông miền Bắc)</option>
-                    <option value="BV560_streaming">Alex Đại Đế (Nam trầm quyền uy)</option>
-                    <option value="BV075_streaming_vibrato_dsp">Việt Méo (Hài hước, parody)</option>
-                    <option value="BV074_streaming_dsp">Bé Nhí Nhảnh (Trẻ em dễ thương)</option>
-                  </optgroup>
+                {/* Danh Sách Thẻ Giọng Đọc Trực Quan (Visual Voice Cards) */}
+                <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
+                  {VOICE_CATALOG
+                    .filter((v) => voiceCategoryFilter === 'all' || v.provider === voiceCategoryFilter)
+                    .map((v) => {
+                      const isSelected = selectedVoice === v.id;
+                      const isTestingThis = isTestingVoice && currentTestingVoice === v.id;
+                      return (
+                        <div
+                          key={v.id}
+                          onClick={() => handleVoiceChange(v.id)}
+                          className={`p-2 rounded-xl border transition flex items-center justify-between cursor-pointer active:scale-98 ${
+                            isSelected
+                              ? 'bg-amber-950/40 border-amber-500 shadow-md ring-1 ring-amber-500/40'
+                              : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div
+                              className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                                v.gender === 'Nam' ? 'bg-sky-500/20 text-sky-300' : 'bg-rose-500/20 text-rose-300'
+                              }`}
+                            >
+                              {v.gender === 'Nam' ? '♂' : '♀'}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-semibold text-slate-100 text-xs truncate">{v.name}</span>
+                                <span
+                                  className={`text-[9px] px-1 py-0.2 rounded font-bold ${
+                                    v.provider === 'capcut'
+                                      ? 'bg-amber-500/20 text-amber-300'
+                                      : v.provider === 'gemini'
+                                      ? 'bg-purple-500/20 text-purple-300'
+                                      : 'bg-sky-500/20 text-sky-300'
+                                  }`}
+                                >
+                                  {v.provider === 'capcut' ? 'CapCut' : v.provider === 'gemini' ? 'Gemini' : 'Edge'}
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-400 truncate">{v.style}</p>
+                            </div>
+                          </div>
 
-                  <optgroup label="🌟 Giọng Đọc Gemini AI TTS (Đa sắc thái)">
-                    <option value="Puck">Puck (Gemini Tự Nhiên)</option>
-                    <option value="Kore">Kore (Gemini Truyền Cảm)</option>
-                    <option value="Fenrir">Fenrir (Gemini Trầm Ấm)</option>
-                    <option value="Aoede">Aoede (Gemini Thanh Thoát)</option>
-                  </optgroup>
+                          {/* Nút nghe thử mẫu */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTestVoice(v.id);
+                            }}
+                            disabled={isTestingThis}
+                            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-amber-300 transition cursor-pointer shrink-0 ml-1.5 active:scale-95"
+                            title={`Nghe thử ${v.name}`}
+                          >
+                            {isTestingThis ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                            ) : (
+                              <Volume2 className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })}
+                </div>
 
-                  <optgroup label="🌍 Giọng Đọc Quốc Tế (English)">
-                    <option value="en-US-JennyNeural">Jenny (US Female Warm)</option>
-                    <option value="en-US-GuyNeural">Guy (US Male Broadcast)</option>
-                    <option value="en-US-AriaNeural">Aria (US Dynamic Narrator)</option>
-                    <option value="en-US-ChristopherNeural">Christopher (US Deep Storyteller)</option>
-                    <option value="en-GB-RyanNeural">Ryan (British Classic)</option>
-                    <option value="en-GB-SoniaNeural">Sonia (British Elegant)</option>
-                  </optgroup>
-                </select>
+                {/* Dropdown chọn nhanh chuẩn giao diện */}
+                <div className="space-y-1 pt-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-400 text-[10px] block font-medium">Hoặc chọn nhanh từ danh mục:</label>
+                    {detectVoiceProvider(selectedVoice) === 'capcut' && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                        🎬 CapCut Cloud TTS
+                      </span>
+                    )}
+                    {detectVoiceProvider(selectedVoice) === 'edge' && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
+                        ⚡ Microsoft Edge-TTS
+                      </span>
+                    )}
+                    {detectVoiceProvider(selectedVoice) === 'gemini' && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                        🌟 Gemini AI TTS
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative flex items-center">
+                    <select
+                      value={selectedVoice}
+                      onChange={(e) => handleVoiceChange(e.target.value)}
+                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                    >
+                      <optgroup label="🎬 Giọng Đọc CapCut Hot Trend (Review Phim & TikTok)">
+                        <option value="BV075_streaming">Thanh Niên Tự Tin (Review phim)</option>
+                        <option value="BV074_streaming">Cô Gái Hoạt Ngôn (Tươi sáng, thu hút)</option>
+                        <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (Tâm sự, nhẹ nhàng)</option>
+                        <option value="BV562_streaming">Mai (Thuyết minh chuẩn đài truyền hình)</option>
+                        <option value="vi_female_huong">Hương (Nữ phổ thông miền Bắc)</option>
+                        <option value="BV560_streaming">Alex Đại Đế (Nam trầm quyền uy)</option>
+                        <option value="BV075_streaming_vibrato_dsp">Việt Méo (Hài hước, parody)</option>
+                        <option value="BV074_streaming_dsp">Bé Nhí Nhảnh (Trẻ em dễ thương)</option>
+                      </optgroup>
 
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => handleTestVoice(selectedVoice)}
-                    disabled={isTestingVoice}
-                    className="flex-1 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
-                  >
-                    {isTestingVoice ? <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" /> : <Volume2 className="w-3.5 h-3.5 text-amber-400" />}
-                    <span>Nghe Thử Giọng Mẫu</span>
-                  </button>
+                      <optgroup label="🇻🇳 Giọng Đọc Chuẩn Edge TTS (Miễn phí & Tự nhiên)">
+                        <option value="vi-VN-NamMinhNeural">Nam Minh (Nam trầm ấm, kịch tính, chuẩn đài)</option>
+                        <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ truyền cảm, dịu dàng, chuẩn phim)</option>
+                      </optgroup>
+
+                      <optgroup label="🌟 Giọng Đọc Gemini AI TTS (Đa sắc thái)">
+                        <option value="Puck">Puck (Gemini Tự Nhiên)</option>
+                        <option value="Kore">Kore (Gemini Truyền Cảm)</option>
+                        <option value="Fenrir">Fenrir (Gemini Trầm Ấm)</option>
+                        <option value="Aoede">Aoede (Gemini Thanh Thoát)</option>
+                      </optgroup>
+
+                      <optgroup label="🌍 Giọng Đọc Quốc Tế (English)">
+                        <option value="en-US-JennyNeural">Jenny (US Female Warm)</option>
+                        <option value="en-US-GuyNeural">Guy (US Male Broadcast)</option>
+                        <option value="en-US-AriaNeural">Aria (US Dynamic Narrator)</option>
+                        <option value="en-US-ChristopherNeural">Christopher (US Deep Storyteller)</option>
+                        <option value="en-GB-RyanNeural">Ryan (British Classic)</option>
+                        <option value="en-GB-SoniaNeural">Sonia (British Elegant)</option>
+                      </optgroup>
+                    </select>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                  </div>
                 </div>
               </div>
             )}
@@ -1089,36 +1340,42 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 {/* Giọng Nam */}
                 <div className="space-y-1">
                   <label className="text-slate-400 text-[10px] block font-medium">Giọng Nam (Phân vai thoại nam):</label>
-                  <select
-                    value={selectedMaleVoice}
-                    onChange={(e) => setSelectedMaleVoice(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
-                  >
-                    <option value="vi-VN-NamMinhNeural">Nam Minh (Edge-TTS trầm ấm)</option>
-                    <option value="BV075_streaming">Thanh Niên Tự Tin (CapCut Review)</option>
-                    <option value="BV560_streaming">Alex Đại Đế (CapCut Uy quyền)</option>
-                    <option value="BV075_streaming_vibrato_dsp">Việt Méo (CapCut Parody)</option>
-                    <option value="Fenrir">Fenrir (Gemini Trầm)</option>
-                    <option value="Puck">Puck (Gemini Tự nhiên)</option>
-                  </select>
+                  <div className="relative flex items-center">
+                    <select
+                      value={selectedMaleVoice}
+                      onChange={(e) => handleMaleVoiceChange(e.target.value)}
+                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                    >
+                      <option value="vi-VN-NamMinhNeural">Nam Minh (Edge-TTS trầm ấm)</option>
+                      <option value="BV075_streaming">Thanh Niên Tự Tin (CapCut Review)</option>
+                      <option value="BV560_streaming">Alex Đại Đế (CapCut Uy quyền)</option>
+                      <option value="BV075_streaming_vibrato_dsp">Việt Méo (CapCut Parody)</option>
+                      <option value="Fenrir">Fenrir (Gemini Trầm)</option>
+                      <option value="Puck">Puck (Gemini Tự nhiên)</option>
+                    </select>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                  </div>
                 </div>
 
                 {/* Giọng Nữ */}
                 <div className="space-y-1">
                   <label className="text-slate-400 text-[10px] block font-medium">Giọng Nữ (Phân vai thoại nữ):</label>
-                  <select
-                    value={selectedFemaleVoice}
-                    onChange={(e) => setSelectedFemaleVoice(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
-                  >
-                    <option value="vi-VN-HoaiMyNeural">Hoài My (Edge-TTS Dịu dàng)</option>
-                    <option value="BV074_streaming">Cô Gái Hoạt Ngôn (CapCut)</option>
-                    <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (CapCut)</option>
-                    <option value="BV562_streaming">Mai (CapCut Thuyết minh)</option>
-                    <option value="vi_female_huong">Hương (CapCut Miền Bắc)</option>
-                    <option value="Kore">Kore (Gemini Nữ)</option>
-                    <option value="Aoede">Aoede (Gemini Thanh thoát)</option>
-                  </select>
+                  <div className="relative flex items-center">
+                    <select
+                      value={selectedFemaleVoice}
+                      onChange={(e) => handleFemaleVoiceChange(e.target.value)}
+                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                    >
+                      <option value="vi-VN-HoaiMyNeural">Hoài My (Edge-TTS Dịu dàng)</option>
+                      <option value="BV074_streaming">Cô Gái Hoạt Ngôn (CapCut)</option>
+                      <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (CapCut)</option>
+                      <option value="BV562_streaming">Mai (CapCut Thuyết minh)</option>
+                      <option value="vi_female_huong">Hương (CapCut Miền Bắc)</option>
+                      <option value="Kore">Kore (Gemini Nữ)</option>
+                      <option value="Aoede">Aoede (Gemini Thanh thoát)</option>
+                    </select>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                  </div>
                 </div>
 
                 {/* 2 nút nghe thử Nam / Nữ */}
@@ -1145,6 +1402,50 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
               </div>
             )}
 
+            {/* Tốc Độ Đọc Giọng AI */}
+            <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
+              <div className="flex items-center justify-between text-[11px]">
+                <label className="text-slate-300 font-medium">Tốc độ đọc giọng AI:</label>
+                <span className="font-mono text-amber-400 font-bold bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 text-[10px]">
+                  {dubbingSpeed.toFixed(2)}x ({dubbingSpeed === 1.0 ? 'Chuẩn' : dubbingSpeed > 1 ? `+${Math.round((dubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - dubbingSpeed) * 100)}%`})
+                </span>
+              </div>
+
+              {/* Preset Tốc Độ Nhanh */}
+              <div className="grid grid-cols-4 gap-1">
+                {[
+                  { val: 0.9, label: '0.9x' },
+                  { val: 1.0, label: '1.0x Chuẩn' },
+                  { val: 1.15, label: '1.15x Review' },
+                  { val: 1.3, label: '1.3x Nhanh' },
+                ].map((preset) => (
+                  <button
+                    key={preset.val}
+                    type="button"
+                    onClick={() => setDubbingSpeed(preset.val)}
+                    className={`py-1 rounded text-[10px] font-semibold transition cursor-pointer active:scale-95 ${
+                      Math.abs(dubbingSpeed - preset.val) < 0.01
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Slider tùy biến */}
+              <input
+                type="range"
+                min="0.8"
+                max="1.5"
+                step="0.05"
+                value={dubbingSpeed}
+                onChange={(e) => setDubbingSpeed(parseFloat(e.target.value))}
+                className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+              />
+            </div>
+
             {testVoiceMsg && (
               <div className="p-2 bg-indigo-950/60 border border-indigo-800/80 rounded text-[10px] text-indigo-300 text-center font-medium">
                 {testVoiceMsg}
@@ -1156,14 +1457,32 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 <div className="text-[10px] text-amber-300 font-mono flex items-center justify-between">
                   <span>Trình phát giọng đọc mẫu:</span>
                   <span className="text-slate-400 truncate max-w-[150px]">
-                    {dubbingMode === 'single' ? selectedVoice : `${selectedMaleVoice} / ${selectedFemaleVoice}`}
+                    {currentTestingVoice || (dubbingMode === 'single' ? selectedVoice : `${selectedMaleVoice} / ${selectedFemaleVoice}`)}
                   </span>
                 </div>
                 <audio
-                  key={testVoiceAudioUrl}
+                  ref={testAudioRef}
                   controls
+                  autoPlay
                   src={testVoiceAudioUrl}
                   className="w-full h-8"
+                  onPlay={() => {
+                    const voiceName = currentTestingVoice || (dubbingMode === 'single' ? selectedVoice : selectedMaleVoice);
+                    setTestVoiceMsg(`▶ Đang phát giọng đọc mẫu (${voiceName})...`);
+                  }}
+                  onPause={() => {
+                    if (testAudioRef.current && !testAudioRef.current.ended) {
+                      const voiceName = currentTestingVoice || (dubbingMode === 'single' ? selectedVoice : selectedMaleVoice);
+                      setTestVoiceMsg(`⏸ Đã tạm dừng (${voiceName})`);
+                    }
+                  }}
+                  onEnded={() => {
+                    setTestVoiceMsg('✓ Đã phát xong giọng đọc mẫu');
+                    setTimeout(() => setTestVoiceMsg(null), 3500);
+                  }}
+                  onError={() => {
+                    setTestVoiceMsg('Lỗi phát âm thanh trên trình duyệt');
+                  }}
                 />
               </div>
             )}
@@ -1174,7 +1493,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 type="button"
                 onClick={handleDubAllVideo}
                 disabled={isDubbingAll || !activeProject || cues.length === 0}
-                title={cues.length === 0 ? "Cần quét hoặc nhập phụ đề trước khi lồng tiếng" : "Lồng Tiếng Toàn Bộ Video"}
+                title={cues.length === 0 ? "Cần quét hoặc nhập phụ đề trước khi lồng tiếng" : `Lồng Tiếng Toàn Bộ Video (${cues.length} câu)`}
                 className={`w-full py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-lg flex items-center justify-center gap-2 shadow-md transition active:scale-98 disabled:opacity-50 ${cues.length === 0 ? 'cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 {isDubbingAll ? (
@@ -1185,7 +1504,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 ) : (
                   <>
                     <Mic className="w-3.5 h-3.5 text-slate-950" />
-                    <span>Lồng Tiếng Toàn Bộ Video</span>
+                    <span>Lồng Tiếng Toàn Bộ Video ({cues.length} câu)</span>
                   </>
                 )}
               </button>
@@ -1284,61 +1603,292 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
             <div className="space-y-2 pt-1">
               {((presets && presets.length > 0) ? presets : BUILTIN_PRESETS).map((preset) => {
                 const isCurrentPreset = preset.id === activePresetId;
-                const isEditing = editingPresetId === preset.id;
+                const isEditing = editingPreset?.id === preset.id;
                 return (
                   <div
                     key={preset.id}
-                    onClick={() => onSelectPreset?.(preset)}
-                    className={`p-3 rounded-xl border transition cursor-pointer flex flex-col gap-1.5 relative group/card ${
-                      isCurrentPreset
-                        ? 'bg-indigo-950/90 border-indigo-500 ring-1 ring-indigo-500/50 shadow-md'
-                        : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900/60'
+                    onClick={() => {
+                      if (!isEditing) onSelectPreset?.(preset);
+                    }}
+                    className={`p-3 rounded-xl border transition flex flex-col gap-1.5 relative group/card ${
+                      isEditing
+                        ? 'bg-slate-900/95 border-indigo-500 shadow-xl cursor-default'
+                        : isCurrentPreset
+                        ? 'bg-indigo-950/90 border-indigo-500 ring-1 ring-indigo-500/50 shadow-md cursor-pointer'
+                        : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900/60 cursor-pointer'
                     }`}
                   >
-                    {isEditing ? (
-                      <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          value={editingPresetName}
-                          onChange={(e) => setEditingPresetName(e.target.value)}
-                          className="w-full bg-slate-900 border border-indigo-400 rounded px-2 py-1 text-xs text-white focus:outline-none"
-                          autoFocus
-                        />
-                        <div className="flex justify-end gap-1">
+                    {isEditing && editingPreset ? (
+                      <div className="space-y-2.5 p-1 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                          <span className="text-[11px] font-bold text-indigo-300 flex items-center gap-1.5">
+                            <Sliders className="w-3.5 h-3.5 text-indigo-400" />
+                            Chỉnh Sửa Sâu Cấu Hình Preset
+                          </span>
                           <button
                             type="button"
-                            onClick={() => setEditingPresetId(null)}
-                            className="px-2 py-0.5 rounded bg-slate-800 text-[10px] text-slate-300"
+                            onClick={() => setEditingPreset(null)}
+                            className="p-1 text-slate-400 hover:text-white"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* 1. Tên Preset */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-slate-400 font-medium block">Tên Preset:</label>
+                          <input
+                            type="text"
+                            value={editingPreset.name}
+                            onChange={(e) => setEditingPreset({ ...editingPreset, name: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-400"
+                            placeholder="Tên chuẩn cấu hình..."
+                          />
+                        </div>
+
+                        {/* 2. Tỉ lệ khung hình & Khớp khung hình */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-slate-400 font-medium block">Tỉ lệ khung hình:</label>
+                            <div className="relative flex items-center">
+                              <select
+                                value={editingPreset.aspect_ratio}
+                                onChange={(e) => setEditingPreset({ ...editingPreset, aspect_ratio: e.target.value as any })}
+                                className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-700 hover:border-slate-600 rounded-lg p-1.5 pr-7 text-[11px] text-slate-200 appearance-none focus:outline-none focus:border-indigo-400 transition cursor-pointer"
+                              >
+                                <option value="9:16">9:16 (Dọc TikTok/Reels)</option>
+                                <option value="16:9">16:9 (Ngang YouTube)</option>
+                                <option value="1:1">1:1 (Vuông Facebook)</option>
+                                <option value="2.35:1">2.35:1 (Điện ảnh)</option>
+                                <option value="4:3">4:3 (Truyền hình)</option>
+                                <option value="original">Gốc (Original)</option>
+                              </select>
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-slate-400 font-medium block">Khớp khung hình:</label>
+                            <div className="relative flex items-center">
+                              <select
+                                value={editingPreset.fit_mode || 'contain'}
+                                onChange={(e) => setEditingPreset({ ...editingPreset, fit_mode: e.target.value as any })}
+                                className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-700 hover:border-slate-600 rounded-lg p-1.5 pr-7 text-[11px] text-slate-200 appearance-none focus:outline-none focus:border-indigo-400 transition cursor-pointer"
+                              >
+                                <option value="contain">Contain (Giữ trọn)</option>
+                                <option value="cover">Cover (Lấp đầy)</option>
+                              </select>
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 3. Kiểu che mờ & Độ mờ */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-slate-400 font-medium block">Kiểu che mờ Sub gốc:</label>
+                          <div className="relative flex items-center">
+                            <select
+                              value={editingPreset.mask_style}
+                              onChange={(e) => setEditingPreset({ ...editingPreset, mask_style: e.target.value as any })}
+                              className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-700 hover:border-slate-600 rounded-lg p-1.5 pr-7 text-[11px] text-slate-200 appearance-none focus:outline-none focus:border-indigo-400 transition cursor-pointer"
+                            >
+                              <option value="blur">Mờ hòa tan tự nhiên (blur)</option>
+                              <option value="feather_tight">Mờ bám sát dòng chữ (feather_tight)</option>
+                              <option value="optical_blend">Hòa tan quang học (optical_blend)</option>
+                              <option value="soft_cinema">Gradient điện ảnh mềm (soft_cinema)</option>
+                              <option value="glass">Kính mờ trong suốt (glass)</option>
+                              <option value="ambient">Gradient đáy êm dịu (ambient)</option>
+                              <option value="feather">Viền lông mềm (feather)</option>
+                              <option value="mosaic">Khảm Mosaic (mosaic)</option>
+                              <option value="box">Hộp đen Cinema (box)</option>
+                            </select>
+                            <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                          </div>
+                        </div>
+
+                        {/* Thanh trượt Độ mờ Blur */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[10px] text-slate-400">
+                            <span>Độ mạnh mờ:</span>
+                            <span className="text-amber-400 font-mono font-bold">{editingPreset.blur_strength ?? 20}px</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="4"
+                            max="50"
+                            step="2"
+                            value={editingPreset.blur_strength ?? 20}
+                            onChange={(e) => setEditingPreset({ ...editingPreset, blur_strength: parseInt(e.target.value, 10) })}
+                            className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                          />
+                        </div>
+
+                        {/* 4. Vị trí phụ đề dịch */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-slate-400 font-medium block">Vị trí hiển thị Sub dịch:</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditingPreset({ ...editingPreset, subtitle_placement: 'roi' })}
+                              className={`py-1 px-2 rounded-lg text-[10px] font-semibold border transition cursor-pointer ${
+                                (editingPreset.subtitle_placement || 'roi') === 'roi'
+                                  ? 'bg-indigo-600 border-indigo-400 text-white'
+                                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              Theo vùng quét (ROI)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingPreset({ ...editingPreset, subtitle_placement: 'bottom' })}
+                              className={`py-1 px-2 rounded-lg text-[10px] font-semibold border transition cursor-pointer ${
+                                editingPreset.subtitle_placement === 'bottom'
+                                  ? 'bg-indigo-600 border-indigo-400 text-white'
+                                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              Cố định đáy (Bottom)
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 5. Lật ngang Mirror */}
+                        <label className="flex items-center gap-2 p-1.5 bg-slate-950/60 rounded-lg border border-slate-800/80 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(editingPreset.is_flipped_h)}
+                            onChange={(e) => setEditingPreset({ ...editingPreset, is_flipped_h: e.target.checked })}
+                            className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span className="text-[10px] text-slate-300 font-medium">Lật ngang khung hình (Mirror chống bản quyền)</span>
+                        </label>
+
+                        {/* 6. Vùng tọa độ ROI */}
+                        <div className="space-y-1.5 p-2 bg-slate-950 rounded-lg border border-slate-800">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="text-slate-400 font-medium">Tọa độ Vùng quét ROI:</span>
+                            {currentRoi && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    roi: {
+                                      x: currentRoi.x,
+                                      y: currentRoi.y,
+                                      width: currentRoi.width,
+                                      height: currentRoi.height,
+                                    },
+                                  });
+                                }}
+                                className="text-cyan-400 hover:text-cyan-300 font-semibold underline text-[9px] cursor-pointer"
+                                title="Gán tọa độ vùng quét đang chọn trên màn hình vào Preset này"
+                              >
+                                📍 Lấy ROI hiện tại
+                              </button>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-4 gap-1 text-[10px]">
+                            <div>
+                              <span className="text-slate-500 text-[9px] block">X (%):</span>
+                              <input
+                                type="number"
+                                step="1"
+                                min="0"
+                                max="100"
+                                value={Math.round((editingPreset.roi?.x ?? 0.08) * 100)}
+                                onChange={(e) => {
+                                  const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) / 100;
+                                  setEditingPreset({ ...editingPreset, roi: { ...(editingPreset.roi || { x: 0, y: 0, width: 1, height: 1 }), x: val } });
+                                }}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-center text-[10px]"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-slate-500 text-[9px] block">Y (%):</span>
+                              <input
+                                type="number"
+                                step="1"
+                                min="0"
+                                max="100"
+                                value={Math.round((editingPreset.roi?.y ?? 0.78) * 100)}
+                                onChange={(e) => {
+                                  const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) / 100;
+                                  setEditingPreset({ ...editingPreset, roi: { ...(editingPreset.roi || { x: 0, y: 0, width: 1, height: 1 }), y: val } });
+                                }}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-center text-[10px]"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-slate-500 text-[9px] block">Rộng (%):</span>
+                              <input
+                                type="number"
+                                step="1"
+                                min="5"
+                                max="100"
+                                value={Math.round((editingPreset.roi?.width ?? 0.84) * 100)}
+                                onChange={(e) => {
+                                  const val = Math.max(0.05, Math.min(1, parseFloat(e.target.value) || 0.1)) / 100;
+                                  setEditingPreset({ ...editingPreset, roi: { ...(editingPreset.roi || { x: 0, y: 0, width: 1, height: 1 }), width: val } });
+                                }}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-center text-[10px]"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-slate-500 text-[9px] block">Cao (%):</span>
+                              <input
+                                type="number"
+                                step="1"
+                                min="3"
+                                max="100"
+                                value={Math.round((editingPreset.roi?.height ?? 0.18) * 100)}
+                                onChange={(e) => {
+                                  const val = Math.max(0.02, Math.min(1, parseFloat(e.target.value) || 0.05)) / 100;
+                                  setEditingPreset({ ...editingPreset, roi: { ...(editingPreset.roi || { x: 0, y: 0, width: 1, height: 1 }), height: val } });
+                                }}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-slate-200 text-center text-[10px]"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Nút Hủy & Lưu */}
+                        <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => setEditingPreset(null)}
+                            className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] transition cursor-pointer"
                           >
                             Hủy
                           </button>
                           <button
                             type="button"
                             onClick={() => {
-                              if (onUpdatePreset) {
-                                onUpdatePreset({ ...preset, name: editingPresetName });
+                              if (onUpdatePreset && editingPreset) {
+                                onUpdatePreset(editingPreset);
                               }
-                              setEditingPresetId(null);
+                              setEditingPreset(null);
                             }}
-                            className="px-2 py-0.5 rounded bg-indigo-600 text-[10px] text-white font-semibold"
+                            className="px-3.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] flex items-center gap-1 shadow transition cursor-pointer"
                           >
-                            Lưu
+                            <Save className="w-3 h-3" />
+                            <span>Lưu Cấu Hình</span>
                           </button>
                         </div>
                       </div>
                     ) : (
-                      <div className="flex items-center justify-between">
-                        <div className="font-semibold text-slate-200 text-xs flex items-center gap-1.5 truncate max-w-[170px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-semibold text-slate-200 text-xs flex items-center gap-1.5 min-w-0 flex-1">
                           <Sparkles className={`w-3.5 h-3.5 shrink-0 ${isCurrentPreset ? 'text-amber-400' : 'text-indigo-400'}`} />
-                          <span className="truncate">{preset.name}</span>
+                          <span className="truncate" title={preset.name}>{preset.name}</span>
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 shrink-0">
                           {isCurrentPreset ? (
-                            <span className="px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-300 border border-indigo-500/50 text-[10px] font-bold">
-                              ✓ Đang chọn
+                            <span className="px-2 py-0.5 rounded-full bg-indigo-500/25 text-indigo-300 border border-indigo-500/50 text-[10px] font-bold whitespace-nowrap shrink-0 flex items-center gap-1 shadow-sm">
+                              <span>✓</span>
+                              <span>Đang chọn</span>
                             </span>
                           ) : (
-                            <span className="text-[10px] text-slate-500 group-hover/card:text-slate-300">
+                            <span className="text-[10px] text-slate-400 group-hover/card:text-indigo-300 transition whitespace-nowrap shrink-0 font-medium">
                               Áp dụng
                             </span>
                           )}
@@ -1348,11 +1898,10 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setEditingPresetId(preset.id);
-                              setEditingPresetName(preset.name);
+                              setEditingPreset({ ...preset, roi: { ...preset.roi } });
                             }}
-                            className="opacity-0 group-hover/card:opacity-100 p-1 hover:text-white text-slate-400 transition"
-                            title="Đổi tên preset"
+                            className="opacity-0 group-hover/card:opacity-100 p-1 hover:text-white text-slate-400 transition cursor-pointer"
+                            title="Chỉnh sửa sâu cấu hình preset"
                           >
                             <Edit2 className="w-3 h-3" />
                           </button>
@@ -1365,7 +1914,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                                   onDeletePreset(preset.id);
                                 }
                               }}
-                              className="opacity-0 group-hover/card:opacity-100 p-1 hover:text-rose-400 text-slate-400 transition"
+                              className="opacity-0 group-hover/card:opacity-100 p-1 hover:text-rose-400 text-slate-400 transition cursor-pointer"
                               title="Xóa preset này"
                             >
                               <Trash2 className="w-3 h-3" />

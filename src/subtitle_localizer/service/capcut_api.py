@@ -215,7 +215,7 @@ class CapCutSubtitleClient:
         self,
         endpoint: str = DEFAULT_CAPCUT_ENDPOINT,
         session_token: str = "",
-        timeout: float = 60.0,
+        timeout: float = 180.0,
     ) -> None:
         self.endpoint = (endpoint or DEFAULT_CAPCUT_ENDPOINT).rstrip("/")
         self.session_token = session_token.strip()
@@ -466,7 +466,7 @@ class CapCutSubtitleClient:
         req_commit = urllib.request.Request(
             commit_url, data=c_bytes, headers=commit_headers, method="POST"
         )
-        with urllib.request.urlopen(req_commit, timeout=60) as resp:
+        with urllib.request.urlopen(req_commit, timeout=180) as resp:
             commit_data = json.loads(resp.read().decode("utf-8"))
 
         res_node = commit_data["Result"]["Results"][0]
@@ -526,7 +526,7 @@ class CapCutSubtitleClient:
         req_stt = urllib.request.Request(
             stt_url, data=stt_body_text.encode("utf-8"), headers=stt_headers, method="POST"
         )
-        with urllib.request.urlopen(req_stt, timeout=60) as resp:
+        with urllib.request.urlopen(req_stt, timeout=180) as resp:
             stt_res = json.loads(resp.read().decode("utf-8"))
 
         if str(stt_res.get("ret")) != "0":
@@ -558,12 +558,12 @@ class CapCutSubtitleClient:
             query_url, self.device["appvr"], query_headers["device-time"], self.device["tdid"]
         )
 
-        for _ in range(30):
-            time.sleep(1.0)
+        for _ in range(150):
+            time.sleep(1.5)
             req_poll = urllib.request.Request(
                 query_url, data=query_body_text.encode("utf-8"), headers=query_headers, method="POST"
             )
-            with urllib.request.urlopen(req_poll, timeout=30) as resp:
+            with urllib.request.urlopen(req_poll, timeout=60) as resp:
                 poll_res = json.loads(resp.read().decode("utf-8"))
 
             q_tasks = (poll_res.get("data") or {}).get("tasks") or []

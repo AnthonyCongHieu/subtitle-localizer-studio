@@ -258,7 +258,7 @@ class GeminiTTSClient:
         text: str,
         voice: str = "Puck",
         style: str = "dramatic",
-        timeout: float = 25.0,
+        timeout: float = 120.0,
         max_retries: int = 3,
     ) -> bytes:
         """Sinh giọng đọc từ Google Gemini 3.1 Flash TTS và trả về dữ liệu MP3 (bytes)."""

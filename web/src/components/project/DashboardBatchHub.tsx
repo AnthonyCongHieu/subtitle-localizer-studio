@@ -47,9 +47,18 @@ import {
   SlidersHorizontal,
   RotateCcw,
   Save,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { RoiOverlay } from '../roi/RoiOverlay';
 import { GlobalPipelineSettings } from '../../api/client';
+import {
+  VOICE_CATALOG,
+  detectVoiceProvider,
+  VOICE_CATEGORIES,
+  VoiceCategory,
+} from '../../constants/voiceCatalog';
 import {
   loadBatchExportConfig,
   saveBatchExportConfig,
@@ -606,10 +615,94 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   const [batchDubbingEnabled, setBatchDubbingEnabled] = useState<boolean>(() => loadBatchExportConfig().batchDubbingEnabled);
   const [batchDubbingMode, setBatchDubbingMode] = useState<'single' | 'gender_multi'>(() => loadBatchExportConfig().batchDubbingMode);
   const [batchDubbingVoice, setBatchDubbingVoice] = useState<string>(() => loadBatchExportConfig().batchDubbingVoice);
+  const [batchDubbingVoiceMale, setBatchDubbingVoiceMale] = useState<string>(() => loadBatchExportConfig().batchDubbingVoiceMale || 'vi-VN-NamMinhNeural');
+  const [batchDubbingVoiceFemale, setBatchDubbingVoiceFemale] = useState<string>(() => loadBatchExportConfig().batchDubbingVoiceFemale || 'vi-VN-HoaiMyNeural');
+  const [batchDubbingSpeed, setBatchDubbingSpeed] = useState<number>(() => loadBatchExportConfig().batchDubbingSpeed ?? 1.0);
+  const [isDubbingExpanded, setIsDubbingExpanded] = useState<boolean>(false);
+  const activeAudioInstanceRef = useRef<HTMLAudioElement | null>(null);
+  const [voiceCategoryFilter, setVoiceCategoryFilter] = useState<VoiceCategory>('all');
+  const [isTestingVoice, setIsTestingVoice] = useState<boolean>(false);
+  const [currentTestingVoice, setCurrentTestingVoice] = useState<string | null>(null);
+  const [testVoiceMsg, setTestVoiceMsg] = useState<string | null>(null);
   const [batchExportFormat, setBatchExportFormat] = useState<'mp4' | 'mkv'>(() => loadBatchExportConfig().batchExportFormat);
   const [batchExportResolution, setBatchExportResolution] = useState<'original' | '1080p' | '720p' | '2k'>(() => loadBatchExportConfig().batchExportResolution);
   const [batchExportAspectRatio, setBatchExportAspectRatio] = useState<'original' | '9:16' | '16:9'>(() => loadBatchExportConfig().batchExportAspectRatio);
   const [sortMode, setSortMode] = useState<'ep_asc' | 'ep_desc' | 'name_asc' | 'name_desc' | 'status' | 'duration'>(() => loadBatchExportConfig().sortMode || 'ep_asc');
+
+  // Dọn dẹp âm thanh mẫu khi unmount
+  useEffect(() => {
+    return () => {
+      if (activeAudioInstanceRef.current) {
+        activeAudioInstanceRef.current.pause();
+        activeAudioInstanceRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleTestVoice = async (targetVoice: string) => {
+    // Nếu đang phát đúng giọng này, bấm lại sẽ dừng phát
+    if (isTestingVoice && currentTestingVoice === targetVoice) {
+      if (activeAudioInstanceRef.current) {
+        activeAudioInstanceRef.current.pause();
+        activeAudioInstanceRef.current = null;
+      }
+      setIsTestingVoice(false);
+      setCurrentTestingVoice(null);
+      setTestVoiceMsg(null);
+      return;
+    }
+
+    if (activeAudioInstanceRef.current) {
+      activeAudioInstanceRef.current.pause();
+      activeAudioInstanceRef.current = null;
+    }
+
+    setIsTestingVoice(true);
+    setCurrentTestingVoice(targetVoice);
+    setTestVoiceMsg(`Đang tạo âm thanh mẫu (${targetVoice})...`);
+
+    try {
+      const prov = detectVoiceProvider(targetVoice);
+      const rateStr = batchDubbingSpeed === 1.0 ? '+0%' : (batchDubbingSpeed > 1 ? `+${Math.round((batchDubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - batchDubbingSpeed) * 100)}%`);
+      const blob = await apiClient.testDubbing({
+        text: 'Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio.',
+        voice: targetVoice,
+        provider: prov,
+        rate: rateStr,
+      });
+
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      activeAudioInstanceRef.current = audio;
+
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        if (activeAudioInstanceRef.current === audio) {
+          activeAudioInstanceRef.current = null;
+          setIsTestingVoice(false);
+          setCurrentTestingVoice(null);
+          setTestVoiceMsg(null);
+        }
+      };
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        if (activeAudioInstanceRef.current === audio) {
+          activeAudioInstanceRef.current = null;
+          setIsTestingVoice(false);
+          setCurrentTestingVoice(null);
+          setTestVoiceMsg('Lỗi phát âm thanh');
+        }
+      };
+
+      await audio.play();
+      setTestVoiceMsg(`▶ Đang phát giọng đọc mẫu (${targetVoice})...`);
+    } catch (err: any) {
+      setTestVoiceMsg(`Chưa thể phát giọng đọc thử: ${err?.message || 'Lỗi kết nối'}`);
+      setIsTestingVoice(false);
+      setCurrentTestingVoice(null);
+    }
+  };
 
   // Các công đoạn thực hiện hàng loạt (Batch Stages Selector)
   const [batchStages, setBatchStages] = useState<{
@@ -641,6 +734,9 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
         setBatchDubbingEnabled(reconciled.batchDubbingEnabled);
         setBatchDubbingMode(reconciled.batchDubbingMode);
         setBatchDubbingVoice(reconciled.batchDubbingVoice);
+        if (reconciled.batchDubbingVoiceMale) setBatchDubbingVoiceMale(reconciled.batchDubbingVoiceMale);
+        if (reconciled.batchDubbingVoiceFemale) setBatchDubbingVoiceFemale(reconciled.batchDubbingVoiceFemale);
+        if (reconciled.batchDubbingSpeed !== undefined) setBatchDubbingSpeed(reconciled.batchDubbingSpeed);
         setBatchExportFormat(reconciled.batchExportFormat);
         setBatchExportResolution(reconciled.batchExportResolution);
         setBatchExportAspectRatio(reconciled.batchExportAspectRatio);
@@ -682,6 +778,9 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
       setBatchDubbingEnabled(reconciled.batchDubbingEnabled);
       setBatchDubbingMode(reconciled.batchDubbingMode);
       setBatchDubbingVoice(reconciled.batchDubbingVoice);
+      if (reconciled.batchDubbingVoiceMale) setBatchDubbingVoiceMale(reconciled.batchDubbingVoiceMale);
+      if (reconciled.batchDubbingVoiceFemale) setBatchDubbingVoiceFemale(reconciled.batchDubbingVoiceFemale);
+      if (reconciled.batchDubbingSpeed !== undefined) setBatchDubbingSpeed(reconciled.batchDubbingSpeed);
       setBatchExportFormat(reconciled.batchExportFormat);
       setBatchExportResolution(reconciled.batchExportResolution);
       setBatchExportAspectRatio(reconciled.batchExportAspectRatio);
@@ -707,6 +806,9 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
       batchDubbingEnabled,
       batchDubbingMode,
       batchDubbingVoice,
+      batchDubbingVoiceMale,
+      batchDubbingVoiceFemale,
+      batchDubbingSpeed,
       batchExportFormat,
       batchExportResolution,
       batchExportAspectRatio,
@@ -756,6 +858,11 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               enabled: batchDubbingEnabled,
               ducking_volume: batchDuckingVolume / 100,
               voice: batchDubbingVoice || currentPipe.dubbing.voice,
+              voice_male: batchDubbingVoiceMale || currentPipe.dubbing.voice_male,
+              voice_female: batchDubbingVoiceFemale || currentPipe.dubbing.voice_female,
+              provider: detectVoiceProvider(batchDubbingMode === 'gender_multi' ? (batchDubbingVoiceMale || 'vi-VN-NamMinhNeural') : (batchDubbingVoice || 'vi-VN-NamMinhNeural')) as any,
+              rate: batchDubbingSpeed === 1.0 ? '+0%' : (batchDubbingSpeed > 1 ? `+${Math.round((batchDubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - batchDubbingSpeed) * 100)}%`),
+              speed: batchDubbingSpeed,
               mode: batchDubbingMode === 'gender_multi' ? 'multi' : 'single',
             },
             batch: {
@@ -764,6 +871,9 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               dubbing_enabled: batchDubbingEnabled,
               dubbing_mode: batchDubbingMode,
               dubbing_voice: batchDubbingVoice,
+              dubbing_voice_male: batchDubbingVoiceMale,
+              dubbing_voice_female: batchDubbingVoiceFemale,
+              dubbing_speed: batchDubbingSpeed,
               export_format: batchExportFormat,
               export_resolution: batchExportResolution,
               export_aspect_ratio: batchExportAspectRatio,
@@ -799,6 +909,9 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     batchDubbingEnabled,
     batchDubbingMode,
     batchDubbingVoice,
+    batchDubbingVoiceMale,
+    batchDubbingVoiceFemale,
+    batchDubbingSpeed,
     batchExportFormat,
     batchExportResolution,
     batchExportAspectRatio,
@@ -1498,15 +1611,17 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
         const dubSettings = project.custom_pipeline_settings?.dubbing;
         const mode = dubSettings?.mode || (batchDubbingMode === 'gender_multi' ? 'multi' : 'single');
         const chosenVoice = dubSettings?.voice || batchDubbingVoice;
-        const maleVoice = dubSettings?.voice_male;
-        const femaleVoice = dubSettings?.voice_female;
+        const maleVoice = dubSettings?.voice_male || batchDubbingVoiceMale;
+        const femaleVoice = dubSettings?.voice_female || batchDubbingVoiceFemale;
+        const rateStr = batchDubbingSpeed === 1.0 ? '+0%' : (batchDubbingSpeed > 1 ? `+${Math.round((batchDubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - batchDubbingSpeed) * 100)}%`);
+        const provider = dubSettings?.provider || detectVoiceProvider(mode === 'multi' ? maleVoice : chosenVoice);
         await apiClient.runDubbing(pid, {
           mode,
           voice: chosenVoice,
           voice_male: maleVoice,
           voice_female: femaleVoice,
-          provider: dubSettings?.provider,
-          rate: dubSettings?.rate,
+          provider,
+          rate: dubSettings?.rate || rateStr,
         });
         setSingleActionStatus((prev) => ({ ...prev, [pid]: '✓ Tạo voiceover thành công!' }));
       } else if (stage === 'export') {
@@ -1640,15 +1755,17 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               const targetDubSettings = targetProj.custom_pipeline_settings?.dubbing;
               const mode = targetDubSettings?.mode || (batchDubbingMode === 'gender_multi' ? 'multi' : 'single');
               const chosenVoice = targetDubSettings?.voice || batchDubbingVoice;
-              const maleVoice = targetDubSettings?.voice_male;
-              const femaleVoice = targetDubSettings?.voice_female;
+              const maleVoice = targetDubSettings?.voice_male || batchDubbingVoiceMale;
+              const femaleVoice = targetDubSettings?.voice_female || batchDubbingVoiceFemale;
+              const rateStr = batchDubbingSpeed === 1.0 ? '+0%' : (batchDubbingSpeed > 1 ? `+${Math.round((batchDubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - batchDubbingSpeed) * 100)}%`);
+              const provider = targetDubSettings?.provider || detectVoiceProvider(mode === 'multi' ? maleVoice : chosenVoice);
               await apiClient.runDubbing(targetProj.project_id, {
                 mode,
                 voice: chosenVoice,
                 voice_male: maleVoice,
                 voice_female: femaleVoice,
-                provider: targetDubSettings?.provider,
-                rate: targetDubSettings?.rate,
+                provider,
+                rate: targetDubSettings?.rate || rateStr,
               });
             } catch (err: any) {
               console.warn('Dubbing error:', err);
@@ -1732,25 +1849,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               <span>Tạo Dự Án</span>
             </button>
 
-            <button
-              onClick={handlePickMultipleLocalVideos}
-              disabled={isBatchUploading}
-              className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-indigo-300 hover:text-white font-semibold shadow-sm transition flex items-center gap-1.5 active:scale-95 cursor-pointer hidden lg:flex"
-              title="Chọn nhiều video cùng lúc từ máy tính (Nhanh 0s)"
-            >
-              <FolderOpen className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Chọn Nhiều Video (0s)</span>
-            </button>
-
-            <button
-              onClick={handlePickLocalFolder}
-              disabled={isBatchUploading}
-              className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 hover:text-white font-semibold shadow-sm transition flex items-center gap-1.5 active:scale-95 cursor-pointer hidden xl:flex"
-              title="Chọn 1 thư mục chứa video (Tự động nạp tất cả video trong thư mục)"
-            >
-              <Folder className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Chọn Cả Thư Mục</span>
-            </button>
           </div>
         </div>
 
@@ -2254,8 +2352,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                 <option value="vi" className="bg-slate-900 text-slate-200">Tiếng Việt (vi)</option>
                 <option value="en" className="bg-slate-900 text-slate-200">Tiếng Anh (en)</option>
                 <option value="zh" className="bg-slate-900 text-slate-200">Tiếng Trung (zh)</option>
-                <option value="ja" className="bg-slate-900 text-slate-200">Tiếng Nhật (ja)</option>
-                <option value="ko" className="bg-slate-900 text-slate-200">Tiếng Hàn (ko)</option>
                 <option value="none" className="bg-slate-900 text-slate-200">Giữ nguyên / Không dịch</option>
               </select>
             </div>
@@ -2307,6 +2403,9 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                         batchDubbingEnabled: val,
                         batchDubbingMode,
                         batchDubbingVoice,
+                        batchDubbingVoiceMale,
+                        batchDubbingVoiceFemale,
+                        batchDubbingSpeed,
                         batchExportFormat,
                         batchExportResolution,
                         batchExportAspectRatio,
@@ -2323,45 +2422,396 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               </div>
 
               {batchDubbingEnabled && (
-                <div className="space-y-2 pt-1 border-t border-slate-800/80 animate-in fade-in">
-                  <div className="text-[11px] text-slate-400 font-medium">Chế độ phân vai:</div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setBatchDubbingMode('single')}
-                      className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs ${
-                        batchDubbingMode === 'single'
-                          ? 'bg-emerald-950/70 border-emerald-500/70 text-emerald-300 shadow-sm'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-300'
-                      }`}
-                    >
-                      Đơn giọng
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBatchDubbingMode('gender_multi')}
-                      className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs ${
-                        batchDubbingMode === 'gender_multi'
-                          ? 'bg-emerald-950/70 border-emerald-500/70 text-emerald-300 shadow-sm'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-300'
-                      }`}
-                    >
-                      Đa giọng
-                    </button>
+                <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
+                  {/* THANH TÓM TẮT THU GỌN (Mặc định hiển thị, ấn Mở rộng mới bung chi tiết) */}
+                  {!isDubbingExpanded ? (
+                    <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between gap-2 shadow-sm">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-semibold text-slate-400">
+                            {batchDubbingMode === 'gender_multi' ? 'Đa giọng:' : 'Đơn giọng:'}
+                          </span>
+                          {batchDubbingMode === 'gender_multi' ? (
+                            <span className="text-xs font-bold text-slate-200 truncate">
+                              ♂ {VOICE_CATALOG.find((v) => v.id === batchDubbingVoiceMale)?.name || batchDubbingVoiceMale} / ♀ {VOICE_CATALOG.find((v) => v.id === batchDubbingVoiceFemale)?.name || batchDubbingVoiceFemale}
+                            </span>
+                          ) : (
+                            <div className="flex items-center gap-1 min-w-0">
+                              <span className="text-xs font-bold text-amber-300 truncate">
+                                {VOICE_CATALOG.find((v) => v.id === batchDubbingVoice)?.name || batchDubbingVoice}
+                              </span>
+                              <span className="text-[9px] px-1 py-0.2 rounded font-bold bg-amber-500/20 text-amber-300">
+                                {detectVoiceProvider(batchDubbingVoice).toUpperCase()}
+                              </span>
+                            </div>
+                          )}
+                          <span className="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-slate-950 text-amber-400 border border-slate-800">
+                            {batchDubbingSpeed.toFixed(2)}x
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleTestVoice(batchDubbingMode === 'gender_multi' ? batchDubbingVoiceMale : batchDubbingVoice)}
+                          disabled={isTestingVoice}
+                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 border border-slate-800 transition cursor-pointer"
+                          title="Nghe thử giọng hiện tại"
+                        >
+                          {isTestingVoice && (currentTestingVoice === batchDubbingVoice || currentTestingVoice === batchDubbingVoiceMale) ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsDubbingExpanded(true)}
+                          className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-[11px] font-bold flex items-center gap-1 transition cursor-pointer active:scale-95"
+                          title="Mở rộng chi tiết kho giọng đọc và tốc độ"
+                        >
+                          <span>Mở rộng</span>
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* NỘI DUNG MỞ RỘNG ĐẦY ĐỦ */
+                    <div className="space-y-3 animate-in fade-in">
+                      {/* Tiêu đề thanh mở rộng & Nút Thu Gọn */}
+                      <div className="flex items-center justify-between pb-1.5 border-b border-slate-800/80">
+                        <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5">
+                          <Sliders className="w-3 h-3" />
+                          <span>Chi tiết cấu hình giọng đọc AI</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsDubbingExpanded(false)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer active:scale-95"
+                          title="Thu gọn lại"
+                        >
+                          <span>Thu gọn</span>
+                          <ChevronUp className="w-3 h-3" />
+                        </button>
+                      </div>
+
+
+                  {/* Chế độ phân vai */}
+                  <div className="space-y-1.5">
+                    <label className="text-slate-400 text-[10px] block font-medium">Chế độ phân vai:</label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setBatchDubbingMode('single')}
+                        className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
+                          batchDubbingMode === 'single'
+                            ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
+                        }`}
+                      >
+                        Đơn giọng (1 người)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBatchDubbingMode('gender_multi')}
+                        className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
+                          batchDubbingMode === 'gender_multi'
+                            ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
+                        }`}
+                      >
+                        Đa giọng (Nam / Nữ)
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="text-[11px] text-slate-400">Giọng đọc mẫu:</label>
-                    <select
-                      value={batchDubbingVoice}
-                      onChange={(e) => setBatchDubbingVoice(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-slate-200 text-xs focus:outline-none focus:border-emerald-500 transition"
-                    >
-                      <option value="vi-VN-NamMinhNeural" className="bg-slate-900 text-slate-200">Nam Minh (Giọng Nam Miền Bắc)</option>
-                      <option value="vi-VN-HoaiMyNeural" className="bg-slate-900 text-slate-200">Hoài My (Giọng Nữ Miền Bắc)</option>
-                      <option value="vi-VN-NamAnNeural" className="bg-slate-900 text-slate-200">Nam An (Giọng Nam Trầm)</option>
-                    </select>
+                  {/* Khi chọn Đơn Giọng: Thẻ Giọng Đọc & Bộ Lọc */}
+                  {batchDubbingMode === 'single' && (
+                    <div className="space-y-2 pt-1">
+                      {/* Bộ lọc loại giọng đọc */}
+                      <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[10px] select-none">
+                        {VOICE_CATEGORIES.map((cat) => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => setVoiceCategoryFilter(cat.id as any)}
+                            className={`px-2 py-1 rounded-full font-semibold shrink-0 transition cursor-pointer ${
+                              voiceCategoryFilter === cat.id
+                                ? 'bg-amber-500 text-slate-950 shadow-sm'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            {cat.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Danh Sách Thẻ Giọng Đọc Trực Quan (Visual Voice Cards) */}
+                      <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
+                        {VOICE_CATALOG
+                          .filter((v) => voiceCategoryFilter === 'all' || v.provider === voiceCategoryFilter)
+                          .map((v) => {
+                            const isSelected = batchDubbingVoice === v.id;
+                            const isTestingThis = isTestingVoice && currentTestingVoice === v.id;
+                            return (
+                              <div
+                                key={v.id}
+                                onClick={() => {
+                                  setBatchDubbingVoice(v.id);
+                                  setTestVoiceMsg(null);
+                                }}
+                                className={`p-2 rounded-xl border transition flex items-center justify-between cursor-pointer active:scale-98 ${
+                                  isSelected
+                                    ? 'bg-amber-950/40 border-amber-500 shadow-md ring-1 ring-amber-500/40'
+                                    : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900/60'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <div
+                                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                                      v.gender === 'Nam' ? 'bg-sky-500/20 text-sky-300' : 'bg-rose-500/20 text-rose-300'
+                                    }`}
+                                  >
+                                    {v.gender === 'Nam' ? '♂' : '♀'}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="font-semibold text-slate-100 text-xs truncate">{v.name}</span>
+                                      <span
+                                        className={`text-[9px] px-1 py-0.2 rounded font-bold ${
+                                          v.provider === 'capcut'
+                                            ? 'bg-amber-500/20 text-amber-300'
+                                            : v.provider === 'gemini'
+                                            ? 'bg-purple-500/20 text-purple-300'
+                                            : 'bg-sky-500/20 text-sky-300'
+                                        }`}
+                                      >
+                                        {v.provider === 'capcut' ? 'CapCut' : v.provider === 'gemini' ? 'Gemini' : 'Edge'}
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-400 truncate">{v.style}</p>
+                                  </div>
+                                </div>
+
+                                {/* Nút nghe thử mẫu */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleTestVoice(v.id);
+                                  }}
+                                  disabled={isTestingThis}
+                                  className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-amber-300 transition cursor-pointer shrink-0 ml-1.5 active:scale-95"
+                                  title={`Nghe thử ${v.name}`}
+                                >
+                                  {isTestingThis ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                                  ) : (
+                                    <Volume2 className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          })}
+                      </div>
+
+                      {/* Dropdown chọn nhanh chuẩn giao diện */}
+                      <div className="space-y-1 pt-1">
+                        <div className="flex items-center justify-between">
+                          <label className="text-slate-400 text-[10px] block font-medium">Hoặc chọn nhanh từ danh mục:</label>
+                          {detectVoiceProvider(batchDubbingVoice) === 'capcut' && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              🎬 CapCut Cloud TTS
+                            </span>
+                          )}
+                          {detectVoiceProvider(batchDubbingVoice) === 'edge' && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
+                              ⚡ Microsoft Edge-TTS
+                            </span>
+                          )}
+                          {detectVoiceProvider(batchDubbingVoice) === 'gemini' && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                              🌟 Gemini AI TTS
+                            </span>
+                          )}
+                        </div>
+                        <div className="relative flex items-center">
+                          <select
+                            value={batchDubbingVoice}
+                            onChange={(e) => {
+                              setBatchDubbingVoice(e.target.value);
+                              setTestVoiceMsg(null);
+                            }}
+                            className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                          >
+                            <optgroup label="🎬 Giọng Đọc CapCut Hot Trend (Review Phim & TikTok)">
+                              <option value="BV075_streaming">Thanh Niên Tự Tin (Review phim)</option>
+                              <option value="BV074_streaming">Cô Gái Hoạt Ngôn (Tươi sáng, thu hút)</option>
+                              <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (Tâm sự, nhẹ nhàng)</option>
+                              <option value="BV562_streaming">Mai (Thuyết minh chuẩn đài truyền hình)</option>
+                              <option value="vi_female_huong">Hương (Nữ phổ thông miền Bắc)</option>
+                              <option value="BV560_streaming">Alex Đại Đế (Nam trầm quyền uy)</option>
+                              <option value="BV075_streaming_vibrato_dsp">Việt Méo (Hài hước, parody)</option>
+                              <option value="BV074_streaming_dsp">Bé Nhí Nhảnh (Trẻ em dễ thương)</option>
+                            </optgroup>
+
+                            <optgroup label="🇻🇳 Giọng Đọc Chuẩn Edge TTS (Miễn phí & Tự nhiên)">
+                              <option value="vi-VN-NamMinhNeural">Nam Minh (Nam trầm ấm, kịch tính, chuẩn đài)</option>
+                              <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ truyền cảm, dịu dàng, chuẩn phim)</option>
+                            </optgroup>
+
+                            <optgroup label="🌟 Giọng Đọc Gemini AI TTS (Đa sắc thái)">
+                              <option value="Puck">Puck (Gemini Tự Nhiên)</option>
+                              <option value="Kore">Kore (Gemini Truyền Cảm)</option>
+                              <option value="Fenrir">Fenrir (Gemini Trầm Ấm)</option>
+                              <option value="Aoede">Aoede (Gemini Thanh Thoát)</option>
+                            </optgroup>
+
+                            <optgroup label="🌍 Giọng Đọc Quốc Tế (English)">
+                              <option value="en-US-JennyNeural">Jenny (US Female Warm)</option>
+                              <option value="en-US-GuyNeural">Guy (US Male Broadcast)</option>
+                              <option value="en-US-AriaNeural">Aria (US Dynamic Narrator)</option>
+                              <option value="en-US-ChristopherNeural">Christopher (US Deep Storyteller)</option>
+                              <option value="en-GB-RyanNeural">Ryan (British Classic)</option>
+                              <option value="en-GB-SoniaNeural">Sonia (British Elegant)</option>
+                            </optgroup>
+                          </select>
+                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Khi chọn Đa Giọng: Phân Vai Nam / Nữ */}
+                  {batchDubbingMode === 'gender_multi' && (
+                    <div className="space-y-3 pt-1">
+                      {/* Giọng Nam */}
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-[10px] block font-medium">Giọng Nam (Phân vai thoại nam):</label>
+                        <div className="relative flex items-center">
+                          <select
+                            value={batchDubbingVoiceMale}
+                            onChange={(e) => setBatchDubbingVoiceMale(e.target.value)}
+                            className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                          >
+                            <option value="vi-VN-NamMinhNeural">Nam Minh (Edge-TTS trầm ấm)</option>
+                            <option value="BV075_streaming">Thanh Niên Tự Tin (CapCut Review)</option>
+                            <option value="BV560_streaming">Alex Đại Đế (CapCut Uy quyền)</option>
+                            <option value="BV075_streaming_vibrato_dsp">Việt Méo (CapCut Parody)</option>
+                            <option value="Fenrir">Fenrir (Gemini Trầm)</option>
+                            <option value="Puck">Puck (Gemini Tự nhiên)</option>
+                          </select>
+                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                        </div>
+                      </div>
+
+                      {/* Giọng Nữ */}
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-[10px] block font-medium">Giọng Nữ (Phân vai thoại nữ):</label>
+                        <div className="relative flex items-center">
+                          <select
+                            value={batchDubbingVoiceFemale}
+                            onChange={(e) => setBatchDubbingVoiceFemale(e.target.value)}
+                            className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                          >
+                            <option value="vi-VN-HoaiMyNeural">Hoài My (Edge-TTS Dịu dàng)</option>
+                            <option value="BV074_streaming">Cô Gái Hoạt Ngôn (CapCut)</option>
+                            <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (CapCut)</option>
+                            <option value="BV562_streaming">Mai (CapCut Thuyết minh)</option>
+                            <option value="vi_female_huong">Hương (CapCut Miền Bắc)</option>
+                            <option value="Kore">Kore (Gemini Nữ)</option>
+                            <option value="Aoede">Aoede (Gemini Thanh thoát)</option>
+                          </select>
+                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                        </div>
+                      </div>
+
+                      {/* 2 nút nghe thử Nam / Nữ */}
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleTestVoice(batchDubbingVoiceMale)}
+                          disabled={isTestingVoice}
+                          className="py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer text-[11px]"
+                        >
+                          <Volume2 className="w-3 h-3 text-cyan-400" />
+                          <span>Thử Giọng Nam</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleTestVoice(batchDubbingVoiceFemale)}
+                          disabled={isTestingVoice}
+                          className="py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer text-[11px]"
+                        >
+                          <Volume2 className="w-3 h-3 text-rose-400" />
+                          <span>Thử Giọng Nữ</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tốc Độ Đọc Giọng AI */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <label className="text-slate-300 font-medium">Tốc độ đọc giọng AI:</label>
+                      <span className="font-mono text-amber-400 font-bold bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 text-[10px]">
+                        {batchDubbingSpeed.toFixed(2)}x ({batchDubbingSpeed === 1.0 ? 'Chuẩn' : batchDubbingSpeed > 1 ? `+${Math.round((batchDubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - batchDubbingSpeed) * 100)}%`})
+                      </span>
+                    </div>
+
+                    {/* Preset Tốc Độ Nhanh */}
+                    <div className="grid grid-cols-4 gap-1">
+                      {[
+                        { val: 0.9, label: '0.9x' },
+                        { val: 1.0, label: '1.0x Chuẩn' },
+                        { val: 1.15, label: '1.15x Review' },
+                        { val: 1.3, label: '1.3x Nhanh' },
+                      ].map((preset) => (
+                        <button
+                          key={preset.val}
+                          type="button"
+                          onClick={() => setBatchDubbingSpeed(preset.val)}
+                          className={`py-1 rounded text-[10px] font-semibold transition cursor-pointer active:scale-95 ${
+                            Math.abs(batchDubbingSpeed - preset.val) < 0.01
+                              ? 'bg-amber-500 text-slate-950 shadow-sm'
+                              : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-300'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="2.0"
+                      step="0.05"
+                      value={batchDubbingSpeed}
+                      onChange={(e) => setBatchDubbingSpeed(parseFloat(e.target.value))}
+                      className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                    />
                   </div>
+
+                  {/* Trạng thái nghe thử giọng đọc */}
+                  {testVoiceMsg && (
+                    <div className="p-1.5 bg-indigo-950/60 border border-indigo-800/60 rounded text-[10px] text-indigo-300 animate-pulse">
+                      {testVoiceMsg}
+                    </div>
+                  )}
+
+                      {/* Nút Thu Gọn ở chân cấu hình */}
+                      <button
+                        type="button"
+                        onClick={() => setIsDubbingExpanded(false)}
+                        className="w-full py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer active:scale-95 mt-1"
+                      >
+                        <ChevronUp className="w-3.5 h-3.5" />
+                        <span>Thu gọn cấu hình giọng</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2501,6 +2951,22 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             >
               <Rocket className="w-4 h-4 text-white animate-bounce" />
               <span>BẮT ĐẦU XỬ LÝ HÀNG LOẠT ({selectedProjectIds.length > 0 ? selectedProjectIds.length : projects.length})</span>
+            </button>
+            <button
+              onClick={async () => {
+                const target = projects.find((p) => p.project_id === selectedDramaTitle) || projects[0];
+                if (!target) return;
+                try {
+                  await apiClient.mergeProjectExports(target.project_id);
+                  onRefreshProjects();
+                } catch (err: any) {
+                  setQueueStatusMessage(err?.message || 'Không thể ghép video');
+                }
+              }}
+              disabled={isQueueRunning || projects.length === 0}
+              className="w-full mt-2 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Ghép các video đã xuất theo thứ tự
             </button>
           </div>
         </div>
@@ -4272,10 +4738,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                     ? 'Tiếng Anh (EN)'
                     : batchTargetLang === 'zh'
                     ? 'Tiếng Trung (ZH)'
-                    : batchTargetLang === 'ja'
-                    ? 'Tiếng Nhật (JA)'
-                    : batchTargetLang === 'ko'
-                    ? 'Tiếng Hàn (KO)'
                     : 'Giữ nguyên (Không dịch)'}
                 </span>
               </div>
@@ -4340,6 +4802,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
           </div>
         </div>
       )}
+
+
     </div>
   );
 };

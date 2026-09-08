@@ -208,7 +208,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     setNetworkMode(mode);
     localStorage.setItem('sls_network_mode', mode);
     localStorage.setItem('sls_network_mode_pref_v2', 'true');
-    appLogger.info('network', `Đã chuyển sang chế độ: ${mode === 'direct' ? '⚡ Dùng IP Trực Tiếp (Không Proxy)' : '🌐 Dùng Proxy (Auto-Xray / Custom)'}`);
+    appLogger.info(`Đã chuyển sang chế độ: ${mode === 'direct' ? '⚡ Dùng IP Trực Tiếp (Không Proxy)' : '🌐 Dùng Proxy (Auto-Xray / Custom)'}`, 'Mạng');
   };
 
   const [proxyUrl, setProxyUrl] = useState(() => localStorage.getItem('sls_proxy_url') || '');
@@ -224,10 +224,13 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
   const loadProxyStatus = async (urlToCheck?: string) => {
     setIsLoadingProxyStatus(true);
     try {
-      const res = await apiClient.getProxyStatus(urlToCheck !== undefined ? urlToCheck : proxyUrl);
+      const res = await apiClient.getProxyStatus(urlToCheck || proxyUrl || undefined);
       setProxyStatus(res);
-    } catch {
-      // ignore
+      if ((res as any).active_source === 'direct' || (!res.enabled && res.mode === 'direct')) {
+        setNetworkMode('direct');
+      }
+    } catch (err) {
+      console.warn('Could not load proxy status:', err);
     } finally {
       setIsLoadingProxyStatus(false);
     }
@@ -278,9 +281,9 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     try {
       const res = await apiClient.refreshXrayNodes();
       setXrayStatus(res);
-      appLogger.info('proxy', `Đã sàng lọc và chọn node nhanh nhất: ${res.active_node?.name || 'Tự động'}`);
+      appLogger.info(`Đã sàng lọc và chọn node nhanh nhất: ${res.active_node?.name || 'Tự động'}`, 'Proxy');
     } catch (err: any) {
-      appLogger.warn('proxy', `Lỗi khi quét node Xray: ${err.message}`);
+      appLogger.warn(`Lỗi khi quét node Xray: ${err.message}`, 'Proxy');
     } finally {
       setIsRefreshingXray(false);
     }
@@ -301,8 +304,9 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     try {
       await apiClient.switchXrayNode(nodeName);
       loadXrayStatus();
+      appLogger.success(`Đã chuyển sang node Xray: ${nodeName}`, 'Proxy');
     } catch (err: any) {
-      alert(`Lỗi chuyển node: ${err?.message}`);
+      appLogger.error(`Lỗi chuyển node: ${err?.message}`, 'Proxy');
     }
   };
 
@@ -494,7 +498,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
 
   const handleSavePlatformCookie = async () => {
     if (!customCookieInput.trim()) {
-      alert('Vui lòng nhập chuỗi Cookie');
+      appLogger.warn('Vui lòng nhập chuỗi Cookie hợp lệ', 'Xác thực');
       return;
     }
     setIsSavingCookie(true);
@@ -502,11 +506,13 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     try {
       const res = await apiClient.savePlatformCookie(customPlatform, customCookieInput.trim());
       setCookieFeedback(res.message);
+      appLogger.success(res.message || 'Đã lưu Cookie nền tảng thành công!', 'Xác thực');
       setCustomCookieInput('');
       loadAuthStatus();
       setTimeout(() => setCookieFeedback(null), 4000);
     } catch (err: any) {
       setCookieFeedback(`Lỗi: ${err?.message}`);
+      appLogger.error(`Lỗi lưu cookie: ${err?.message}`, 'Xác thực');
     } finally {
       setIsSavingCookie(false);
     }
@@ -517,8 +523,9 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     try {
       await apiClient.deletePlatformCookie(plat);
       loadAuthStatus();
+      appLogger.info(`Đã xóa cookie của nền tảng ${plat}`, 'Xác thực');
     } catch (err: any) {
-      alert(`Lỗi: ${err?.message}`);
+      appLogger.error(`Lỗi xóa cookie: ${err?.message}`, 'Xác thực');
     }
   };
 
@@ -776,10 +783,11 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
         strict_proxy: networkMode !== 'direct',
       });
       showQueueFeedback(`Đã thêm "${targetInfo.title}" (${selectedEpisodes.length} tập) vào hàng đợi tải (Vị trí #${res.position})!`);
+      appLogger.success(`Đã thêm "${targetInfo.title}" (${selectedEpisodes.length} tập) vào hàng đợi tải (#${res.position})`, 'Hàng đợi');
       setActiveTab('queue');
       fetchQueueTasks(false);
     } catch (err: any) {
-      alert(`Lỗi thêm vào hàng đợi: ${err?.message}`);
+      appLogger.error(`Lỗi thêm vào hàng đợi: ${err?.message}`, 'Hàng đợi');
     } finally {
       setIsAddingToQueue(false);
     }
@@ -805,14 +813,16 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
         await apiClient.resumeQueue();
         setIsQueuePaused(false);
         showQueueFeedback('Đã tiếp tục điều phối hàng đợi tải');
+        appLogger.info('Đã tiếp tục hàng đợi tải', 'Hàng đợi');
       } else {
         await apiClient.pauseQueue();
         setIsQueuePaused(true);
         showQueueFeedback('Đã tạm dừng hàng đợi tải');
+        appLogger.warn('Đã tạm dừng hàng đợi tải', 'Hàng đợi');
       }
       fetchQueueTasks(true);
     } catch (err: any) {
-      alert(`Lỗi thao tác: ${err?.message}`);
+      appLogger.error(`Lỗi thao tác hàng đợi: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -823,9 +833,10 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     try {
       await apiClient.deleteQueueTask(taskId);
       showQueueFeedback(`Đã xóa "${title}" khỏi hàng đợi`);
+      appLogger.info(`Đã xóa "${title}" khỏi hàng đợi`, 'Hàng đợi');
       fetchQueueTasks(true);
     } catch (err: any) {
-      alert(`Lỗi xóa tác vụ: ${err?.message}`);
+      appLogger.error(`Lỗi xóa tác vụ: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -834,12 +845,13 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
       const res = await apiClient.retryQueueTask(taskId);
       if (res.success) {
         showQueueFeedback(`Đã kích hoạt tải lại "${title}"`);
+        appLogger.success(`Đã kích hoạt tải lại "${title}"`, 'Hàng đợi');
         fetchQueueTasks(true);
       } else {
-        alert(res.message);
+        appLogger.warn(res.message || 'Không thể thử lại tác vụ', 'Hàng đợi');
       }
     } catch (err: any) {
-      alert(`Lỗi thử lại tác vụ: ${err?.message}`);
+      appLogger.error(`Lỗi thử lại tác vụ: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -848,7 +860,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
       await apiClient.reorderQueue(taskId, direction);
       fetchQueueTasks(true);
     } catch (err: any) {
-      alert(`Lỗi đổi thứ tự: ${err?.message}`);
+      appLogger.error(`Lỗi đổi thứ tự hàng đợi: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -856,18 +868,19 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
     const target = item.target_info || {};
     const coverUrl = target.cover_url;
     if (!coverUrl) {
-      alert('Bộ phim này không có ảnh bìa để tải.');
+      appLogger.warn('Bộ phim này không có ảnh bìa để tải', 'Tải ảnh');
       return;
     }
     try {
       const res = await apiClient.downloadCover(coverUrl, item.output_dir || outputDir || 'uploads');
       if (res.success) {
         showQueueFeedback(`Đã tải ảnh bìa phim "${target.title}"!`);
+        appLogger.success(`Đã tải ảnh bìa phim "${target.title}"`, 'Tải ảnh');
       } else {
-        alert(res.message || 'Lỗi tải ảnh bìa');
+        appLogger.warn(res.message || 'Lỗi tải ảnh bìa', 'Tải ảnh');
       }
     } catch (err: any) {
-      alert(`Lỗi tải ảnh bìa: ${err?.message}`);
+      appLogger.error(`Lỗi tải ảnh bìa: ${err?.message}`, 'Tải ảnh');
     }
   };
 
@@ -981,9 +994,10 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
       setCustomDeviceId(res.device_id);
       setCustomInstallId(res.install_id);
       setDeviceRotateMessage(`Cấp mới thành công: Device ID ${res.device_id}`);
+      appLogger.success(`Đã cấp mới thiết bị giả lập: Device ID ${res.device_id}`, 'Thiết bị');
       setTimeout(() => setDeviceRotateMessage(null), 5000);
     } catch (err: any) {
-      alert(`Không thể cấp thiết bị mới: ${err?.message}`);
+      appLogger.error(`Không thể cấp thiết bị mới: ${err?.message}`, 'Thiết bị');
     } finally {
       setIsRotatingDevice(false);
     }
@@ -991,7 +1005,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
 
   const handleSaveCustomDevice = async () => {
     if (!customDeviceId.trim() || !customInstallId.trim()) {
-      alert('Vui lòng điền đủ Device ID và Install ID.');
+      appLogger.warn('Vui lòng điền đủ Device ID và Install ID', 'Thiết bị');
       return;
     }
     setIsSavingCustomDevice(true);
@@ -1000,9 +1014,10 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
       setDeviceInfo(res);
       setShowCustomDeviceInput(false);
       setDeviceRotateMessage('Đã cập nhật thông tin thiết bị tùy chỉnh!');
+      appLogger.success('Đã lưu thông tin thiết bị tùy chỉnh thành công!', 'Thiết bị');
       setTimeout(() => setDeviceRotateMessage(null), 4000);
     } catch (err: any) {
-      alert(`Lỗi lưu thiết bị: ${err?.message}`);
+      appLogger.error(`Lỗi lưu thiết bị: ${err?.message}`, 'Thiết bị');
     } finally {
       setIsSavingCustomDevice(false);
     }
@@ -1021,21 +1036,28 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
 
   const handleTestProxy = async () => {
     if (!proxyUrl.trim()) {
-      alert('Vui lòng nhập URL Proxy trước khi kiểm tra.');
+      appLogger.warn('Vui lòng nhập URL Proxy trước khi kiểm tra', 'Proxy');
       return;
     }
     setIsTestingProxy(true);
     setProxyTestResult(null);
+    appLogger.loading(`Đang kiểm tra kết nối proxy: ${proxyUrl.trim()}...`, { taskKey: 'test-proxy', category: 'Proxy' });
     try {
       const res = await apiClient.testProxy(proxyUrl.trim());
       setProxyTestResult(res);
       loadProxyStatus(proxyUrl.trim());
+      if (res.ok) {
+        appLogger.success(`Proxy hoạt động tốt (${res.latency_ms}ms, IP: ${res.ip || 'OK'})`, { taskKey: 'test-proxy', category: 'Proxy' });
+      } else {
+        appLogger.warn(`Proxy phản hồi chậm hoặc có lỗi: ${res.error || 'Thất bại'}`, { taskKey: 'test-proxy', category: 'Proxy' });
+      }
     } catch (err: any) {
       setProxyTestResult({
         ok: false,
         error: err?.message || 'Lỗi kết nối kiểm tra proxy',
       });
       loadProxyStatus(proxyUrl.trim());
+      appLogger.error(`Lỗi kiểm tra proxy: ${err?.message || 'Không thể kết nối'}`, { taskKey: 'test-proxy', category: 'Proxy' });
     } finally {
       setIsTestingProxy(false);
     }
@@ -1046,8 +1068,9 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
       await apiClient.cancelDownload();
       stopPolling();
       setTaskStatus((prev) => (prev ? { ...prev, status: 'cancelled', message: 'Người dùng đã hủy tiến trình tải' } : null));
+      appLogger.warn('Đã dừng / hủy tiến trình tải video theo yêu cầu', 'Tải video');
     } catch (err: any) {
-      alert(`Lỗi hủy tác vụ: ${err?.message}`);
+      appLogger.error(`Lỗi hủy tác vụ: ${err?.message}`, 'Tải video');
     }
   };
 
@@ -1059,7 +1082,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
         handleParse(text.trim());
       }
     } catch {
-      alert('Không thể đọc từ bộ nhớ tạm, vui lòng dán thủ công bằng Ctrl+V.');
+      appLogger.warn('Không thể đọc tự động từ Clipboard, vui lòng dán thủ công bằng Ctrl+V', 'Dán link');
     }
   };
 
@@ -2082,8 +2105,6 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                             <option value="en">🇬🇧 Tiếng Anh (en)</option>
                             <option value="vi">🇻🇳 Tiếng Việt (vi)</option>
                             <option value="auto">🌐 Tự động (auto)</option>
-                            <option value="ja">🇯🇵 Tiếng Nhật (ja)</option>
-                            <option value="ko">🇰🇷 Tiếng Hàn (ko)</option>
                           </select>
                         </div>
                         <div>
@@ -2268,7 +2289,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
 
             {/* THÔNG BÁO KẾT NỐI MẠNG: IP TRỰC TIẾP HOẶC PROXY */}
             {networkMode === 'direct' ? (
-              <div className="p-3 bg-amber-950/40 border border-amber-500/40 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 text-amber-200 animate-in fade-in">
+              <div className="hidden p-3 bg-amber-950/40 border border-amber-500/40 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 text-amber-200 animate-in fade-in">
                 <div className="flex items-center gap-2">
                   <Zap className="w-4 h-4 text-amber-400 shrink-0" />
                   <span>
@@ -2287,7 +2308,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
             ) : (
               Boolean(proxyUrl.trim() && proxyStatus && !proxyStatus.is_alive) && (
                 autoXrayEnabled && (proxyUrl.includes('10809') || proxyUrl.includes('10808') || proxyStatus?.is_standby) ? (
-                  <div className="p-3 bg-indigo-950/60 border border-indigo-500/40 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 text-indigo-200 animate-in fade-in">
+                  <div className="hidden p-3 bg-indigo-950/60 border border-indigo-500/40 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 text-indigo-200 animate-in fade-in">
                     <div className="flex items-center gap-2">
                       <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
                       <span>
@@ -2397,7 +2418,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
 
               {/* Thông báo cách ly an toàn khi không tải */}
               {!Boolean(proxyPoolStatus?.is_active || (isDownloading && (proxyPoolStatus?.active_leases ?? 0) > 0)) && (
-                <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
+                <div className="hidden p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span>

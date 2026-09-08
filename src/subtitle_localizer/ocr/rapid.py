@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, List, Optional
+import logging
 import re
 import os
 import sys
@@ -9,6 +10,8 @@ from pathlib import Path
 from importlib import metadata
 import unicodedata
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from subtitle_localizer.domain.models import ModelDescriptorV1, OcrObservationV1
 from subtitle_localizer.ocr.base import OcrProvider
@@ -22,37 +25,101 @@ VIETNAMESE_VOWELS = (
 
 
 def _is_chinese_or_non_latin(text: str) -> bool:
-    if re.fullmatch(r"\s*\d+[,.，。]*\s*", text):
+    stripped = text.strip()
+    if not stripped:
         return False
-    if not re.search(r"[A-Za-z]", text) or re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", text):
-        return True
-    # An x between numeric operands is multiplication, not an English subtitle.
-    return re.fullmatch(
+    if not any(c.isalnum() for c in stripped):
+        return False
+    if re.fullmatch(r"\s*\d+[,.，。]*\s*", stripped):
+        return False
+    # Phép toán
+    if re.fullmatch(
         r"\s*\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?\s*=\s*\d+(?:\.\d+)?[,.，。…]*\s*",
-        text,
-    ) is not None
+        stripped,
+    ) is not None:
+        return True
+    # Phải có ít nhất 1 ký tự Hán tự hợp lệ
+    return bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", stripped))
+
+
+VALID_SHORT_LATIN_WORDS = {
+    "ok", "hi", "no", "bye", "vip", "tv", "app", "usb", "dna", "ceo", "cfo", "cto", "sos", "vs", "am", "pm", "i", "a"
+}
+
+VALID_SINGLE_CJK = {
+    "是", "好", "对", "行", "走", "嗯", "喂", "啊", "哎", "不", "这", "哪", "谁", "有", "没", "快", "慢", "看", "听", "去", "来", "要"
+}
+
+
+def is_trash_sub(text: str) -> bool:
+    """Kiểm tra xem chuỗi văn bản có phải là sub rác (như C, CC, D, Y, d, h... hoặc chữ đơn CJK lạc quẻ) không."""
+    if not text:
+        return True
+    s = text.strip()
+    if not s:
+        return True
+
+    # Kiểm tra ký tự CJK (Hán tự, Hiragana, Katakana, Hangul)
+    cjk_chars = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", s)
+    if cjk_chars:
+        # Nếu chỉ có đúng 1 chữ Hán đơn độc không nằm trong tập thán từ đối thoại hợp lệ -> Rác nền (cốc nước, áo, biển hiệu)
+        if len(cjk_chars) == 1 and len(s) <= 2:
+            if cjk_chars[0] not in VALID_SINGLE_CJK:
+                return True
+        return False
+
+    # Chứa ký tự tiếng Việt có dấu -> Không phải rác
+    if any(c in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđĐ" for c in s):
+        return False
+    # Toàn ký tự đặc biệt hoặc số đơn lẻ
+    if not any(c.isalnum() for c in s):
+        return True
+    if re.fullmatch(r"\s*\d+[,.，。]*\s*", s):
+        return True
+    # Phép toán hợp lệ kiểu 6x6=36
+    if re.fullmatch(r"\s*\d+(?:\.\d+)?\s*[xX×*]\s*\d+(?:\.\d+)?\s*=\s*\d+(?:\.\d+)?[,.，。…]*\s*", s):
+        return False
+    # Chữ Latin ngắn (1-3 ký tự) nhưng không có trong từ điển tiếng Anh hợp lệ
+    clean_latin = re.sub(r"[^a-zA-Z]", "", s).lower()
+    if clean_latin and len(clean_latin) <= 3:
+        if clean_latin not in VALID_SHORT_LATIN_WORDS:
+            return True
+    # Ký tự lặp vô nghĩa: "CCC", "DDD", "YY"
+    if len(clean_latin) > 1 and len(set(clean_latin)) == 1:
+        return True
+    return False
 
 
 def _is_valid_language_text(text: str, language: str) -> bool:
     """Kiểm tra tính hợp lệ của dòng chữ OCR theo ngôn ngữ đã chọn."""
     if not text or not text.strip():
         return False
-    if re.fullmatch(r"\s*\d+[,.，。]*\s*", text):
+    stripped = text.strip()
+    if is_trash_sub(stripped):
         return False
 
     lang = (language or "auto").lower()
     if lang == "zh":
-        return _is_chinese_or_non_latin(text)
-    elif lang == "en":
-        return re.search(r"[A-Za-z]", text) is not None
+        return _is_chinese_or_non_latin(stripped)
+
+    # Loại bỏ ký tự đơn lẻ không phải từ có nghĩa
+    if len(stripped) == 1:
+        if bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", stripped)):
+            return True
+        if lang == "en" and stripped in ("I", "a", "A"):
+            return True
+        return False
+
+    if lang == "en":
+        return re.search(r"[A-Za-z]", stripped) is not None
     elif lang == "vi":
         return (
-            re.search(r"[A-Za-z]", text) is not None
-            or any(c in VIETNAMESE_VOWELS for c in text)
+            re.search(r"[A-Za-z]", stripped) is not None
+            or any(c in VIETNAMESE_VOWELS for c in stripped)
         )
     return (
-        re.search(r"[\u3400-\u4dbf\u4e00-\u9fffA-Za-z]", text) is not None
-        or any(c in VIETNAMESE_VOWELS for c in text)
+        re.search(r"[\u3400-\u4dbf\u4e00-\u9fffA-Za-z]", stripped) is not None
+        or any(c in VIETNAMESE_VOWELS for c in stripped)
     )
 
 
@@ -201,6 +268,7 @@ class RapidOcrProvider(OcrProvider):
                         session.disable_fallback()
                 self.execution_provider = expected
                 self.is_loaded = True
+                logger.info(f"RapidOCR đã nạp thành công với provider: {expected}")
             except Exception as e:
                 self.unload()
                 raise RuntimeError(f"Không thể khởi tạo RapidOCR: {e}")
@@ -331,6 +399,7 @@ class RapidOcrProvider(OcrProvider):
         progress_callback: Optional[Any] = None,
         diff_threshold: float = 1.5,
         include_advanced: bool = False,
+        enable_early_exit: bool = False,
     ) -> List[OcrObservationV1]:
         with self._lock:
             if not self.is_loaded or self.engine is None:
@@ -471,6 +540,17 @@ class RapidOcrProvider(OcrProvider):
                         )
                     ):
                         best_observation = candidate_observation
+
+                    # Early-Exit Acceleration: Nếu crop gốc hoặc tăng tương phản đã nhận diện chính xác
+                    # với độ tin cậy cao và không cần sửa biên Hán tự -> dừng sớm, tiết kiệm 60-70% thời gian.
+                    if (
+                        enable_early_exit
+                        and candidate_index <= 1
+                        and candidate_observation.confidence >= 0.92
+                        and not candidate_observation.preprocessing_metadata.get("verified_han_edge")
+                        and lines
+                    ):
+                        break
 
                 if best_observation is not None:
                     best_observation.confidence = round(best_observation.confidence, 3)

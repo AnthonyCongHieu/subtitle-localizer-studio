@@ -11,7 +11,11 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from subtitle_localizer.domain.models import SubtitleCueV1
-from subtitle_localizer.dubbing.capcut_tts import CAPCUT_VOICE_CATALOG, CapCutTTSClient
+from subtitle_localizer.dubbing.capcut_tts import (
+    CAPCUT_VOICE_CATALOG,
+    CapCutTTSClient,
+    _RESOURCE_ID_MAP,
+)
 from subtitle_localizer.dubbing.gemini_tts import GEMINI_VOICE_CATALOG, GeminiTTSClient
 
 logger = logging.getLogger(__name__)
@@ -465,19 +469,100 @@ AVAILABLE_VOICES: Dict[str, str] = {
 }
 
 
+_GEMINI_VOICE_IDS: set[str] = {v["voice_id"] for v in GEMINI_VOICE_CATALOG if "voice_id" in v}
+_GEMINI_VOICE_IDS_LOWER: set[str] = {v.lower() for v in _GEMINI_VOICE_IDS}
+_GEMINI_KNOWN_PERSONAS: set[str] = {
+    "puck", "kore", "zephyr", "fenrir", "aoede", "sulafat", "charon", "enceladus",
+    "leda", "orus", "despina", "algenib", "callirrhoe", "eurydice", "hermes",
+    "jupiter", "ganymede", "triton", "proteus", "titan",
+}
+
+_CAPCUT_VOICE_IDS: set[str] = {v["voice_id"] for v in CAPCUT_VOICE_CATALOG if "voice_id" in v}
+_CAPCUT_VOICE_IDS_LOWER: set[str] = {v.lower() for v in _CAPCUT_VOICE_IDS}
+
+_EDGE_VOICE_IDS: set[str] = {v["voice_id"] for v in EDGE_VOICE_CATALOG if "voice_id" in v}
+_EDGE_VOICE_IDS_LOWER: set[str] = {v.lower() for v in _EDGE_VOICE_IDS}
+
+_CAPCUT_PREFIXES = (
+    "BV", "vi_female_huong", "ICL_", "DiT_", "en_us_", "zh_",
+    "en_male_", "en_female_", "multi_", "id_"
+)
+_CAPCUT_SUBSTRINGS = (
+    "_uranus_", "_bigtts", "_streaming", "_dsp", "_mars_",
+    "_moon_", "_wvae_"
+)
+
+
+def is_gemini_voice(voice: Optional[str]) -> bool:
+    """Kiểm tra xem mã giọng có thuộc danh mục Google Gemini AI Speech hay không."""
+    if not voice:
+        return False
+    v = voice.strip()
+    return (
+        v in _GEMINI_VOICE_IDS
+        or v.lower() in _GEMINI_VOICE_IDS_LOWER
+        or v.lower() in _GEMINI_KNOWN_PERSONAS
+    )
+
+
+def is_capcut_voice(voice: Optional[str]) -> bool:
+    """Kiểm tra xem mã giọng có thuộc danh mục ByteDance / CapCut TTS hay không."""
+    if not voice:
+        return False
+    v = voice.strip()
+    if (
+        v in _RESOURCE_ID_MAP
+        or v in _CAPCUT_VOICE_IDS
+        or v.lower() in _CAPCUT_VOICE_IDS_LOWER
+        or v in ("th", "en")
+    ):
+        return True
+    lower = v.lower()
+    if any(sub in lower for sub in _CAPCUT_SUBSTRINGS):
+        return True
+    if any(v.startswith(pfx) for pfx in _CAPCUT_PREFIXES):
+        return True
+    return False
+
+
+def is_edge_voice(voice: Optional[str]) -> bool:
+    """Kiểm tra xem mã giọng có thuộc danh mục Microsoft Edge Neural TTS hay không."""
+    if not voice:
+        return False
+    v = voice.strip()
+    if v in _EDGE_VOICE_IDS or v.lower() in _EDGE_VOICE_IDS_LOWER or v in AVAILABLE_VOICES:
+        return True
+    if "-" in v and "neural" in v.lower():
+        return True
+    return False
+
+
+def resolve_tts_provider(voice: Optional[str], preferred_provider: Optional[str] = None) -> str:
+    """
+    Xác định TTS Provider tối ưu nhất từ thông tin giọng đọc và provider mong muốn.
+    Tôn trọng preferred_provider nếu client gửi lên rõ ràng, trừ khi phát hiện mâu thuẫn rõ ràng với voice.
+    """
+    pref = (preferred_provider or "").strip().lower()
+    v = (voice or "").strip()
+
+    # 1. Phát hiện mâu thuẫn hoặc nhận diện chính xác theo catalog
+    if is_gemini_voice(v):
+        return "gemini"
+    if is_capcut_voice(v):
+        return "capcut"
+    if is_edge_voice(v):
+        return "edge"
+
+    # 2. Nếu giọng chưa nằm trong catalog đã biết (custom voice), tôn trọng provider chỉ định
+    if pref in ("capcut", "gemini", "edge"):
+        return pref
+
+    return "edge"
+
+
 def detect_voice_provider(voice: Optional[str]) -> str:
     """Tự động nhận diện TTS Provider (capcut, gemini, edge) từ tên mã giọng đọc."""
-    v = (voice or "").strip()
-    if v in ("Puck", "Kore", "Fenrir", "Aoede"):
-        return "gemini"
-    if (
-        v.startswith("BV")
-        or v.startswith("vi_female_huong")
-        or "_streaming" in v
-        or "_dsp" in v
-    ):
-        return "capcut"
-    return "edge"
+    return resolve_tts_provider(voice, preferred_provider=None)
 
 
 def clean_subtitle_text(text: str) -> str:
@@ -642,12 +727,8 @@ async def synthesize_text(
     if not clean_text:
         return b""
 
-    # Tự động phát hiện Provider chính xác từ tên giọng đọc
-    detected_prov = detect_voice_provider(voice)
-    if detected_prov in ("capcut", "gemini"):
-        prov = detected_prov
-    else:
-        prov = (provider or "edge").lower().strip()
+    # Tự động giải quyết Provider chính xác từ tên giọng đọc và provider chỉ định
+    prov = resolve_tts_provider(voice, preferred_provider=provider)
 
     audio_data: bytes = b""
 
@@ -843,6 +924,7 @@ async def generate_timed_voiceover(
     voice_female: str = "vi-VN-HoaiMyNeural",
     provider: str = "edge",
     prompt_style: str = "dramatic",
+    progress_callback: Optional[Any] = None,
 ) -> Path:
     """
     Sinh toàn bộ giọng thuyết minh cho các câu phụ đề theo đúng mốc thời gian start_pts của video.
@@ -880,8 +962,11 @@ async def generate_timed_voiceover(
 
     # Tổng hợp âm thanh song song có kiểm soát (Concurrency Semaphore) để tăng tốc độ 4x
     sem = asyncio.Semaphore(max(1, min(batch_size, 4)))
+    completed_count = 0
+    total_valid = len(valid_cues)
 
     async def _fetch_single(i: int, c: SubtitleCueV1, text: str):
+        nonlocal completed_count
         target_v = voice
         if mode == "multi":
             speaker = detect_cue_speaker(c, text)
@@ -894,6 +979,12 @@ async def generate_timed_voiceover(
                 provider=provider,
                 prompt_style=prompt_style,
             )
+            completed_count += 1
+            if progress_callback is not None:
+                try:
+                    progress_callback(completed_count, total_valid, text)
+                except Exception:
+                    pass
             return i, c, text, audio_bytes
 
     tasks = [_fetch_single(i, c, t) for i, (c, t) in enumerate(valid_cues)]
@@ -941,6 +1032,12 @@ async def generate_timed_voiceover(
 
         # Đặt mẫu âm thanh vào timeline
         master_buffer[start_sample:end_sample] += pcm_samples
+
+    # Chuẩn hóa chống vỡ tiếng (Anti-clipping soft peak normalization) khi có nhiều nhân vật nói đè lên nhau
+    if len(master_buffer) > 0:
+        max_peak = float(np.max(np.abs(master_buffer)))
+        if max_peak > 0.98:
+            master_buffer = (master_buffer / max_peak) * 0.95
 
     # Xuất ra file MP3 đồng bộ
     out = _encode_pcm_to_mp3(master_buffer, output_path, sample_rate=sample_rate)

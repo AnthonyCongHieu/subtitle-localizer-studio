@@ -21,6 +21,8 @@ class VideoExporter:
         flip_h: bool = False,
         flip_v: bool = False,
         rotation: float = 0.0,
+        resolution: str = "original",
+        aspect_ratio: str = "original",
     ) -> List[str]:
         src = Path(source_video_path).resolve()
         out = Path(output_video_path).resolve()
@@ -50,6 +52,14 @@ class VideoExporter:
                 filters.append("hflip,vflip")
             elif rot_norm == 270:
                 filters.append("transpose=2")
+
+        # Giữ đúng tỷ lệ, không kéo giãn hình; scale theo chiều cao rồi pad vào canvas.
+        if resolution in {"720p", "1080p", "2k"}:
+            target_h = {"720p": 720, "1080p": 1080, "2k": 1440}[resolution]
+            filters.append(f"scale=-2:{target_h}:force_original_aspect_ratio=decrease")
+        if aspect_ratio in {"16:9", "9:16"}:
+            w, h = (16, 9) if aspect_ratio == "16:9" else (9, 16)
+            filters.append(f"pad=ceil(max(iw,ih*{w}/{h})/2)*2:ceil(max(ih,iw*{h}/{w})/2)*2:(ow-iw)/2:(oh-ih)/2")
 
         vf_arg = ",".join(filters) if filters else None
         vcodec = "h264_nvenc" if use_nvenc else "libx264"
@@ -87,13 +97,15 @@ class VideoExporter:
         flip_h: bool = False,
         flip_v: bool = False,
         rotation: float = 0.0,
+        resolution: str = "original",
+        aspect_ratio: str = "original",
     ) -> Path:
         out = Path(output_video_path).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
 
         # Ghi vào file tạm trước (atomic render)
         prefix = f".tmp_render_{out.stem}_"
-        with tempfile.NamedTemporaryFile(dir=str(out.parent), prefix=prefix, suffix=".mp4", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(dir=str(out.parent), prefix=prefix, suffix=out.suffix or ".mp4", delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
         cmd = self.build_ffmpeg_render_command(
@@ -105,6 +117,8 @@ class VideoExporter:
             flip_h=flip_h,
             flip_v=flip_v,
             rotation=rotation,
+            resolution=resolution,
+            aspect_ratio=aspect_ratio,
         )
 
         try:
@@ -122,6 +136,8 @@ class VideoExporter:
                         flip_h=flip_h,
                         flip_v=flip_v,
                         rotation=rotation,
+                        resolution=resolution,
+                        aspect_ratio=aspect_ratio,
                     )
                     res2 = subprocess.run(fallback_cmd, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
                     if res2.returncode != 0:

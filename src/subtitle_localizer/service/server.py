@@ -2441,9 +2441,9 @@ def create_app(
     ):
         """Thử nghiệm tạo giọng đọc mẫu cho 1 câu thoại ngắn và stream audio về UI."""
         verify_auth(authorization)
-        from subtitle_localizer.dubbing.tts import synthesize_text, detect_voice_provider
+        from subtitle_localizer.dubbing.tts import synthesize_text, resolve_tts_provider
         text = req.text.strip() or "Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio."
-        provider = detect_voice_provider(req.voice) if req.voice else (req.provider or "edge")
+        provider = resolve_tts_provider(req.voice, preferred_provider=req.provider)
         prompt_style = req.prompt_style or "dramatic"
         audio_bytes = await synthesize_text(
             text=text,

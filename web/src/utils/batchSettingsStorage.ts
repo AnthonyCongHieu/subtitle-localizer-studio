@@ -6,6 +6,9 @@ export interface BatchExportConfig {
   batchDubbingEnabled: boolean;
   batchDubbingMode: 'single' | 'gender_multi';
   batchDubbingVoice: string;
+  batchDubbingVoiceMale?: string;
+  batchDubbingVoiceFemale?: string;
+  batchDubbingSpeed?: number;
   batchExportFormat: 'mp4' | 'mkv';
   batchExportResolution: 'original' | '1080p' | '720p' | '2k';
   batchExportAspectRatio: 'original' | '9:16' | '16:9';
@@ -28,6 +31,9 @@ export const DEFAULT_BATCH_EXPORT_CONFIG: BatchExportConfig = {
   batchDubbingEnabled: true,
   batchDubbingMode: 'single',
   batchDubbingVoice: 'vi-VN-NamMinhNeural',
+  batchDubbingVoiceMale: 'vi-VN-NamMinhNeural',
+  batchDubbingVoiceFemale: 'vi-VN-HoaiMyNeural',
+  batchDubbingSpeed: 1.0,
   batchExportFormat: 'mp4',
   batchExportResolution: 'original',
   batchExportAspectRatio: 'original',
@@ -49,7 +55,9 @@ export function loadBatchExportConfig(): BatchExportConfig {
     const parsed = JSON.parse(raw);
     return {
       batchTargetLang:
-        typeof parsed.batchTargetLang === 'string' ? parsed.batchTargetLang : DEFAULT_BATCH_EXPORT_CONFIG.batchTargetLang,
+        ['vi', 'en', 'zh', 'none'].includes(parsed.batchTargetLang)
+          ? parsed.batchTargetLang
+          : DEFAULT_BATCH_EXPORT_CONFIG.batchTargetLang,
       batchDuckingVolume:
         typeof parsed.batchDuckingVolume === 'number'
           ? Math.max(0, Math.min(100, parsed.batchDuckingVolume))
@@ -63,6 +71,18 @@ export function loadBatchExportConfig(): BatchExportConfig {
         typeof parsed.batchDubbingVoice === 'string' && parsed.batchDubbingVoice
           ? parsed.batchDubbingVoice
           : DEFAULT_BATCH_EXPORT_CONFIG.batchDubbingVoice,
+      batchDubbingVoiceMale:
+        typeof parsed.batchDubbingVoiceMale === 'string' && parsed.batchDubbingVoiceMale
+          ? parsed.batchDubbingVoiceMale
+          : DEFAULT_BATCH_EXPORT_CONFIG.batchDubbingVoiceMale,
+      batchDubbingVoiceFemale:
+        typeof parsed.batchDubbingVoiceFemale === 'string' && parsed.batchDubbingVoiceFemale
+          ? parsed.batchDubbingVoiceFemale
+          : DEFAULT_BATCH_EXPORT_CONFIG.batchDubbingVoiceFemale,
+      batchDubbingSpeed:
+        typeof parsed.batchDubbingSpeed === 'number' && parsed.batchDubbingSpeed >= 0.5 && parsed.batchDubbingSpeed <= 2.0
+          ? parsed.batchDubbingSpeed
+          : DEFAULT_BATCH_EXPORT_CONFIG.batchDubbingSpeed,
       batchExportFormat: parsed.batchExportFormat === 'mkv' ? 'mkv' : 'mp4',
       batchExportResolution: ['original', '1080p', '720p', '2k'].includes(parsed.batchExportResolution)
         ? parsed.batchExportResolution
@@ -103,7 +123,7 @@ export function reconcileBatchConfigWithBackend(
   const result: BatchExportConfig = { ...current };
 
   if (pipe.batch) {
-    if (typeof pipe.batch.target_lang === 'string') result.batchTargetLang = pipe.batch.target_lang;
+    if (['vi', 'en', 'zh', 'none'].includes(pipe.batch.target_lang as string)) result.batchTargetLang = pipe.batch.target_lang as string;
     if (typeof pipe.batch.ducking_volume === 'number') result.batchDuckingVolume = pipe.batch.ducking_volume;
     if (typeof pipe.batch.dubbing_enabled === 'boolean') result.batchDubbingEnabled = pipe.batch.dubbing_enabled;
     if (pipe.batch.dubbing_mode === 'single' || pipe.batch.dubbing_mode === 'gender_multi') {
@@ -111,6 +131,15 @@ export function reconcileBatchConfigWithBackend(
     }
     if (typeof pipe.batch.dubbing_voice === 'string' && pipe.batch.dubbing_voice) {
       result.batchDubbingVoice = pipe.batch.dubbing_voice;
+    }
+    if (typeof pipe.batch.dubbing_voice_male === 'string' && pipe.batch.dubbing_voice_male) {
+      result.batchDubbingVoiceMale = pipe.batch.dubbing_voice_male;
+    }
+    if (typeof pipe.batch.dubbing_voice_female === 'string' && pipe.batch.dubbing_voice_female) {
+      result.batchDubbingVoiceFemale = pipe.batch.dubbing_voice_female;
+    }
+    if (typeof pipe.batch.dubbing_speed === 'number') {
+      result.batchDubbingSpeed = pipe.batch.dubbing_speed;
     }
     if (pipe.batch.export_format === 'mp4' || pipe.batch.export_format === 'mkv') {
       result.batchExportFormat = pipe.batch.export_format;
@@ -147,6 +176,19 @@ export function reconcileBatchConfigWithBackend(
       }
       if (pipe.dubbing.voice) {
         result.batchDubbingVoice = pipe.dubbing.voice;
+      }
+      if (pipe.dubbing.voice_male) {
+        result.batchDubbingVoiceMale = pipe.dubbing.voice_male;
+      }
+      if (pipe.dubbing.voice_female) {
+        result.batchDubbingVoiceFemale = pipe.dubbing.voice_female;
+      }
+      if (pipe.dubbing.rate) {
+        const rateMatch = pipe.dubbing.rate.match(/([+-]?\d+)%/);
+        if (rateMatch) {
+          const pct = parseInt(rateMatch[1], 10);
+          result.batchDubbingSpeed = Math.round((1 + pct / 100) * 100) / 100;
+        }
       }
       if (pipe.dubbing.mode) {
         result.batchDubbingMode = pipe.dubbing.mode === 'multi' ? 'gender_multi' : 'single';

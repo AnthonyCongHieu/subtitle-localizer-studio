@@ -52,32 +52,6 @@
     "resource_id": "7102355709945188865"
   },
   {
-    "voice_id": "vi-VN-HoaiMyNeural",
-    "display_name": "Hoai My",
-    "lang": "vi",
-    "gender": "male",
-    "description": "Giọng Hoai My (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
-    "tags": [
-      "Hoai My",
-      "TikTok VI",
-      "Tự nhiên"
-    ],
-    "resource_id": "7371666434650280464"
-  },
-  {
-    "voice_id": "vi-VN-NamMinhNeural",
-    "display_name": "Nam Minh",
-    "lang": "vi",
-    "gender": "male",
-    "description": "Giọng Nam Minh (VI) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
-    "tags": [
-      "Nam Minh",
-      "TikTok VI",
-      "Tự nhiên"
-    ],
-    "resource_id": "7371666524727153168"
-  },
-  {
     "voice_id": "BV075_streaming_vibrato_dsp",
     "display_name": "Việt Méo",
     "lang": "vi",
@@ -554,19 +528,6 @@
     "tags": [
       "ThaiLand 2",
       "TikTok TH",
-      "Tự nhiên"
-    ],
-    "resource_id": "7569439521352338689"
-  },
-  {
-    "voice_id": "en-US-JennyMultilingualNeural",
-    "display_name": "Jenny",
-    "lang": "en",
-    "gender": "male",
-    "description": "Giọng Jenny (EN) chuẩn TikTok CapCut, biểu cảm tự nhiên và mượt mà.",
-    "tags": [
-      "Jenny",
-      "TikTok EN",
       "Tự nhiên"
     ],
     "resource_id": "7569439521352338689"

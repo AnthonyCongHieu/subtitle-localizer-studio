@@ -24,14 +24,15 @@ class ExtractionSettings(BaseModel):
     auto_fallback: bool = True
 
     # Khi mode == "local":
-    # Cố định duy nhất Động cơ Đa phương thức lai Hybrid DualFusion (RapidOCR + Faster-Whisper RAM-Pipe)
-    local_engine: str = "hybrid"  # "hybrid" | "rapidocr" | "whisper" | "demux"
+    # Mặc định: Thuần Local OCR siêu nhẹ (RapidOCR ONNX FP16), bỏ hoàn toàn Whisper để giải phóng VRAM và chống dính BGM
+    local_engine: str = "pure_ocr"  # "pure_ocr" | "rapidocr" | "hybrid" | "whisper" | "demux"
 
     # Khi mode == "api":
     # - "capcut": ByteDance Volcano Engine Subtitle ASR (Chuẩn nhận diện âm thanh của TikTok / CapCut - Khuyên dùng)
     # - "gemini": Google Gemini Multimodal VLM (Nhìn hình, đọc chữ, hiểu cốt truyện, dùng Key Pool 43 keys)
     # - "groq": Groq Cloud Whisper LPU (Siêu tốc 0.5s, Whisper Large-v3)
     api_provider: str = "capcut"  # "capcut" | "gemini" | "groq"
+    api_fusion_mode: str = "hybrid_ocr"  # "hybrid_ocr" (Cloud ASR + Local OCR - Chuẩn điện ảnh) | "api_only" (Thuần API)
     capcut_api_endpoint: str = "https://editor-api-sg.capcutapi.com"
     capcut_session_token: str = ""
     capcut_mode: str = "cloud_api"  # "cloud_api" | "desktop_draft"
@@ -53,8 +54,10 @@ class ExtractionSettings(BaseModel):
     diff_threshold: float = 2.5
     enable_gap_rescue: bool = True
     enable_roi_tightening: bool = True
+    enable_early_exit: bool = True  # Tăng tốc OCR suy luận cascade, ngắt sớm khi crop rõ nét
+    edge_gating_threshold: float = 0.0  # Lọc bỏ frame không có nét chữ (Laplacian/Sobel energy)
 
-    # 2. Cấu hình ASR (Faster-Whisper CUDA):
+    # 2. Cấu hình ASR (Faster-Whisper CUDA - chỉ kích hoạt khi chọn local_engine == 'hybrid'):
     whisper_model: str = "small"  # "tiny" | "base" | "small" | "medium" | "large-v3"
     whisper_device: str = "cuda"  # "cuda" | "cpu"
     whisper_compute_type: str = "float16"  # "float16" | "int8_float16" | "int8"

@@ -12,6 +12,8 @@ from subtitle_localizer.dubbing.tts import (
     get_tts_catalog,
     synthesize_text,
     clean_subtitle_text,
+    detect_voice_provider,
+    resolve_tts_provider,
 )
 from subtitle_localizer.dubbing.capcut_tts import (
     CapCutTTSClient,
@@ -193,6 +195,76 @@ class MultiProviderTTSTest(unittest.TestCase):
         from subtitle_localizer.dubbing import mix_voiceover_into_video, mix_voiceover_audio_only
         self.assertTrue(callable(mix_voiceover_into_video))
         self.assertTrue(callable(mix_voiceover_audio_only))
+
+    def test_capcut_catalog_cleaned_of_neural_voices(self) -> None:
+        """Kiểm tra capcut_voices.json đã được loại bỏ 3 giọng Edge-TTS gán nhầm."""
+        capcut_ids = {v["voice_id"] for v in CAPCUT_VOICE_CATALOG}
+        self.assertEqual(len(CAPCUT_VOICE_CATALOG), 124)
+        self.assertNotIn("vi-VN-NamMinhNeural", capcut_ids)
+        self.assertNotIn("vi-VN-HoaiMyNeural", capcut_ids)
+        self.assertNotIn("en-US-JennyMultilingualNeural", capcut_ids)
+        for vid in capcut_ids:
+            self.assertNotIn("Neural", vid)
+
+    def test_detect_voice_provider_and_resolve_provider(self) -> None:
+        """Kiểm tra nhận diện provider chính xác cho toàn bộ các dạng giọng."""
+        # CapCut complex voices
+        self.assertEqual(detect_voice_provider("multi_female_yangguangnv_uranus_bigtts"), "capcut")
+        self.assertEqual(detect_voice_provider("multi_female_richgirl_uranus_bigtts"), "capcut")
+        self.assertEqual(detect_voice_provider("multi_male_felipe_uranus_bigtts"), "capcut")
+        self.assertEqual(detect_voice_provider("DiT_en_female_jessie"), "capcut")
+        self.assertEqual(detect_voice_provider("en_male_deadpool"), "capcut")
+        self.assertEqual(detect_voice_provider("BV421_vivn_streaming"), "capcut")
+        self.assertEqual(detect_voice_provider("th"), "capcut")
+        self.assertEqual(detect_voice_provider("en"), "capcut")
+
+        # Gemini personas
+        self.assertEqual(detect_voice_provider("Puck"), "gemini")
+        self.assertEqual(detect_voice_provider("Kore"), "gemini")
+        self.assertEqual(detect_voice_provider("Zephyr"), "gemini")
+        self.assertEqual(detect_voice_provider("Sulafat"), "gemini")
+        self.assertEqual(detect_voice_provider("Charon"), "gemini")
+        self.assertEqual(detect_voice_provider("Enceladus"), "gemini")
+        self.assertEqual(detect_voice_provider("Orus"), "gemini")
+        self.assertEqual(detect_voice_provider("Despina"), "gemini")
+
+        # Edge voices
+        self.assertEqual(detect_voice_provider("vi-VN-NamMinhNeural"), "edge")
+        self.assertEqual(detect_voice_provider("vi-VN-HoaiMyNeural"), "edge")
+        self.assertEqual(detect_voice_provider("en-US-JennyNeural"), "edge")
+        self.assertEqual(detect_voice_provider("nam"), "edge")
+        self.assertEqual(detect_voice_provider(None), "edge")
+        self.assertEqual(detect_voice_provider(""), "edge")
+
+        # Resolve with preferred provider
+        # 1. Clear voice identity overrides conflicting preference
+        self.assertEqual(resolve_tts_provider("multi_female_yangguangnv_uranus_bigtts", preferred_provider="edge"), "capcut")
+        self.assertEqual(resolve_tts_provider("vi-VN-NamMinhNeural", preferred_provider="capcut"), "edge")
+        self.assertEqual(resolve_tts_provider("Zephyr", preferred_provider="edge"), "gemini")
+
+        # 2. Unknown custom voice respects preferred_provider
+        self.assertEqual(resolve_tts_provider("custom_cloned_voice_123", preferred_provider="capcut"), "capcut")
+        self.assertEqual(resolve_tts_provider("custom_cloned_voice_123", preferred_provider="gemini"), "gemini")
+
+    @patch("subtitle_localizer.dubbing.capcut_tts.CapCutTTSClient.synthesize", new_callable=AsyncMock)
+    def test_server_test_tts_routes_capcut_without_fallback(self, mock_capcut: AsyncMock) -> None:
+        """Kiểm tra endpoint /settings/test-tts không ép giọng CapCut thành Edge."""
+        from fastapi.testclient import TestClient
+        from subtitle_localizer.service.server import create_app
+        mock_capcut.return_value = b"capcut_test_mp3_stream"
+
+        client = TestClient(create_app())
+        resp = client.post(
+            "/api/v1/settings/test-tts",
+            json={
+                "text": "Kiểm tra giọng CapCut",
+                "voice": "multi_female_yangguangnv_uranus_bigtts",
+                "provider": "capcut",
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content, b"capcut_test_mp3_stream")
+        mock_capcut.assert_called_once()
 
 
 if __name__ == "__main__":

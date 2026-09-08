@@ -74,6 +74,7 @@ class FrameAccurateBoundaryRefiner:
         self,
         video_path: str,
         cues: List[SubtitleCueV1],
+        progress_callback: Optional[Any] = None,
     ) -> List[SubtitleCueV1]:
         """
         Tinh chỉnh ranh giới tất cả cues bằng kỹ thuật Anchor Template Matching:
@@ -104,6 +105,11 @@ class FrameAccurateBoundaryRefiner:
         total_cues = len(cues)
 
         for i in range(total_cues):
+            if progress_callback:
+                try:
+                    progress_callback(i + 1, total_cues)
+                except Exception:
+                    pass
             cue = cues[i]
             prev_end = cues[i - 1].end_pts if i > 0 else 0.0
             next_start = cues[i + 1].start_pts if i + 1 < total_cues else cue.end_pts + 1.0

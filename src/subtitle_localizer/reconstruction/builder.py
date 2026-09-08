@@ -105,7 +105,12 @@ class CueReconstructor:
 
             # Majority vote cho từng dòng text
             texts = [c[1] for c in cluster]
-            final_text = majority_vote_text(texts)
+            final_text = majority_vote_text(texts).strip()
+
+            # Lọc bỏ các cue rác: không có chữ/số hoặc chỉ là ký tự lẻ / rác vô nghĩa (C, CC, D, Y...)
+            from subtitle_localizer.ocr.rapid import is_trash_sub
+            if is_trash_sub(final_text):
+                continue
 
             avg_conf = sum(c[2] for c in cluster) / len(cluster)
             flags: List[str] = []

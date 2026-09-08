@@ -217,6 +217,7 @@ class ProjectManifestV1:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     schema_version: str = "project-manifest-v1"
+    media_items: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         res = asdict(self)
@@ -247,6 +248,7 @@ class ProjectManifestV1:
             created_at=float(data.get("created_at", time.time())),
             updated_at=float(data.get("updated_at", time.time())),
             schema_version=data.get("schema_version", "project-manifest-v1"),
+            media_items=list(data.get("media_items", [])),
         )
 
 

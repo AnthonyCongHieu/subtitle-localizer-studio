@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -154,6 +156,84 @@ class Database:
                 with conn:
                     conn.executescript(MIGRATIONS[ver])
                     conn.execute("INSERT INTO schema_migrations(version) VALUES (?);", (ver,))
+
+    def check_integrity_or_recover(self) -> bool:
+        """Kiểm tra tính toàn vẹn của SQLite DB. Nếu phát hiện malformed, tự động cứu hộ row-by-row."""
+        try:
+            conn = self.get_connection()
+            rows = conn.execute("PRAGMA integrity_check;").fetchall()
+            if rows and rows[0][0] == "ok":
+                return True
+        except Exception:
+            pass
+        return self.recover_corrupted_database()
+
+    def recover_corrupted_database(self) -> bool:
+        """Tự động cứu hộ và phục hồi toàn bộ dữ liệu hợp lệ khi SQLite gặp lỗi disk image malformed."""
+        with self._lock:
+            self.close()
+            now = int(time.time())
+            backup_path = self.db_path.with_name(f"{self.db_path.name}.corrupted.{now}")
+            clean_path = self.db_path.with_name(f"{self.db_path.name}.clean.{now}")
+            try:
+                # 1. Sao lưu database bị lỗi
+                if self.db_path.exists():
+                    shutil.copy2(self.db_path, backup_path)
+                wal_path = self.db_path.with_name(f"{self.db_path.name}-wal")
+                if wal_path.exists():
+                    shutil.copy2(wal_path, self.db_path.with_name(f"{backup_path.name}-wal"))
+
+                # 2. Tạo database sạch và nạp schema
+                clean_db = sqlite3.connect(str(clean_path))
+                clean_db.row_factory = sqlite3.Row
+                clean_db.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
+                for ver in sorted(MIGRATIONS.keys()):
+                    clean_db.executescript(MIGRATIONS[ver])
+                    clean_db.execute("INSERT INTO schema_migrations(version) VALUES (?);", (ver,))
+
+                # 3. Cứu hộ dữ liệu từng dòng từ database cũ
+                if backup_path.exists():
+                    try:
+                        src_conn = sqlite3.connect(str(backup_path))
+                        src_conn.row_factory = sqlite3.Row
+                        for tbl in ["projects", "cues", "regions", "stage_runs", "bridge_events"]:
+                            try:
+                                cur = src_conn.execute(f"SELECT rowid FROM {tbl}")
+                                rowids = cur.fetchall()
+                                for r in rowids:
+                                    try:
+                                        row = src_conn.execute(f"SELECT * FROM {tbl} WHERE rowid = ?", (r[0],)).fetchone()
+                                        if row:
+                                            placeholders = ", ".join(["?"] * len(row))
+                                            clean_db.execute(f"INSERT OR REPLACE INTO {tbl} VALUES ({placeholders})", tuple(row))
+                                    except Exception:
+                                        pass
+                                clean_db.commit()
+                            except Exception:
+                                pass
+                        src_conn.close()
+                    except Exception:
+                        pass
+                clean_db.close()
+
+                # 4. Dọn dẹp file WAL/SHM cũ và hoán đổi file sạch
+                for ext in ["-wal", "-shm"]:
+                    extra = self.db_path.with_name(f"{self.db_path.name}{ext}")
+                    if extra.exists():
+                        try:
+                            extra.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
+                if self.db_path.exists():
+                    try:
+                        self.db_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                clean_path.rename(self.db_path)
+                return True
+            except Exception:
+                return False
 
     def close(self) -> None:
         with self._lock:

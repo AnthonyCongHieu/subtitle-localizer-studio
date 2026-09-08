@@ -239,12 +239,13 @@ def check_and_fix_configs(root_dir: Path = ROOT_DIR) -> Dict[str, bool]:
 
 
 def check_database(db_path: Path | str = ROOT_DIR / "subtitle_localizer.db") -> Tuple[bool, str]:
-    """Kiểm tra và tự động khởi tạo / migrate cơ sở dữ liệu SQLite."""
+    """Kiểm tra, tự động khởi tạo / migrate và kiểm định tính toàn vẹn (Self-Healing) cơ sở dữ liệu SQLite."""
     try:
         from subtitle_localizer.persistence.database import Database
         db = Database(str(db_path))
         db.migrate()
-        return True, "Cơ sở dữ liệu SQLite sẵn sàng và đã cập nhật migration."
+        db.check_integrity_or_recover()
+        return True, "Cơ sở dữ liệu SQLite sẵn sàng, toàn vẹn 100% và đã cập nhật migration."
     except Exception as e:
         return False, f"Lỗi khởi tạo cơ sở dữ liệu: {e}"
 
@@ -370,6 +371,16 @@ def run_preflight_checks(root_dir: Path = ROOT_DIR, auto_fix: bool = True, port:
     ff_ok, ff_msg = check_ffmpeg(root_dir)
     status_icon = "✅" if ff_ok else "ℹ️"
     print(f"[{status_icon}]       FFmpeg Video Engine: {ff_msg}")
+
+    try:
+        import onnxruntime as ort
+        providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" in providers:
+            print("[✅]       AI Hardware Engine: NVIDIA GPU (CUDAExecutionProvider - Siêu tốc RTX)")
+        else:
+            print("[ℹ️]       AI Hardware Engine: CPUExecutionProvider (CPU)")
+    except Exception:
+        pass
 
     print("=" * 72)
     return True

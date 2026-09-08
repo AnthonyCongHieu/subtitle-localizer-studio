@@ -65,6 +65,7 @@ class BackgroundWorker:
         self,
         project_id: str,
         max_duration_seconds: Optional[float] = None,
+        ocr_only: bool = False,
     ) -> bool:
         """Thực thi pipeline hoàn chỉnh cho project với OCR và Dịch thực tế."""
         manifest = self.repo.get_project(project_id)
@@ -124,9 +125,11 @@ class BackgroundWorker:
             pipeline_settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
 
             cues: List[SubtitleCueV1] = []
+            cloud_cues: List[SubtitleCueV1] = []
             effective_source_lang = manifest.source_language
 
             auto_fallback_ocr = getattr(pipeline_settings.ocr, "auto_fallback", True)
+            api_fusion_mode = getattr(pipeline_settings.ocr, "api_fusion_mode", "hybrid_ocr")
 
             if getattr(pipeline_settings.ocr, "mode", "api") == "api":
                 provider = getattr(pipeline_settings.ocr, "api_provider", "capcut")
@@ -136,7 +139,8 @@ class BackgroundWorker:
                     progress=0.2,
                     metrics={"label": f"Bắt đầu trích xuất phụ đề qua Đám Mây ({provider.upper()})..."},
                 )
-                self.repo.save_stage_run(project_id, stage_api)
+                if not self.is_cancelled(project_id):
+                    self.repo.save_stage_run(project_id, stage_api)
 
                 def _on_cloud_progress(pct: float, msg: str) -> None:
                     if self.is_cancelled(project_id):
@@ -147,7 +151,8 @@ class BackgroundWorker:
                         progress=round(0.2 + 0.55 * pct, 2),
                         metrics={"label": msg},
                     )
-                    self.repo.save_stage_run(project_id, st)
+                    if not self.is_cancelled(project_id):
+                        self.repo.save_stage_run(project_id, st)
 
                 try:
                     if provider == "capcut":
@@ -157,7 +162,7 @@ class BackgroundWorker:
                             session_token=getattr(pipeline_settings.ocr, "capcut_session_token", ""),
                             endpoint=getattr(pipeline_settings.ocr, "capcut_api_endpoint", "https://editor-api-sg.capcutapi.com"),
                         )
-                        cues = extractor.extract_cues(
+                        cloud_cues = extractor.extract_cues(
                             video_path=video_path,
                             source_lang=manifest.source_language,
                             draft_id=getattr(pipeline_settings.ocr, "capcut_draft_id", None) or None,
@@ -168,7 +173,7 @@ class BackgroundWorker:
                         extractor = GeminiVideoVlmExtractor(
                             model_name=getattr(pipeline_settings.ocr, "vlm_model", "gemini-2.5-flash")
                         )
-                        cues = extractor.extract_cues(
+                        cloud_cues = extractor.extract_cues(
                             video_path=video_path,
                             source_lang=manifest.source_language,
                             progress_callback=_on_cloud_progress,
@@ -179,7 +184,7 @@ class BackgroundWorker:
                             api_key=getattr(pipeline_settings.ocr, "groq_api_key", ""),
                             model=getattr(pipeline_settings.ocr, "groq_model", "whisper-large-v3"),
                         )
-                        cues = extractor.extract_cues(
+                        cloud_cues = extractor.extract_cues(
                             video_path=video_path,
                             source_lang=manifest.source_language,
                             progress_callback=_on_cloud_progress,
@@ -187,12 +192,12 @@ class BackgroundWorker:
                     else:
                         raise ValueError(f"Nhà cung cấp Cloud API không được hỗ trợ: {provider}")
 
-                    if cues:
+                    if cloud_cues:
                         stage_api_done = StageRunV1(
                             stage_name="cloud_extraction",
                             status="completed",
                             progress=0.8,
-                            metrics={"label": f"Hoàn tất trích xuất {len(cues)} câu phụ đề qua Cloud ({provider.upper()})!", "cues_count": len(cues)},
+                            metrics={"label": f"Hoàn tất trích xuất {len(cloud_cues)} câu phụ đề qua Cloud ({provider.upper()})!", "cues_count": len(cloud_cues)},
                         )
                         self.repo.save_stage_run(project_id, stage_api_done)
                     else:
@@ -202,20 +207,36 @@ class BackgroundWorker:
                     if not auto_fallback_ocr:
                         raise
 
-                if cues and effective_source_lang == "auto":
-                    effective_source_lang = self._detect_language(" ".join(c.source_text for c in cues))
+                if cloud_cues and effective_source_lang == "auto":
+                    effective_source_lang = self._detect_language(" ".join(c.source_text for c in cloud_cues))
                     manifest.source_language = effective_source_lang
                     self.repo.save_project(manifest)
 
+                # Quyết định dung hợp hay dùng trực tiếp cues từ cloud:
+                # Mode 2 (CapCut API) mặc định dung hợp với Local OCR (tương đương Mode 3 trong benchmark).
+                # Với Gemini/Groq hoặc khi api_fusion_mode == 'api_only' hoặc video không mở được: dùng trực tiếp cloud cues.
+                import cv2
+                _test_cap = cv2.VideoCapture(str(video_path))
+                video_can_decode = bool(_test_cap.isOpened())
+                _test_cap.release()
+
+                if cloud_cues:
+                    if provider == "capcut" and api_fusion_mode == "hybrid_ocr" and video_can_decode:
+                        # Tiếp tục xuống khối Local OCR bên dưới để lấy Ground Truth và dung hợp
+                        pass
+                    else:
+                        cues = cloud_cues
+
             if not cues:
-                if getattr(pipeline_settings.ocr, "mode", "api") == "api" and auto_fallback_ocr:
+                if getattr(pipeline_settings.ocr, "mode", "api") == "api" and not cloud_cues and auto_fallback_ocr:
                     stage_fb = StageRunV1(
                         stage_name="cloud_extraction",
                         status="running",
                         progress=0.2,
-                        metrics={"label": "Cloud API chưa sẵn sàng. Tự động chuyển cứu hộ sang Local Hybrid AI (GPU)..."},
+                        metrics={"label": "Cloud API chưa sẵn sàng. Tự động chuyển cứu hộ sang Local OCR (GPU/CPU)..."},
                     )
-                    self.repo.save_stage_run(project_id, stage_fb)
+                    if not self.is_cancelled(project_id):
+                        self.repo.save_stage_run(project_id, stage_fb)
 
                 if self.is_cancelled(project_id):
                     raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
@@ -229,9 +250,13 @@ class BackgroundWorker:
                     roi_norms=rois_tuples,
                     max_duration_seconds=max_duration_seconds,
                     diff_threshold=pipeline_settings.ocr.diff_threshold,
+                    edge_gating_threshold=getattr(pipeline_settings.ocr, "edge_gating_threshold", 0.0),
                 )
                 if not crops or not pts_list:
-                    raise RuntimeError(f"No video frames could be decoded: {video_path}")
+                    if cloud_cues:
+                        cues = cloud_cues
+                    else:
+                        raise RuntimeError(f"No video frames could be decoded: {video_path}")
 
                 # Stage 2: OCR Inference Stage
                 stage2 = StageRunV1(
@@ -240,7 +265,8 @@ class BackgroundWorker:
                     progress=0.2,
                     metrics={"current": 0, "total": len(crops), "label": f"Bắt đầu nhận diện OCR ({len(crops)} frames)..."},
                 )
-                self.repo.save_stage_run(project_id, stage2)
+                if not self.is_cancelled(project_id):
+                    self.repo.save_stage_run(project_id, stage2)
 
                 last_progress_time = 0.0
                 last_progress_pct = -1.0
@@ -260,7 +286,8 @@ class BackgroundWorker:
                             progress=pct,
                             metrics={"current": cur, "total": tot, "label": f"Đang quét OCR: {int(pct * 100)}% ({cur}/{tot})..."},
                         )
-                        self.repo.save_stage_run(project_id, st)
+                        if not self.is_cancelled(project_id):
+                            self.repo.save_stage_run(project_id, st)
 
                 engine_name = getattr(pipeline_settings.ocr, "engine", "rapidocr")
                 if engine_name == "paddle":
@@ -284,6 +311,8 @@ class BackgroundWorker:
                         extra_kwargs["progress_callback"] = _on_ocr_progress
                     if "include_advanced" in sig.parameters:
                         extra_kwargs["include_advanced"] = True
+                    if "enable_early_exit" in sig.parameters:
+                        extra_kwargs["enable_early_exit"] = getattr(pipeline_settings.ocr, "enable_early_exit", True)
                     observations = ocr_provider.recognize(
                         crops=crops,
                         pts_list=pts_list,
@@ -303,9 +332,21 @@ class BackgroundWorker:
                                     gap_intervals.append((pre_cues[i].end_pts, pre_cues[i + 1].start_pts))
 
                             if gap_intervals:
+                                selected_gaps = gap_intervals[:8]
                                 rescue_crops = []
                                 rescue_pts = []
-                                for g_start, g_end in gap_intervals[:12]:
+                                for g_idx, (g_start, g_end) in enumerate(selected_gaps):
+                                    if self.is_cancelled(project_id):
+                                        raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
+                                    st_gap = StageRunV1(
+                                        stage_name="ocr_inference",
+                                        status="running",
+                                        progress=round(0.70 + 0.02 * ((g_idx + 1) / len(selected_gaps)), 2),
+                                        metrics={"label": f"Đang trích xuất frame cứu phụ đề (Gap-Rescue {g_idx + 1}/{len(selected_gaps)})..."},
+                                    )
+                                    if not self.is_cancelled(project_id):
+                                        self.repo.save_stage_run(project_id, st_gap)
+
                                     g_crops, g_pts = self.sampler.sample_video_frames(
                                         video_path=video_path,
                                         roi_norm=roi_tuple,
@@ -316,7 +357,7 @@ class BackgroundWorker:
                                         fps=2.5,
                                     )
                                     for c, p in zip(g_crops, g_pts):
-                                        if g_start < p < g_end:
+                                        if g_start < p < g_end and len(rescue_crops) < 50:
                                             rescue_crops.append(c)
                                             rescue_pts.append(p)
 
@@ -325,6 +366,23 @@ class BackgroundWorker:
                                         rescue_extra = {}
                                         if "include_advanced" in sig.parameters:
                                             rescue_extra["include_advanced"] = True
+
+                                        def _on_rescue_progress(r_cur: int, r_tot: int) -> None:
+                                            if self.is_cancelled(project_id):
+                                                raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
+                                            r_pct = round(0.72 + 0.02 * (r_cur / max(1, r_tot)), 2)
+                                            st_res = StageRunV1(
+                                                stage_name="ocr_inference",
+                                                status="running",
+                                                progress=r_pct,
+                                                metrics={"current": r_cur, "total": r_tot, "label": f"Đang nhận diện chữ cứu phụ đề: {r_cur}/{r_tot} frames..."},
+                                            )
+                                            if not self.is_cancelled(project_id):
+                                                self.repo.save_stage_run(project_id, st_res)
+
+                                        if "progress_callback" in sig.parameters:
+                                            rescue_extra["progress_callback"] = _on_rescue_progress
+
                                         rescue_obs = ocr_provider.recognize(
                                             crops=rescue_crops,
                                             pts_list=rescue_pts,
@@ -369,7 +427,8 @@ class BackgroundWorker:
                     progress=0.75,
                     metrics={"label": "Tái tạo câu phụ đề (Reconstruction)..."},
                 )
-                self.repo.save_stage_run(project_id, stage3)
+                if not self.is_cancelled(project_id):
+                    self.repo.save_stage_run(project_id, stage3)
 
                 cues = self.reconstructor.build_cues(observations)
 
@@ -386,27 +445,73 @@ class BackgroundWorker:
                         progress=0.78,
                         metrics={"label": f"Tinh chỉnh ranh giới Frame-Accurate ({len(cues)} câu)..."},
                     )
-                    self.repo.save_stage_run(project_id, stage_refine)
+                    if not self.is_cancelled(project_id):
+                        self.repo.save_stage_run(project_id, stage_refine)
+
+                    def _on_refine_progress(ref_cur: int, ref_tot: int) -> None:
+                        if self.is_cancelled(project_id):
+                            raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
+                        ref_pct = round(0.78 + 0.03 * (ref_cur / max(1, ref_tot)), 2)
+                        st_ref = StageRunV1(
+                            stage_name="boundary_refinement",
+                            status="running",
+                            progress=ref_pct,
+                            metrics={"current": ref_cur, "total": ref_tot, "label": f"Tinh chỉnh ranh giới khớp từng frame: {ref_cur}/{ref_tot} câu..."},
+                        )
+                        if not self.is_cancelled(project_id):
+                            self.repo.save_stage_run(project_id, st_ref)
 
                     self.boundary_refiner.roi_norm = roi_tuple
                     cues = self.boundary_refiner.refine_cues(
                         video_path=str(video_path),
                         cues=cues,
+                        progress_callback=_on_refine_progress,
                     )
 
                 if self.is_cancelled(project_id):
                     raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
 
-                # Stage 3.8: Hybrid DualFusion Pass (Dung hợp âm thanh RAM-Pipe và thị giác)
-                local_engine = getattr(pipeline_settings.ocr, "local_engine", "hybrid")
-                if local_engine == "hybrid" and video_path.exists():
+                # Stage 3.8: Hybrid Fusion Pass (Dung hợp Cloud ASR hoặc Whisper với Thị giác Local OCR)
+                local_engine = getattr(pipeline_settings.ocr, "local_engine", "pure_ocr")
+                if cloud_cues and video_path.exists():
+                    stage_cloud_fusion = StageRunV1(
+                        stage_name="hybrid_fusion",
+                        status="running",
+                        progress=0.82,
+                        metrics={"label": "Dung hợp chữ thị giác Local OCR với âm thanh Cloud ASR (Chuẩn điện ảnh)..."},
+                    )
+                    if not self.is_cancelled(project_id):
+                        self.repo.save_stage_run(project_id, stage_cloud_fusion)
+
+                    try:
+                        from subtitle_localizer.fusion.hybrid_engine import LocalHybridFusionEngine
+                        fusion_engine = LocalHybridFusionEngine()
+                        cloud_segs = [
+                            {
+                                "start": round(c.start_pts, 3),
+                                "end": round(c.end_pts, 3),
+                                "text": c.source_text.strip(),
+                                "conf": 0.95,
+                            }
+                            for c in cloud_cues
+                            if c.source_text and c.source_text.strip()
+                        ]
+                        cues = fusion_engine.fuse_cues_with_audio(
+                            existing_cues=cues,
+                            audio_segments=cloud_segs,
+                            lang=effective_source_lang,
+                        )
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning("Dung hợp với Cloud ASR gặp sự cố: %s", exc)
+                elif local_engine == "hybrid" and video_path.exists():
                     stage_hybrid = StageRunV1(
                         stage_name="hybrid_fusion",
                         status="running",
                         progress=0.82,
                         metrics={"label": "Đang dung hợp đa phương thức: Đối chiếu âm thanh RAM Pipe & sửa lỗi..."},
                     )
-                    self.repo.save_stage_run(project_id, stage_hybrid)
+                    if not self.is_cancelled(project_id):
+                        self.repo.save_stage_run(project_id, stage_hybrid)
 
                     try:
                         from subtitle_localizer.fusion.hybrid_engine import LocalHybridFusionEngine
@@ -429,19 +534,24 @@ class BackgroundWorker:
                     except Exception as exc:
                         logging.getLogger(__name__).warning("Hybrid fusion pass encountered error: %s", exc)
 
+                # Áp dụng bộ lọc Anti-Trash Sub triệt để cho toàn bộ cues trước khi dịch/lưu
+                from subtitle_localizer.ocr.rapid import is_trash_sub
+                cues = [c for c in cues if not is_trash_sub(c.source_text)]
+
 
             if self.is_cancelled(project_id):
                 raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
 
             # Stage 4: Translation Stage (Dịch sang tiếng Việt)
-            if manifest.target_language and manifest.target_language != effective_source_lang and manifest.target_language != "none":
+            if not ocr_only and manifest.target_language and manifest.target_language != effective_source_lang and manifest.target_language != "none":
                 stage4 = StageRunV1(
                     stage_name="translation",
                     status="running",
                     progress=0.85,
                     metrics={"label": f"Đang dịch phụ đề ({effective_source_lang} -> {manifest.target_language})..."},
                 )
-                self.repo.save_stage_run(project_id, stage4)
+                if not self.is_cancelled(project_id):
+                    self.repo.save_stage_run(project_id, stage4)
 
                 translator = self.translation_registry.get_provider_for_pair(
                     effective_source_lang, manifest.target_language
@@ -480,14 +590,8 @@ class BackgroundWorker:
                     translator.unload()
                 except Exception:
                     pass
-            cancel_stage = StageRunV1(
-                stage_name="cancelled",
-                status="cancelled",
-                progress=0.0,
-                metrics={"label": "Tiến trình quét phụ đề đã được dừng theo yêu cầu"},
-                end_time=time.time(),
-            )
-            self.repo.save_stage_run(project_id, cancel_stage)
+            # Không ghi stage cancelled ở đây vì stop_pipeline endpoint đã ghi rồi.
+            # Tránh trùng lặp stage cancelled trong database.
             return False
 
         except Exception as error:

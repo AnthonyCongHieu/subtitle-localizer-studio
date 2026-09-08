@@ -36,6 +36,7 @@ export class StudioApiClient {
     source_video_path: string;
     source_language: string;
     target_language: string;
+    media_items?: Array<{ source_video_path: string }>;
   }): Promise<ProjectManifestV1> {
     const res = await fetch(`${API_BASE}/projects`, {
       method: 'POST',
@@ -159,7 +160,7 @@ export class StudioApiClient {
     return res.json();
   }
 
-  async runPipeline(projectId: string, options?: { max_duration_seconds?: number; sync?: boolean }): Promise<{ status: string; project_id: string }> {
+  async runPipeline(projectId: string, options?: { max_duration_seconds?: number; sync?: boolean; ocr_only?: boolean }): Promise<{ status: string; project_id: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/pipeline/run`, {
       method: 'POST',
       headers: this.headers(),
@@ -200,6 +201,9 @@ export class StudioApiClient {
       regions?: RegionTrackV1[];
       subtitle_placement?: string;
       blur_strength?: number;
+      export_format?: 'mp4' | 'mkv';
+      export_resolution?: 'original' | '1080p' | '720p' | '2k';
+      export_aspect_ratio?: 'original' | '9:16' | '16:9';
     },
   ): Promise<{ status: 'completed'; output_path: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/export/mp4`, {
@@ -244,10 +248,11 @@ export class StudioApiClient {
     return res.json();
   }
 
-  async retranslateProject(projectId: string): Promise<{ status: string; cues_count: number }> {
+  async retranslateProject(projectId: string, target_language?: 'vi' | 'en' | 'zh' | 'none'): Promise<{ status: string; cues_count: number }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/retranslate`, {
       method: 'POST',
       headers: this.headers(),
+      body: target_language ? JSON.stringify({ target_language }) : undefined,
     });
     if (!res.ok) throw new Error('Không thể dịch lại kịch bản');
     return res.json();
@@ -278,6 +283,15 @@ export class StudioApiClient {
       body: JSON.stringify({ project_ids: projectIds, auto_export_mp4: autoExportMp4 }),
     });
     if (!res.ok) throw new Error('Lỗi chạy batch pipeline');
+    return res.json();
+  }
+
+  async mergeProjectExports(projectId: string): Promise<{ status: string; output_path: string; item_count: number }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/merge-export`, { method: 'POST', headers: this.headers() });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(payload?.detail || 'Không thể ghép các video đã xuất');
+    }
     return res.json();
   }
 
@@ -327,11 +341,11 @@ export class StudioApiClient {
     source_video_path: string;
     source_language: string;
     target_language: string;
-  }>, regions?: any[]): Promise<ProjectManifestV1[]> {
+  }>, regions?: any[], folder_groups?: Array<{ title: string; videos: string[]; source_language?: string; target_language?: string }>): Promise<ProjectManifestV1[]> {
     const res = await fetch(`${API_BASE}/projects/batch-create`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ items, regions }),
+      body: JSON.stringify({ items, regions, folder_groups }),
     });
     if (!res.ok) throw new Error('Không thể tạo hàng loạt dự án');
     return res.json();
@@ -345,8 +359,9 @@ export class StudioApiClient {
     return `${API_BASE}/projects/${projectId}/export/ass?use_translated=${useTranslated}`;
   }
 
-  getVideoStreamUrl(projectId: string): string {
-    return `${API_BASE}/projects/${projectId}/video/stream`;
+  getVideoStreamUrl(projectId: string, quality: string = 'original'): string {
+    const qParam = quality && quality !== 'original' ? `?quality=${encodeURIComponent(quality)}` : '';
+    return `${API_BASE}/projects/${projectId}/video/stream${qParam}`;
   }
 
   getRenderedVideoUrl(projectId: string, download: boolean = false): string {
@@ -1463,8 +1478,9 @@ export interface ExtractionSettings {
   // - "local": Chạy hoàn toàn cục bộ trên máy, tận dụng GPU RTX 3050 & 16 CPU cores (0đ, 100% offline)
   // - "api": Chạy qua đám mây Cloud AI (Google Gemini, ByteDance CapCut, hoặc Groq Whisper)
   mode?: 'local' | 'api';
-  local_engine?: 'rapidocr' | 'whisper' | 'demux' | 'hybrid';
+  local_engine?: 'rapidocr' | 'whisper' | 'demux' | 'hybrid' | 'pure_ocr';
   api_provider?: 'gemini' | 'capcut' | 'groq';
+  api_fusion_mode?: 'hybrid_ocr' | 'api_only';
   capcut_api_endpoint?: string;
   capcut_session_token?: string;
   capcut_mode?: 'cloud_api' | 'desktop_draft';
@@ -1472,6 +1488,8 @@ export interface ExtractionSettings {
   groq_api_key?: string;
   groq_model?: 'whisper-large-v3' | 'whisper-large-v3-turbo';
   auto_fallback?: boolean;
+  enable_early_exit?: boolean;
+  edge_gating_threshold?: number;
 
   hybrid_whisper_model?: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
   hybrid_confidence_threshold?: number;
@@ -1527,6 +1545,7 @@ export interface DubbingSettings {
   auto_detect_speakers?: boolean;
   gemini_prompt_style?: string;
   rate: string;
+  speed?: number;
   pitch: string;
   ducking_volume: number;
 }
@@ -1544,6 +1563,9 @@ export interface BatchPipelineSettings {
   dubbing_enabled?: boolean;
   dubbing_mode?: 'single' | 'gender_multi';
   dubbing_voice?: string;
+  dubbing_voice_male?: string;
+  dubbing_voice_female?: string;
+  dubbing_speed?: number;
   export_format?: 'mp4' | 'mkv';
   export_resolution?: 'original' | '1080p' | '720p' | '2k';
   export_aspect_ratio?: 'original' | '9:16' | '16:9';

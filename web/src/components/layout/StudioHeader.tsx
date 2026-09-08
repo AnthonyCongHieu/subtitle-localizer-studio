@@ -5,18 +5,21 @@ import {
   Sliders,
   CheckCircle2,
   XCircle,
-  Activity,
   Play,
   Loader2,
   Download,
   ListPlus,
   Settings,
   ChevronLeft,
-  Square,
+  ChevronDown,
   AlertTriangle,
+  Sparkles,
+  Mic,
+  Check,
 } from 'lucide-react';
-import { ProjectManifestV1 } from '../../types/api';
+import { ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
 import { PresetProfile } from '../../types/presets';
+import { ActivityLogButton } from '../common/GlobalActivityLogger';
 
 interface StudioHeaderProps {
   activeProject: ProjectManifestV1 | null;
@@ -39,11 +42,17 @@ interface StudioHeaderProps {
   hasVideo: boolean;
   onStartScan: () => void;
   onStopScan?: () => void;
+  onTranslateAll?: () => void;
+  isTranslating?: boolean;
+  onDubAll?: () => void;
+  isDubbing?: boolean;
   onOpenDownloader: () => void;
   onOpenQueue: () => void;
   onOpenSettings: () => void;
   onExportVideo?: () => void;
   cuesCount?: number;
+  cues?: SubtitleCueV1[];
+  hasVoiceover?: boolean;
 }
 
 export const StudioHeader: React.FC<StudioHeaderProps> = ({
@@ -56,27 +65,37 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
   presets,
   activePresetId,
   onSelectPreset,
-  statusMessage: _statusMessage,
+  statusMessage,
   backendOnline,
   wsConnected,
   wsStatus,
   saveStatus,
-  loggerCount,
-  onToggleLogger,
+  loggerCount: _loggerCount,
+  onToggleLogger: _onToggleLogger,
   isScanning,
   hasVideo,
   onStartScan,
   onStopScan,
+  onTranslateAll,
+  isTranslating = false,
+  onDubAll,
+  isDubbing = false,
   onOpenDownloader,
   onOpenQueue,
   onOpenSettings,
   onExportVideo,
   cuesCount = 0,
+  cues = [],
+  hasVoiceover = false,
 }) => {
+  const hasSubDone = (cues && cues.length > 0) || cuesCount > 0;
+  const hasTransDone = cues && cues.length > 0 && cues.some((c) => Boolean(c.translated_text && c.translated_text.trim()));
+  const hasDubDone = Boolean(hasVoiceover || activeProject?.has_voiceover);
+
   return (
     <header className="relative h-12 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between text-xs select-none shrink-0 z-30 shadow-md">
       {/* Bên Trái: Nút Quay Lại Breadcrumb + Logo + Bộ Chọn Tập Drama */}
-      <div className="flex items-center gap-1.5 min-w-0 max-w-[calc(50%-140px)] overflow-hidden">
+      <div className="flex items-center gap-1.5 min-w-0 max-w-[48%] overflow-hidden shrink-0">
         {dramaTitle ? (
           <div className="flex items-center gap-1 shrink-0 min-w-0">
             {/* 1. Nút về Dashboard gốc */}
@@ -123,15 +142,15 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
 
         {/* Bộ Chọn Tập Drama Dạng Pill */}
         {projects.length > 0 && (
-          <div className="flex items-center gap-1 bg-slate-900/90 hover:bg-slate-850 border border-slate-800 px-2 py-1 rounded-lg text-xs transition min-w-0 max-w-[130px] sm:max-w-[160px] shrink-0">
-            <FolderOpen className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+          <div className="relative flex items-center bg-slate-900/90 hover:bg-slate-850 border border-slate-800 px-2 py-1 rounded-lg text-xs transition min-w-0 max-w-[130px] sm:max-w-[160px] shrink-0">
+            <FolderOpen className="w-3.5 h-3.5 text-indigo-400 shrink-0 mr-1" />
             <select
               value={activeProject?.project_id || ''}
               onChange={(e) => {
                 const found = projects.find((p) => p.project_id === e.target.value);
                 if (found) onSelectProject(found);
               }}
-              className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer w-full truncate text-[11px]"
+              className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer w-full truncate text-[11px] appearance-none pr-5"
               title="Chọn tập phim để biên tập"
             >
               {projects.map((p) => (
@@ -140,20 +159,21 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
                 </option>
               ))}
             </select>
+            <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 pointer-events-none" />
           </div>
         )}
 
         {/* Bộ Chọn Chuẩn Preset Dạng Pill */}
         {presets.length > 0 && (
-          <div className="hidden 2xl:flex items-center gap-1 bg-slate-900/90 border border-slate-800 px-2 py-1 rounded-lg text-xs shrink-0 max-w-[140px]">
-            <Sliders className="w-3 h-3 text-amber-400 shrink-0" />
+          <div className="hidden 2xl:relative 2xl:flex items-center bg-slate-900/90 border border-slate-800 px-2 py-1 rounded-lg text-xs shrink-0 max-w-[140px]">
+            <Sliders className="w-3 h-3 text-amber-400 shrink-0 mr-1" />
             <select
               value={activePresetId}
               onChange={(e) => {
                 const chosen = presets.find((x) => x.id === e.target.value);
                 if (chosen) onSelectPreset(chosen);
               }}
-              className="bg-transparent text-amber-300 font-medium focus:outline-none cursor-pointer w-full truncate text-[11px]"
+              className="bg-transparent text-amber-300 font-medium focus:outline-none cursor-pointer w-full truncate text-[11px] appearance-none pr-5"
               title="Chuẩn cấu hình áp dụng cho video"
             >
               {presets.map((p) => (
@@ -162,6 +182,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
                 </option>
               ))}
             </select>
+            <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 pointer-events-none" />
           </div>
         )}
       </div>
@@ -195,7 +216,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
       </div>
 
       {/* Bên Phải: Trạng thái Server + Nhật ký + Nút Hành Động Chính */}
-      <div className="flex items-center gap-2 min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
+      <div className="flex items-center gap-2 min-w-0 shrink-0 justify-end ml-auto">
         {/* Trạng thái Server & WebSocket Live */}
         <div className="hidden sm:flex items-center gap-1.5 text-[11px] bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
           {backendOnline ? (
@@ -225,7 +246,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
 
         {/* Trạng thái lưu cấu hình Editor (Auto-Save State) */}
         {activeProject && saveStatus && saveStatus !== 'idle' && (
-          <div className="hidden md:flex items-center gap-1.5 text-[11px] bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 animate-in fade-in">
+          <div className="hidden md:flex items-center gap-1.5 text-[11px] bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 animate-in fade-in shrink-0">
             {saveStatus === 'saving' && (
               <>
                 <Loader2 className="w-3 h-3 animate-spin text-amber-400" />
@@ -247,62 +268,122 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
           </div>
         )}
 
-        {/* Nút Nhật Ký */}
-        <button
-          onClick={onToggleLogger}
-          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs transition"
-          title="Mở nhật ký hoạt động hệ thống"
-        >
-          <Activity className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="hidden sm:inline text-[11px]">Nhật ký</span>
-          {loggerCount > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold">
-              {loggerCount}
-            </span>
-          )}
-        </button>
+        {/* Nút Nhật Ký Tích Hợp Thông Minh (Không Che Màn Hình) */}
+        <ActivityLogButton />
 
-        {/* Nút Hành Động Chính 1: Bắt Đầu Quét Sub HOẶC Dừng / Hủy Quét */}
-        {isScanning ? (
-          <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 text-xs font-medium shadow-inner">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+        {/* Cụm 3 Nút Tổng Hợp Chuẩn Quy Trình: [1. Quét Sub] • [2. Dịch AI] • [3. Lồng Tiếng] */}
+        <div className="flex items-center gap-1.5 bg-slate-900/90 p-1 rounded-xl border border-slate-800 shadow-sm shrink-0">
+          {/* 1. Quét Phụ Đề */}
+          {isScanning ? (
+            <button
+              type="button"
+              onClick={onStopScan}
+              className="flex items-center justify-center gap-1.5 w-28 h-7 px-2 py-1 rounded-lg text-xs font-semibold shadow-sm bg-indigo-600 hover:bg-indigo-500 text-white whitespace-nowrap shrink-0 transition active:scale-[0.98] cursor-pointer"
+              title={statusMessage || '1. Quét Sub: Đang quét phụ đề... (Chi tiết xem tại Dòng thời gian. Nhấp để dừng)'}
+            >
+              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
               <span>Đang Quét...</span>
-            </div>
-            {onStopScan && (
-              <button
-                type="button"
-                onClick={onStopScan}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs font-bold shadow-md shadow-rose-600/40 transition cursor-pointer"
-                title="Dừng hoặc Hủy tiến trình quét phụ đề ngay lập tức"
-              >
-                <Square className="w-3 h-3 fill-white" />
-                <span>Dừng / Hủy</span>
-              </button>
-            )}
-          </div>
-        ) : (
-          <button
-            onClick={onStartScan}
-            disabled={!hasVideo}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            title="Quét phụ đề tự động theo vùng nhận diện"
-          >
-            <Play className="w-3.5 h-3.5 fill-white" />
-            <span>{cuesCount > 0 ? 'Quét Lại Sub' : 'Quét Phụ Đề'}</span>
-          </button>
-        )}
+            </button>
+          ) : (
+            <button
+              onClick={onStartScan}
+              disabled={!hasVideo}
+              className={`flex items-center justify-center gap-1.5 w-28 h-7 px-2 py-1 rounded-lg text-xs font-semibold shadow-sm whitespace-nowrap shrink-0 transition active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
+                hasSubDone
+                  ? 'bg-slate-800 hover:bg-slate-750 text-indigo-300 border border-indigo-500/40'
+                  : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+              }`}
+              title="1. Quét Sub: Quét phụ đề tự động theo vùng nhận diện"
+            >
+              {hasSubDone ? (
+                <span className="flex items-center justify-center gap-1.5 whitespace-nowrap">
+                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Quét Lại</span>
+                </span>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-white shrink-0" />
+                  <span>Quét Sub</span>
+                </>
+              )}
+            </button>
+          )}
 
-        {/* Nút Hành Động 2: Xuất Bản Video MP4 (Export Video) */}
+          {/* 2. Dịch Phụ Đề AI */}
+          {onTranslateAll && (
+            <button
+              type="button"
+              onClick={onTranslateAll}
+              disabled={isTranslating || !hasVideo || !hasSubDone}
+              className={`flex items-center justify-center gap-1.5 w-28 h-7 px-2 py-1 rounded-lg text-xs font-semibold shadow-sm whitespace-nowrap shrink-0 transition active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
+                hasTransDone
+                  ? 'bg-slate-800 hover:bg-slate-750 text-purple-300 border border-purple-500/40'
+                  : 'bg-purple-600 hover:bg-purple-500 text-white'
+              }`}
+              title={!hasSubDone ? "Cần quét hoặc nhập phụ đề trước khi dịch" : "2. Dịch AI: Dịch toàn bộ phụ đề bằng Gemini AI"}
+            >
+              {isTranslating ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  <span>Đang Dịch...</span>
+                </>
+              ) : hasTransDone ? (
+                <span className="flex items-center justify-center gap-1.5 whitespace-nowrap">
+                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Dịch Lại</span>
+                </span>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                  <span>Dịch AI</span>
+                </>
+              )}
+            </button>
+          )}
+
+          {/* 3. Lồng Tiếng AI (TTS) */}
+          {onDubAll && (
+            <button
+              type="button"
+              onClick={onDubAll}
+              disabled={isDubbing || !hasVideo || !hasSubDone}
+              className={`flex items-center justify-center gap-1.5 w-28 h-7 px-2 py-1 rounded-lg text-xs font-semibold shadow-sm whitespace-nowrap shrink-0 transition active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
+                hasDubDone
+                  ? 'bg-slate-800 hover:bg-slate-750 text-amber-300 border border-amber-500/40'
+                  : 'bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold'
+              }`}
+              title={!hasSubDone ? "Cần quét phụ đề trước khi lồng tiếng" : "3. Lồng Tiếng: Lồng tiếng toàn bộ video"}
+            >
+              {isDubbing ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950 shrink-0" />
+                  <span>Đang Đọc...</span>
+                </>
+              ) : hasDubDone ? (
+                <span className="flex items-center justify-center gap-1.5 whitespace-nowrap">
+                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Đọc Lại</span>
+                </span>
+              ) : (
+                <>
+                  <Mic className="w-3.5 h-3.5 text-slate-950 shrink-0" />
+                  <span>Lồng Tiếng</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
+
+        {/* Nút Hành Động Cuối: Xuất Bản Video MP4 (Export Video) */}
         {onExportVideo && (
           <button
             type="button"
             onClick={onExportVideo}
             disabled={!hasVideo}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-bold shadow-md shadow-emerald-600/30 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            className="flex items-center justify-center gap-1.5 w-28 h-8 px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-bold shadow-md shadow-emerald-600/30 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap shrink-0"
             title="Xuất bản & kết xuất video MP4 hoàn thiện (che sub gốc + đè phụ đề dịch)"
           >
-            <Download className="w-3.5 h-3.5" />
+            <Download className="w-3.5 h-3.5 shrink-0" />
             <span>Xuất Video</span>
           </button>
         )}

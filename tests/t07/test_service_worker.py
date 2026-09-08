@@ -112,6 +112,33 @@ class ServiceAndWorkerTest(unittest.TestCase):
         self.assertTrue(len(cues) > 0)
         self.assertTrue(len(cues[0].translated_text) > 0)
 
+    def test_worker_run_pipeline_ocr_only_skips_translation(self) -> None:
+        video_path = Path(self.temp_dir.name) / "worker-input-ocr-only.mp4"
+        video_path.write_bytes(b"test-only-video-placeholder")
+        manifest = ProjectManifestV1(
+            project_id="worker-proj-ocr-only",
+            title="Dự án Worker OCR Only",
+            source_video_path=str(video_path),
+            video_fingerprint="fp_worker_ocr_only",
+            source_language="zh",
+            target_language="vi",
+        )
+        self.repo.save_project(manifest)
+
+        worker = BackgroundWorker(self.repo)
+        worker.ocr_registry.register("rapidocr", MockOcrProvider())
+        with patch.object(
+            worker.sampler,
+            "sample_video_frames",
+            return_value=([b"crop"] * 3, [0.0, 0.5, 1.0]),
+        ):
+            success = worker.run_pipeline_synchronous("worker-proj-ocr-only", ocr_only=True)
+        self.assertTrue(success)
+
+        cues = self.repo.get_cues("worker-proj-ocr-only")
+        self.assertTrue(len(cues) > 0)
+        self.assertEqual(cues[0].translated_text, "")
+
     def test_auth_token_rejection_on_wrong_token(self) -> None:
         from fastapi.testclient import TestClient
         client = TestClient(self.app)

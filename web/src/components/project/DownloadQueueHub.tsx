@@ -83,14 +83,16 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
         await apiClient.resumeQueue();
         setIsQueuePaused(false);
         showFeedback('Đã tiếp tục điều phối hàng đợi tải phim');
+        appLogger.info('Đã tiếp tục điều phối hàng đợi tải phim', 'Hàng đợi');
       } else {
         await apiClient.pauseQueue();
         setIsQueuePaused(true);
         showFeedback('Đã tạm dừng hàng đợi tải phim');
+        appLogger.warn('Đã tạm dừng hàng đợi tải phim', 'Hàng đợi');
       }
       fetchQueue(true);
     } catch (err: any) {
-      alert(`Lỗi thao tác: ${err?.message}`);
+      appLogger.error(`Lỗi thao tác: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -101,9 +103,10 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
     try {
       await apiClient.deleteQueueTask(taskId);
       showFeedback(`Đã xóa "${title}" khỏi hàng đợi`);
+      appLogger.info(`Đã xóa "${title}" khỏi hàng đợi`, 'Hàng đợi');
       fetchQueue(true);
     } catch (err: any) {
-      alert(`Lỗi xóa: ${err?.message}`);
+      appLogger.error(`Lỗi xóa: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -112,12 +115,13 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
       const res = await apiClient.retryQueueTask(taskId);
       if (res.success) {
         showFeedback(`Đã kích hoạt tải lại "${title}"`);
+        appLogger.success(`Đã kích hoạt tải lại "${title}"`, 'Hàng đợi');
         fetchQueue(true);
       } else {
-        alert(res.message);
+        appLogger.warn(res.message || 'Không thể thử lại tác vụ', 'Hàng đợi');
       }
     } catch (err: any) {
-      alert(`Lỗi thử lại: ${err?.message}`);
+      appLogger.error(`Lỗi thử lại: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -126,7 +130,7 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
       await apiClient.reorderQueue(taskId, direction);
       fetchQueue(true);
     } catch (err: any) {
-      alert(`Lỗi đổi thứ tự: ${err?.message}`);
+      appLogger.error(`Lỗi đổi thứ tự: ${err?.message}`, 'Hàng đợi');
     }
   };
 
@@ -134,18 +138,19 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
     const target = item.target_info || {};
     const coverUrl = target.cover_url;
     if (!coverUrl) {
-      alert('Phim này không có ảnh bìa để tải.');
+      appLogger.warn('Phim này không có ảnh bìa để tải', 'Tải ảnh');
       return;
     }
     try {
       const res = await apiClient.downloadCover(coverUrl, item.output_dir || 'uploads');
       if (res.success) {
         showFeedback(`Đã tải ảnh bìa phim "${target.title}" thành công!`);
+        appLogger.success(`Đã tải ảnh bìa phim "${target.title}" thành công!`, 'Tải ảnh');
       } else {
-        alert(res.message || 'Lỗi tải ảnh bìa');
+        appLogger.warn(res.message || 'Lỗi tải ảnh bìa', 'Tải ảnh');
       }
     } catch (err: any) {
-      alert(`Lỗi tải ảnh bìa: ${err?.message}`);
+      appLogger.error(`Lỗi tải ảnh bìa: ${err?.message}`, 'Tải ảnh');
     }
   };
 
@@ -164,9 +169,10 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
       });
       setNewDramaUrl('');
       showFeedback(`Đã thêm "${target.title}" vào hàng đợi (Vị trí #${res.position})!`);
+      appLogger.success(`Đã thêm "${target.title}" vào hàng đợi (#${res.position})`, 'Hàng đợi');
       fetchQueue(true);
     } catch (err: any) {
-      alert(`Lỗi xếp hàng phim: ${err?.message}`);
+      appLogger.error(`Lỗi xếp hàng phim: ${err?.message}`, 'Hàng đợi');
     } finally {
       setIsAddingDrama(false);
     }

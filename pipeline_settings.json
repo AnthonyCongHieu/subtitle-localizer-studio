@@ -1,9 +1,10 @@
 {
   "ocr": {
-    "mode": "api",
+    "mode": "local",
     "auto_fallback": true,
-    "local_engine": "rapidocr",
+    "local_engine": "hybrid",
     "api_provider": "capcut",
+    "api_fusion_mode": "hybrid_ocr",
     "capcut_api_endpoint": "https://editor-api-sg.capcutapi.com",
     "capcut_session_token": "",
     "capcut_mode": "cloud_api",
@@ -17,6 +18,8 @@
     "diff_threshold": 2.5,
     "enable_gap_rescue": true,
     "enable_roi_tightening": true,
+    "enable_early_exit": true,
+    "edge_gating_threshold": 0.0,
     "whisper_model": "small",
     "whisper_device": "cuda",
     "whisper_compute_type": "float16",
@@ -42,14 +45,14 @@
   },
   "dubbing": {
     "enabled": true,
-    "provider": "edge",
+    "provider": "capcut",
     "mode": "single",
-    "voice": "vi-VN-NamMinhNeural",
+    "voice": "BV562_streaming",
     "voice_male": "vi-VN-NamMinhNeural",
-    "voice_female": "vi-VN-HoaiMyNeural",
+    "voice_female": "vi_female_huong",
     "auto_detect_speakers": true,
     "gemini_prompt_style": "dramatic",
-    "rate": "+0%",
+    "rate": "+10%",
     "pitch": "+0Hz",
     "ducking_volume": 0.25
   },
@@ -64,7 +67,7 @@
     "ducking_volume": 25,
     "dubbing_enabled": true,
     "dubbing_mode": "single",
-    "dubbing_voice": "vi-VN-NamMinhNeural",
+    "dubbing_voice": "BV075_streaming",
     "export_format": "mp4",
     "export_resolution": "original",
     "export_aspect_ratio": "original",
@@ -73,7 +76,7 @@
     "stage_dubbing": true,
     "stage_export": true,
     "active_preset_id": "",
-    "sort_mode": "ep_asc",
+    "sort_mode": "status",
     "grid_cols": 3
   }
 }

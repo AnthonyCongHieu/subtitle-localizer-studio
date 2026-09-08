@@ -11,7 +11,7 @@ class SubtitleEditorTest(unittest.TestCase):
         self.assertTrue((editor_dir / "ProxyPlayer.tsx").exists())
         self.assertTrue((editor_dir / "WaveformTimeline.tsx").exists())
         self.assertTrue((editor_dir / "CueTable.tsx").exists())
-        self.assertTrue((editor_dir / "EditorView.tsx").exists())
+        self.assertTrue((editor_dir / "ExportModal.tsx").exists())
 
     def test_cue_table_features_present(self) -> None:
         cue_table_code = (REPOSITORY_ROOT / "web" / "src" / "components" / "editor" / "CueTable.tsx").read_text(encoding="utf-8")

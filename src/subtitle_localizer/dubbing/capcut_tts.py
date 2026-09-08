@@ -525,7 +525,7 @@ class CapCutTTSClient:
         text: str,
         voice: str = "BV075_streaming",
         rate: str = "1.0",
-        timeout: float = 30.0,
+        timeout: float = 120.0,
     ) -> bytes:
         """Gửi yêu cầu sinh giọng đọc lên đám mây CapCut và tải về dữ liệu âm thanh MP3 (bytes)."""
         clean_text = text.strip()
@@ -543,7 +543,7 @@ class CapCutTTSClient:
                 headers=target_headers,
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 raw = resp.read()
                 if len(raw) >= 2 and raw[:2] == b"\x1f\x8b":
                     try:
@@ -599,7 +599,7 @@ class CapCutTTSClient:
                     # Tải file âm thanh từ ByteDance CDN
                     def _download_audio(d_url: str) -> bytes:
                         req_dl = urllib.request.Request(d_url, headers={"User-Agent": "Mozilla/5.0"})
-                        with urllib.request.urlopen(req_dl, timeout=20) as r:
+                        with urllib.request.urlopen(req_dl, timeout=60) as r:
                             return r.read()
 
                     audio_bytes = await asyncio.to_thread(_download_audio, audio_url)

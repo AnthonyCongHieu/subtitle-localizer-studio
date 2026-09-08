@@ -20,7 +20,9 @@ dist/
 benchmarks/golden/clips/
 benchmarks/golden/ground_truth/private/
 benchmarks/results/
-benchmarks/speed_benchmark_results.json
+benchmarks/*.json
+*.bak
+*.corrupted
 fixtures/synthetic/generated/
 /tests/fixtures/*
 !/tests/fixtures/.gitkeep

@@ -1,19 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Crop,
   Eye,
   EyeOff,
-  Sliders,
   Sparkles,
   Tv,
   Crosshair,
-  RotateCw,
-  FlipHorizontal,
-  FlipVertical,
-  Maximize2,
   ChevronRight,
   ChevronLeft,
-  Key,
+  ChevronDown,
   Loader2,
   FileVideo,
   Square,
@@ -21,12 +16,11 @@ import {
   Plus,
   Trash2,
   Droplet,
-  Scan,
   RotateCcw,
   Edit2,
   Save,
-  Mic,
   CheckCircle2,
+  Globe,
 } from 'lucide-react';
 import { RegionTrackV1, ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
 import {
@@ -36,7 +30,7 @@ import {
 } from '../../types/presets';
 import { apiClient } from '../../api/client';
 
-export type RightPanelTab = 'roi' | 'mask' | 'transform' | 'ai_export';
+export type RightPanelTab = 'roi' | 'mask' | 'ai_export';
 
 export interface PositionTemplate {
   id: string;
@@ -84,6 +78,7 @@ interface RightInspectorPanelProps {
   cues?: SubtitleCueV1[];
   onRefreshCues?: () => void;
   isScanning?: boolean;
+  statusMessage?: string | null;
   onStartScan?: () => void;
   onStopScan?: () => void;
   isCollapsed?: boolean;
@@ -95,12 +90,19 @@ interface RightInspectorPanelProps {
   onDeleteRegion?: (id: string) => void;
   onUpdateActiveProject?: (patch: Partial<ProjectManifestV1>) => void;
   onRefreshProject?: () => void;
+  subtitleFontSize?: number;
+  onSubtitleFontSizeChange?: (size: number) => void;
+  subtitleFontFamily?: string;
+  onSubtitleFontFamilyChange?: (font: string) => void;
+  subtitleTextColor?: string;
+  onSubtitleTextColorChange?: (color: string) => void;
+  width?: number;
 }
 
 export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   region,
   onUpdateRegion,
-  onAutoDetectRoi,
+  onAutoDetectRoi: _onAutoDetectRoi,
   sourceLang,
   targetLang,
   onLanguageChange,
@@ -114,25 +116,26 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onToggleSubtitleOverlay,
   subtitlePlacement = 'roi',
   onSubtitlePlacementChange,
-  aspectRatio,
-  onAspectRatioChange,
-  fitMode = 'contain',
-  onToggleFitMode,
+  aspectRatio: _aspectRatio,
+  onAspectRatioChange: _onAspectRatioChange,
+  fitMode: _fitMode = 'contain',
+  onToggleFitMode: _onToggleFitMode,
   isFlippedH,
-  onToggleFlipH,
+  onToggleFlipH: _onToggleFlipH,
   isFlippedV,
-  onToggleFlipV,
+  onToggleFlipV: _onToggleFlipV,
   rotation,
-  onRotationChange,
-  onRotate,
+  onRotationChange: _onRotationChange,
+  onRotate: _onRotate,
   videoPosition,
-  onPositionChange,
+  onPositionChange: _onPositionChange,
   onResetTransform,
   onResetAllParameters,
   activeProject,
   cues = [],
   onRefreshCues,
   isScanning = false,
+  statusMessage = null,
   onStartScan,
   onStopScan,
   isCollapsed = false,
@@ -144,6 +147,13 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onDeleteRegion,
   onUpdateActiveProject,
   onRefreshProject,
+  subtitleFontSize = 16,
+  onSubtitleFontSizeChange,
+  subtitleFontFamily = 'Inter, sans-serif',
+  onSubtitleFontFamilyChange,
+  subtitleTextColor = '#fde047',
+  onSubtitleTextColorChange,
+  width,
 }) => {
   // Kiểm tra dự án có phụ đề hay không để khóa thao tác Dịch và Lồng tiếng (P1 Guard)
   const hasCues = (cues && cues.length > 0) || (activeProject?.cues_count ? activeProject.cues_count > 0 : false);
@@ -207,73 +217,12 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   };
 
   // AI & Export states
-  const [geminiStatus, setGeminiStatus] = useState<{ configured: boolean; masked_key?: string }>({
-    configured: false,
-  });
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [isSavingKey, setIsSavingKey] = useState(false);
-  const [keyMessage, setKeyMessage] = useState<string | null>(null);
-
   const [isTranslatingAll, setIsTranslatingAll] = useState(false);
   const [translateMsg, setTranslateMsg] = useState<string | null>(null);
 
   const [isExportingMp4, setIsExportingMp4] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (activeTab === 'ai_export') {
-      apiClient.getGeminiStatus().then(setGeminiStatus).catch(() => {});
-    }
-  }, [activeTab]);
-
-  const handleSaveGeminiKey = async () => {
-    if (!apiKeyInput.trim()) return;
-    setIsSavingKey(true);
-    setKeyMessage(null);
-    try {
-      await apiClient.setGeminiKey(apiKeyInput.trim());
-      setGeminiStatus({ configured: true, masked_key: '••••••••' + apiKeyInput.slice(-4) });
-      setKeyMessage('Đã lưu Gemini API Key thành công!');
-      setApiKeyInput('');
-    } catch (err: any) {
-      setKeyMessage(`Lỗi: ${err?.message || 'Không thể lưu key'}`);
-    } finally {
-      setIsSavingKey(false);
-    }
-  };
-
-  const [isDubbingAll, setIsDubbingAll] = useState(false);
-  const [dubMsg, setDubMsg] = useState<string | null>(null);
-
-  const handleDubAllVideo = async () => {
-    if (!activeProject) return;
-    setIsDubbingAll(true);
-    setDubMsg('Đang gọi AI lồng tiếng toàn bộ video...');
-    try {
-      const dubSettings = activeProject.custom_pipeline_settings?.dubbing;
-      const res = await apiClient.runDubbing(activeProject.project_id, {
-        mode: dubSettings?.mode || 'single',
-        voice: dubSettings?.voice,
-        voice_male: dubSettings?.voice_male,
-        voice_female: dubSettings?.voice_female,
-        provider: dubSettings?.provider,
-        rate: dubSettings?.rate,
-      });
-      setDubMsg('✓ Lồng tiếng toàn bộ video thành công!');
-      if (onUpdateActiveProject) {
-        onUpdateActiveProject({
-          has_voiceover: true,
-          voiceover_path: res.audio_url,
-        });
-      }
-      if (onRefreshCues) onRefreshCues();
-      if (onRefreshProject) onRefreshProject();
-    } catch (err: any) {
-      setDubMsg(`Lỗi lồng tiếng: ${err?.message || 'Thất bại'}`);
-    } finally {
-      setIsDubbingAll(false);
-    }
-  };
 
   const handleTranslateAllWithAi = async () => {
     if (!activeProject) return;
@@ -359,18 +308,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
         </button>
         <button
           onClick={() => {
-            setActiveTab('transform');
-            onToggleCollapse?.();
-          }}
-          className={`p-2 rounded-lg transition ${
-            activeTab === 'transform' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-          }`}
-          title="Biến Đổi Video"
-        >
-          <Sliders className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => {
             setActiveTab('ai_export');
             onToggleCollapse?.();
           }}
@@ -386,7 +323,10 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   }
 
   return (
-    <aside className="w-88 xl:w-96 bg-slate-950 border-l border-slate-800/80 flex flex-col shrink-0 select-none z-20 min-h-0 overflow-hidden shadow-lg transition-all duration-200">
+    <aside
+      style={width ? { width: `${width}px` } : undefined}
+      className="w-88 xl:w-96 bg-slate-950 border-l border-slate-800/80 flex flex-col shrink-0 select-none z-20 min-h-0 overflow-hidden shadow-lg"
+    >
       {/* 1. Header Tab Bar (4 Tab Rõ Ràng Chuẩn Inspector) */}
       <div className="h-11 bg-slate-900/60 border-b border-slate-800/80 px-2 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px] flex-1 mr-2">
@@ -413,18 +353,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             title="Che Sub & Kiểu Chữ"
           >
             Che/Chữ
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('transform')}
-            className={`flex-1 py-1 rounded-md font-medium text-center transition ${
-              activeTab === 'transform'
-                ? 'bg-indigo-600 text-white font-semibold shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-            title="Biến Đổi Video & Khung Hình"
-          >
-            Biến Đổi
           </button>
           <button
             type="button"
@@ -457,46 +385,18 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
 
         {/* ================= TAB 1: QUÉT & ROI ================= */}
         {activeTab === 'roi' && (
-          <div className="space-y-4 animate-in fade-in duration-150">
-            {/* Thanh Phím Tắt Tiện Lợi (Quick Action Icons Strip) */}
-            <div className="flex items-center justify-between gap-1 p-1 bg-slate-900/90 border border-slate-800 rounded-xl shadow-sm">
-              {onAutoDetectRoi && (
-                <button
-                  type="button"
-                  onClick={onAutoDetectRoi}
-                  className="flex-1 py-1.5 px-2 bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 hover:border-indigo-400 text-indigo-200 hover:text-white rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition cursor-pointer"
-                  title="🎯 Tự động quét và bắt dính vùng chữ phụ đề"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                  <span>Bắt Dính Chữ</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => onUpdateRegion({ ...region, x: 0.06, y: 0.81, width: 0.88, height: 0.15 })}
-                className="p-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-indigo-300 hover:text-white rounded-lg text-[10px] flex items-center justify-center transition cursor-pointer"
-                title="⌖ Căn giữa chuẩn phụ đề đáy"
-              >
-                <Crosshair className="w-3.5 h-3.5 text-indigo-400" />
-              </button>
-              <button
-                type="button"
-                onClick={onTogglePreviewMask}
-                className={`p-1.5 border rounded-lg text-[10px] flex items-center justify-center transition cursor-pointer ${
-                  previewMask ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
-                }`}
-                title={previewMask ? 'Đang BẬT xem trước lớp che sub trên video' : 'Đang TẮT che (Nhấp để xem trước lớp che)'}
-              >
-                {previewMask ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-              </button>
+          <div className="space-y-3.5 animate-in fade-in duration-150">
+            {/* Thanh Tác Vụ Nhanh (Thêm Vùng + Reset) */}
+            <div className="flex items-center gap-1.5 p-1 bg-slate-900/90 border border-slate-800 rounded-xl shadow-sm">
               {onAddRegion && (
                 <button
                   type="button"
                   onClick={onAddRegion}
-                  className="p-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-emerald-400 hover:text-emerald-300 rounded-lg text-[10px] flex items-center justify-center transition cursor-pointer"
+                  className="flex-1 py-2 px-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-emerald-400 hover:text-emerald-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
                   title="+ Thêm vùng quét phụ đề mới (Multi-ROI)"
                 >
                   <Plus className="w-3.5 h-3.5" />
+                  <span>+ Thêm Vùng Quét</span>
                 </button>
               )}
               <button
@@ -505,14 +405,15 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   if (onResetAllParameters) onResetAllParameters();
                   else onResetTransform();
                 }}
-                className="p-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-rose-400 hover:text-rose-300 rounded-lg text-[10px] flex items-center justify-center transition cursor-pointer"
-                title="🔄 Reset toàn bộ thông số video và vùng quét về mặc định"
+                className="px-3 py-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-rose-400 hover:text-rose-300 rounded-lg text-xs flex items-center justify-center gap-1 transition cursor-pointer"
+                title="🔄 Đặt lại toàn bộ thông số vùng quét về mặc định"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
+                <span>Đặt Lại</span>
               </button>
             </div>
 
-            {/* Quản lý Đa Vùng Quét OCR (Multi-ROI: Thêm / Xóa / Chọn vùng) */}
+            {/* THẺ 1: Quản lý Đa Vùng Quét OCR (Multi-ROI) */}
             <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
@@ -521,17 +422,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                     Vùng quét OCR ({(regions && regions.length > 0 ? regions : [region]).length})
                   </span>
                 </div>
-                {onAddRegion && (
-                  <button
-                    type="button"
-                    onClick={onAddRegion}
-                    className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition shadow-sm active:scale-95 cursor-pointer"
-                    title="Thêm một vùng quét phụ đề OCR mới"
-                  >
-                    <Plus className="w-3 h-3" />
-                    <span>Thêm Vùng</span>
-                  </button>
-                )}
+                <span className="text-[10px] text-slate-400">
+                  Nhấp chọn vùng để căn chỉnh
+                </span>
               </div>
 
               {/* Danh sách các chip vùng */}
@@ -582,141 +475,129 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   );
                 })}
               </div>
+            </div>
 
-              {/* Tùy chỉnh Làm Mờ / Chỉ Quét Sub cho Vùng Đang Chọn */}
-              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
-                <div className="space-y-0.5 min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-200">
-                    {region.mask_enabled !== false ? (
-                      <Droplet className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                    ) : (
-                      <Scan className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    )}
-                    <span>Hiệu ứng Làm Mờ (Vùng này)</span>
-                  </div>
-                  <p className="text-[10px] text-slate-400 leading-tight">
-                    {region.mask_enabled !== false
-                      ? 'Đang BẬT: Che chữ gốc bằng Blur khi xuất video & xem trước'
-                      : 'Đang TẮT: Chỉ quét OCR, giữ nguyên video 100% không làm mờ'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextMask = region.mask_enabled === false;
-                    onUpdateRegion({ ...region, mask_enabled: nextMask });
-                  }}
-                  className={`shrink-0 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 shadow-sm active:scale-95 ${
-                    region.mask_enabled !== false
-                      ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
-                      : 'bg-amber-600 hover:bg-amber-500 text-white'
-                  }`}
-                  title="Chuyển đổi giữa Bật làm mờ và Chỉ quét Sub cho vùng này"
-                >
-                  {region.mask_enabled !== false ? (
-                    <>
-                      <Droplet className="w-3 h-3" />
-                      <span>Bật Làm Mờ</span>
-                    </>
-                  ) : (
-                    <>
-                      <Scan className="w-3 h-3" />
-                      <span>Chỉ Quét Sub</span>
-                    </>
-                  )}
-                </button>
+            {/* THẺ 2: Chế Độ Che Mờ & Hiển Thị Video (iOS Toggle Switches) */}
+            <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-3">
+              <div className="flex items-center gap-1.5 pb-1 border-b border-slate-800/80">
+                <Droplet className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="text-[11px] font-semibold text-slate-200">
+                  Chế Độ Che Mờ & Hiển Thị Video
+                </span>
               </div>
 
-              {/* Xem trước Lớp Che Sub Toàn Cục */}
-              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+              {/* Công tắc 1: Làm mờ vùng đang chọn */}
+              {(() => {
+                const isMaskOn = region.mask_enabled !== false;
+                return (
+                  <div className="flex items-center justify-between gap-3 p-2 bg-slate-950/60 border border-slate-800/60 rounded-lg">
+                    <div className="space-y-0.5 min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-semibold text-slate-200">
+                          Làm Mờ Vùng Đang Chọn
+                        </span>
+                        <span
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded transition-colors ${
+                            isMaskOn
+                              ? 'bg-indigo-950 text-indigo-300 border border-indigo-700/60'
+                              : 'bg-slate-800 text-slate-400 border border-slate-700'
+                          }`}
+                        >
+                          {isMaskOn ? 'ĐANG BẬT' : 'ĐANG TẮT'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-tight">
+                        {isMaskOn
+                          ? 'Bật hiệu ứng Blur che chữ gốc khi xuất video & xem trước'
+                          : 'Tắt hiệu ứng làm mờ, chỉ quét OCR giữ nguyên video'}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={isMaskOn}
+                      onClick={() => {
+                        onUpdateRegion({ ...region, mask_enabled: !isMaskOn });
+                      }}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+                        isMaskOn ? 'bg-indigo-600' : 'bg-slate-700'
+                      }`}
+                      title={isMaskOn ? 'Nhấp để TẮT làm mờ vùng này' : 'Nhấp để BẬT làm mờ vùng này'}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                          isMaskOn ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* Công tắc 2: Xem trước lớp che trên video */}
+              <div className="flex items-center justify-between gap-3 p-2 bg-slate-950/60 border border-slate-800/60 rounded-lg">
                 <div className="space-y-0.5 min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-200">
-                    {previewMask ? (
-                      <Eye className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    ) : (
-                      <EyeOff className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    )}
-                    <span>Hiển Thị Lớp Che Trên Video</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-slate-200">
+                      Hiển Thị Lớp Che Trên Video
+                    </span>
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded transition-colors ${
+                        previewMask
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
+                          : 'bg-slate-800 text-slate-400 border border-slate-700'
+                      }`}
+                    >
+                      {previewMask ? 'ĐANG HIỆN' : 'ĐANG ẨN'}
+                    </span>
                   </div>
                   <p className="text-[10px] text-slate-400 leading-tight">
                     {previewMask
-                      ? 'Đang hiển thị vùng làm mờ che phụ đề trên màn hình xem video'
-                      : 'Đang ẩn lớp che mờ, hiển thị video nguyên bản'}
+                      ? 'Đang hiển thị hộp mờ che chữ trên màn hình xem video'
+                      : 'Đang ẩn hộp mờ, hiển thị video nguyên bản rõ nét'}
                   </p>
                 </div>
+
                 <button
                   type="button"
+                  role="switch"
+                  aria-checked={previewMask}
                   onClick={onTogglePreviewMask}
-                  className={`shrink-0 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 shadow-sm active:scale-95 ${
-                    previewMask
-                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-emerald-500/50 ${
+                    previewMask ? 'bg-emerald-600' : 'bg-slate-700'
                   }`}
-                  title="Bật/Tắt xem trước lớp che sub gốc trên video"
+                  title={previewMask ? 'Nhấp để ẨN lớp che trên video' : 'Nhấp để HIỆN lớp che trên video'}
                 >
-                  {previewMask ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                  <span>{previewMask ? 'Đang Bật Che' : 'Đang Tắt Che'}</span>
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                      previewMask ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
                 </button>
               </div>
             </div>
 
-            {/* Tự Bắt Dính Chữ */}
-            {onAutoDetectRoi && (
-              <button
-                type="button"
-                onClick={onAutoDetectRoi}
-                className="w-full py-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white rounded-xl font-semibold flex items-center justify-center gap-1.5 transition shadow-md shadow-indigo-600/20 active:scale-98"
-              >
-                <Sparkles className="w-4 h-4 text-amber-300" />
-                <span>🎯 Tự Động Bắt Dính Vùng Chữ</span>
-              </button>
-            )}
-
-            {/* Ngôn ngữ Nguồn & Đích */}
-            <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2">
-              <label className="text-slate-300 font-medium block text-[11px]">Ngôn ngữ nhận diện & Dịch:</label>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <span className="text-[10px] text-slate-500 block mb-1">Gốc:</span>
-                  <select
-                    value={sourceLang}
-                    onChange={(e) => onLanguageChange && onLanguageChange(e.target.value, targetLang)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
-                  >
-                    <option value="zh">🇨🇳 Tiếng Trung</option>
-                    <option value="en">🇬🇧 Tiếng Anh</option>
-                    <option value="ja">🇯🇵 Tiếng Nhật</option>
-                    <option value="ko">🇰🇷 Tiếng Hàn</option>
-                    <option value="auto">🌐 Tự động</option>
-                  </select>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 block mb-1">Dịch sang:</span>
-                  <select
-                    value={targetLang}
-                    onChange={(e) => onLanguageChange && onLanguageChange(sourceLang, e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
-                  >
-                    <option value="vi">🇻🇳 Tiếng Việt</option>
-                    <option value="en">🇬🇧 Tiếng Anh</option>
-                    <option value="zh">🇨🇳 Tiếng Trung</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Mẫu vị trí gợi ý & Quản lý Thêm/Sửa/Xóa Mẫu */}
-            <div className="space-y-2">
+            {/* THẺ 3: Vị Trí & Kích Thước Khung Quét */}
+            <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-3">
+              {/* Tiêu đề & Nút Thêm Mẫu */}
               <div className="flex items-center justify-between">
-                <label className="text-slate-400 font-medium block text-[11px]">Mẫu vị trí gợi ý:</label>
+                <div className="flex items-center gap-1.5">
+                  <Tv className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="text-[11px] font-semibold text-slate-200">
+                    Mẫu Vị Trí Gợi Ý
+                  </span>
+                </div>
                 <button
                   type="button"
                   onClick={() => {
                     setIsAddingPosTemplate(true);
                     setNewPosTemplateName(`Mẫu ${positionTemplates.length + 1}`);
                   }}
-                  className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-600/40 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 hover:text-white transition shadow-sm cursor-pointer"
-                  title="Lưu tọa độ Y, Chiều cao, Chiều rộng hiện tại thành mẫu vị trí mới"
+                  className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-200 hover:text-white transition shadow-sm cursor-pointer"
+                  title="Lưu tọa độ hiện tại thành mẫu vị trí mới"
                 >
                   <Plus className="w-3 h-3" />
                   <span>+ Thêm Mẫu</span>
@@ -725,7 +606,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
 
               {/* Form tạo mới Mẫu vị trí */}
               {isAddingPosTemplate && (
-                <div className="p-2 bg-slate-950 border border-indigo-500 rounded-xl space-y-2 animate-in fade-in">
+                <div className="p-2 bg-slate-950 border border-indigo-500/60 rounded-xl space-y-2 animate-in fade-in">
                   <label className="text-[10px] text-slate-300 font-semibold block">Tên Mẫu Vị Trí Mới:</label>
                   <input
                     type="text"
@@ -739,14 +620,14 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsAddingPosTemplate(false)}
-                      className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 text-[10px]"
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[10px]"
                     >
                       Hủy
                     </button>
                     <button
                       type="button"
                       onClick={handleCreatePosTemplate}
-                      className="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold flex items-center gap-1 shadow"
+                      className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold flex items-center gap-1 shadow"
                     >
                       <Save className="w-3 h-3" />
                       <span>Lưu Mẫu</span>
@@ -755,6 +636,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 </div>
               )}
 
+              {/* Grid 4 mẫu vị trí */}
               <div className="grid grid-cols-2 gap-1.5">
                 {positionTemplates.map((tpl) => {
                   const isEditing = editingPosTemplateId === tpl.id;
@@ -777,7 +659,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                       className={`p-2 rounded-xl border flex flex-col gap-1 transition cursor-pointer relative group/tpl ${
                         isCurrent
                           ? 'bg-indigo-950/80 border-indigo-500 text-white ring-1 ring-indigo-500/40'
-                          : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 text-slate-300'
+                          : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
                       }`}
                     >
                       {isEditing ? (
@@ -786,7 +668,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                             type="text"
                             value={editingPosTemplateName}
                             onChange={(e) => setEditingPosTemplateName(e.target.value)}
-                            className="w-full bg-slate-950 border border-indigo-400 rounded px-1.5 py-0.5 text-[10px] text-white focus:outline-none"
+                            className="w-full bg-slate-900 border border-indigo-400 rounded px-1.5 py-0.5 text-[10px] text-white focus:outline-none"
                             autoFocus
                           />
                           <div className="flex justify-end gap-1">
@@ -850,77 +732,84 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   );
                 })}
               </div>
+
+              {/* Tọa độ chi tiết (Sliders) */}
+              <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-400">Vị trí Dọc (Y):</span>
+                    <span className="text-indigo-400 font-mono font-bold">{Math.round(region.y * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="95"
+                    value={Math.round(region.y * 100)}
+                    onChange={(e) => onUpdateRegion({ ...region, y: parseFloat((parseInt(e.target.value) / 100).toFixed(4)) })}
+                    className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-400">Chiều Cao (H):</span>
+                    <span className="text-indigo-400 font-mono font-bold">{Math.round(region.height * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="5"
+                    max="40"
+                    value={Math.round(region.height * 100)}
+                    onChange={(e) => onUpdateRegion({ ...region, height: parseFloat((parseInt(e.target.value) / 100).toFixed(4)) })}
+                    className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-400">Chiều Rộng (W):</span>
+                    <span className="text-indigo-400 font-mono font-bold">{Math.round(region.width * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="40"
+                    max="100"
+                    value={Math.round(region.width * 100)}
+                    onChange={(e) => {
+                      const w = parseInt(e.target.value) / 100;
+                      const x = Math.max(0, (1.0 - w) / 2);
+                      onUpdateRegion({ ...region, x: parseFloat(x.toFixed(4)), width: parseFloat(w.toFixed(4)) });
+                    }}
+                    className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Nút Căn giữa chuẩn */}
+                <button
+                  type="button"
+                  onClick={() => onUpdateRegion({ ...region, x: 0.06, y: 0.81, width: 0.88, height: 0.15 })}
+                  className="w-full py-2 bg-slate-950 hover:bg-slate-800 text-indigo-300 hover:text-white rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1.5 border border-slate-800 cursor-pointer"
+                >
+                  <Crosshair className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>⌖ Căn giữa chuẩn phụ đề đáy</span>
+                </button>
+              </div>
             </div>
-
-            {/* Tọa độ chi tiết (Sliders) */}
-            <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-3">
-              <div className="space-y-1">
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-slate-400">Vị trí Dọc (Y):</span>
-                  <span className="text-indigo-400 font-mono font-bold">{Math.round(region.y * 100)}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="95"
-                  value={Math.round(region.y * 100)}
-                  onChange={(e) => onUpdateRegion({ ...region, y: parseFloat((parseInt(e.target.value) / 100).toFixed(4)) })}
-                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-slate-400">Chiều Cao (H):</span>
-                  <span className="text-indigo-400 font-mono font-bold">{Math.round(region.height * 100)}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="5"
-                  max="40"
-                  value={Math.round(region.height * 100)}
-                  onChange={(e) => onUpdateRegion({ ...region, height: parseFloat((parseInt(e.target.value) / 100).toFixed(4)) })}
-                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-slate-400">Chiều Rộng (W):</span>
-                  <span className="text-indigo-400 font-mono font-bold">{Math.round(region.width * 100)}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="40"
-                  max="100"
-                  value={Math.round(region.width * 100)}
-                  onChange={(e) => {
-                    const w = parseInt(e.target.value) / 100;
-                    const x = Math.max(0, (1.0 - w) / 2);
-                    onUpdateRegion({ ...region, x: parseFloat(x.toFixed(4)), width: parseFloat(w.toFixed(4)) });
-                  }}
-                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
-                />
-              </div>
-            </div>
-
-            {/* Căn giữa chuẩn */}
-            <button
-              type="button"
-              onClick={() => onUpdateRegion({ region_id: 'roi-main', x: 0.06, y: 0.81, width: 0.88, height: 0.15 })}
-              className="w-full py-2 bg-slate-900 hover:bg-slate-850 text-indigo-300 rounded-xl text-[11px] font-medium transition flex items-center justify-center gap-1.5 border border-slate-800"
-            >
-              <Crosshair className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Căn giữa chuẩn phụ đề</span>
-            </button>
 
             {/* Nút Quét Sub Nhanh & Dừng / Hủy */}
             {onStartScan && (
               isScanning ? (
                 <div className="flex items-center gap-2 w-full animate-in fade-in duration-150">
-                  <div className="flex-1 py-2.5 bg-indigo-950/70 border border-indigo-700/60 text-indigo-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-inner">
-                    <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-                    <span>Đang Quét Phụ Đề...</span>
+                  <div className="flex-1 py-2 px-2.5 bg-indigo-950/70 border border-indigo-700/60 text-indigo-300 rounded-xl text-xs font-semibold flex flex-col items-center justify-center gap-0.5 shadow-inner min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+                      <span>Đang Quét Phụ Đề...</span>
+                    </div>
+                    {statusMessage && (
+                      <span className="text-[10px] text-indigo-300/80 font-mono truncate max-w-full font-normal">
+                        {statusMessage}
+                      </span>
+                    )}
                   </div>
                   {onStopScan && (
                     <button
@@ -971,21 +860,24 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
 
               {/* Kiểu làm mờ */}
               <div className="space-y-1">
-                <label className="text-[11px] text-slate-400 block">Kiểu làm mờ hòa tan:</label>
-                <select
-                  value={maskStyle}
-                  onChange={(e) => onMaskStyleChange && onMaskStyleChange(e.target.value as MaskStyleType)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
-                >
-                  <option value="feather_tight">Mờ siêu mỏng bám sát dòng chữ (Khuyên dùng)</option>
-                  <option value="optical_blend">Hòa tan quang học thuần khiết (Không viền tối)</option>
-                  <option value="soft_cinema">Gradient điện ảnh mềm (Soft Cinema Ambient)</option>
-                  <option value="blur">Mờ hòa tan tự nhiên</option>
-                  <option value="glass">Kính mờ trong suốt (Frosted Glass)</option>
-                  <option value="ambient">Gradient đáy êm dịu</option>
-                  <option value="feather">Viền lông mềm nhung</option>
-                  <option value="mosaic">Khảm Mosaic nhẹ</option>
-                </select>
+                <label className="text-[11px] text-slate-400 block font-medium">Kiểu làm mờ hòa tan:</label>
+                <div className="relative flex items-center">
+                  <select
+                    value={maskStyle}
+                    onChange={(e) => onMaskStyleChange && onMaskStyleChange(e.target.value as MaskStyleType)}
+                    className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                  >
+                    <option value="feather_tight">Mờ siêu mỏng bám sát dòng chữ (Khuyên dùng)</option>
+                    <option value="optical_blend">Hòa tan quang học thuần khiết (Không viền tối)</option>
+                    <option value="soft_cinema">Gradient điện ảnh mềm (Soft Cinema Ambient)</option>
+                    <option value="blur">Mờ hòa tan tự nhiên</option>
+                    <option value="glass">Kính mờ trong suốt (Frosted Glass)</option>
+                    <option value="ambient">Gradient đáy êm dịu</option>
+                    <option value="feather">Viền lông mềm nhung</option>
+                    <option value="mosaic">Khảm Mosaic nhẹ</option>
+                  </select>
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                </div>
               </div>
 
               {/* Độ mạnh làm mờ (Blur strength) */}
@@ -1051,202 +943,154 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 </div>
               </div>
             </div>
-          </div>
-        )}
 
-        {/* ================= TAB 3: BIẾN ĐỔI VIDEO ================= */}
-        {activeTab === 'transform' && (
-          <div className="space-y-4 animate-in fade-in duration-150">
-            {/* Tỉ lệ Canvas */}
-            <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-slate-300 font-medium block text-[11px]">Tỉ lệ khung hình Canvas:</label>
-                {onToggleFitMode && (
-                  <button
-                    type="button"
-                    onClick={onToggleFitMode}
-                    className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition ${
-                      fitMode === 'cover'
-                        ? 'bg-amber-950/80 border-amber-600 text-amber-300 font-semibold'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                    }`}
-                    title={fitMode === 'cover' ? 'Chế độ Tràn viền (Cover)' : 'Chế độ Đệm đen chuẩn (Contain)'}
-                  >
-                    <Maximize2 className="w-2.5 h-2.5" />
-                    <span>{fitMode === 'cover' ? 'Tràn viền' : 'Đệm chuẩn'}</span>
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-3 gap-1.5 text-[11px] font-mono">
-                {[
-                  { id: 'original', label: 'Gốc' },
-                  { id: '9:16', label: '9:16 TikTok' },
-                  { id: '16:9', label: '16:9 YT/TV' },
-                  { id: '1:1', label: '1:1 Vuông' },
-                  { id: '4:3', label: '4:3' },
-                  { id: '2.35:1', label: '2.35:1' },
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => onAspectRatioChange(item.id as AspectRatioType)}
-                    className={`p-1.5 rounded-lg border text-center transition ${
-                      aspectRatio === item.id
-                        ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Lật & Xoay video */}
+            {/* Kiểu Dáng & Cỡ Chữ Phụ Đề (Typography) */}
             <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-3">
-              <label className="text-slate-300 font-medium block text-[11px]">Lật & Xoay Video:</label>
-              <div className="grid grid-cols-3 gap-1.5">
-                <button
-                  type="button"
-                  onClick={onToggleFlipH}
-                  className={`p-2 rounded-lg border flex flex-col items-center gap-1 text-[11px] transition ${
-                    isFlippedH
-                      ? 'bg-indigo-600/40 border-indigo-500 text-white font-bold'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <FlipHorizontal className="w-3.5 h-3.5" />
-                  <span>Lật Ngang</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={onToggleFlipV}
-                  className={`p-2 rounded-lg border flex flex-col items-center gap-1 text-[11px] transition ${
-                    isFlippedV
-                      ? 'bg-indigo-600/40 border-indigo-500 text-white font-bold'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <FlipVertical className="w-3.5 h-3.5" />
-                  <span>Lật Dọc</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={onRotate}
-                  className="p-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white flex flex-col items-center gap-1 text-[11px] transition"
-                  title="Xoay nhanh +90 độ"
-                >
-                  <RotateCw className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>+90°</span>
-                </button>
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-200">Kiểu Dáng & Cỡ Chữ</span>
+                <span className="text-[10px] text-indigo-400 font-mono font-bold">{subtitleFontSize || 16}px</span>
               </div>
 
-              {/* Slider góc xoay mịn */}
-              <div className="space-y-1 pt-1">
+              {/* Phông chữ */}
+              <div className="space-y-1">
+                <label className="text-[11px] text-slate-400 block font-medium">Phông chữ (Font Family):</label>
+                <div className="relative flex items-center">
+                  <select
+                    value={subtitleFontFamily || 'Inter, sans-serif'}
+                    onChange={(e) => onSubtitleFontFamilyChange && onSubtitleFontFamilyChange(e.target.value)}
+                    className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                  >
+                    <option value="Inter, sans-serif">Inter (Mặc định - Chuẩn hiện đại)</option>
+                    <option value="Roboto, sans-serif">Roboto (Google Font chuẩn)</option>
+                    <option value="'Be Vietnam Pro', sans-serif">Be Vietnam Pro (Việt hóa đẹp)</option>
+                    <option value="Montserrat, sans-serif">Montserrat (Đậm & Điện ảnh)</option>
+                    <option value="Arial, sans-serif">Arial (Không chân cơ bản)</option>
+                    <option value="'Times New Roman', serif">Times New Roman (Cổ điển có chân)</option>
+                    <option value="'Courier New', monospace">Courier New (Đơn cách Monospace)</option>
+                  </select>
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Kích cỡ chữ */}
+              <div className="space-y-1">
                 <div className="flex justify-between text-[11px]">
-                  <span className="text-slate-400">Góc xoay tự do:</span>
-                  <span className="text-cyan-400 font-mono font-bold">{rotation}°</span>
+                  <span className="text-slate-400">Kích thước chữ (Font Size):</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onSubtitleFontSizeChange && onSubtitleFontSizeChange(Math.max(10, (subtitleFontSize || 16) - 1))}
+                      className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold flex items-center justify-center text-xs"
+                      title="Giảm 1px"
+                    >
+                      -
+                    </button>
+                    <span className="text-indigo-400 font-mono font-bold w-7 text-center">{subtitleFontSize || 16}px</span>
+                    <button
+                      type="button"
+                      onClick={() => onSubtitleFontSizeChange && onSubtitleFontSizeChange(Math.min(36, (subtitleFontSize || 16) + 1))}
+                      className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold flex items-center justify-center text-xs"
+                      title="Tăng 1px"
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
                 <input
                   type="range"
-                  min={-180}
-                  max={180}
-                  step={1}
-                  value={rotation}
-                  onChange={(e) => onRotationChange && onRotationChange(parseInt(e.target.value, 10))}
-                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-cyan-500"
+                  min="10"
+                  max="36"
+                  step="1"
+                  value={subtitleFontSize || 16}
+                  data-testid="subtitle-font-size-slider"
+                  onChange={(e) => onSubtitleFontSizeChange && onSubtitleFontSizeChange(parseInt(e.target.value, 10))}
+                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
                 />
               </div>
-            </div>
 
-            {/* Vị trí Lệch tâm (X, Y) & Reset */}
-            <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-400">Vị trí lệch tâm (Kéo thả):</span>
-                <span className="font-mono text-indigo-300">X: {videoPosition.x} | Y: {videoPosition.y}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onResetTransform}
-                  className="flex-1 py-2 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white rounded-lg border border-slate-800 text-[11px] font-medium transition"
-                >
-                  Đặt Lại Video Về Tâm (Reset 0, 0)
-                </button>
-                {onPositionChange && (videoPosition.x !== 0 || videoPosition.y !== 0) && (
-                  <button
-                    type="button"
-                    onClick={() => onPositionChange({ x: 0, y: 0 })}
-                    className="px-2.5 py-2 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 rounded-lg border border-indigo-700/60 text-[11px] font-mono transition"
-                    title="Đưa tọa độ X, Y về 0"
-                  >
-                    Về 0
-                  </button>
-                )}
+              {/* Màu sắc chữ */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-slate-400 block">Màu sắc chữ phụ đề:</label>
+                <div className="flex items-center gap-2">
+                  {[
+                    { label: 'Vàng Phim', color: '#fde047' },
+                    { label: 'Trắng', color: '#ffffff' },
+                    { label: 'Xanh Ngọc', color: '#34d399' },
+                    { label: 'Xanh Lam', color: '#38bdf8' },
+                    { label: 'Cam', color: '#fb923c' },
+                  ].map((item) => (
+                    <button
+                      key={item.color}
+                      type="button"
+                      onClick={() => onSubtitleTextColorChange && onSubtitleTextColorChange(item.color)}
+                      style={{ backgroundColor: item.color }}
+                      className={`w-6 h-6 rounded-full border transition cursor-pointer shadow-sm ${
+                        (subtitleTextColor || '#fde047').toLowerCase() === item.color.toLowerCase()
+                          ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-900 border-white scale-110'
+                          : 'border-slate-700 hover:scale-105'
+                      }`}
+                      title={`${item.label} (${item.color})`}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={subtitleTextColor || '#fde047'}
+                    onChange={(e) => onSubtitleTextColorChange && onSubtitleTextColorChange(e.target.value)}
+                    className="w-7 h-7 rounded border border-slate-700 bg-slate-950 cursor-pointer p-0.5"
+                    title="Bảng chọn màu tùy chỉnh"
+                  />
+                </div>
               </div>
             </div>
-
-            {/* Nút Reset Toàn Bộ Thông Số Video Về Mặc Định */}
-            <button
-              type="button"
-              onClick={onResetAllParameters || onResetTransform}
-              className="w-full py-2.5 bg-slate-900 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-700/60 text-slate-300 hover:text-rose-300 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-98"
-              title="Khôi phục toàn bộ góc xoay, tỷ lệ, vị trí, zoom, lật và mask về mặc định"
-            >
-              <RotateCcw className="w-4 h-4 text-rose-400" />
-              <span>Khôi Phục Toàn Bộ Thông Số Video Về Mặc Định</span>
-            </button>
           </div>
         )}
 
-        {/* ================= TAB 4: AI & XUẤT BẢN ================= */}
+        {/* ================= TAB 3: AI & XUẤT BẢN ================= */}
         {activeTab === 'ai_export' && (
           <div className="space-y-4 animate-in fade-in duration-150">
-            {/* Cấu hình Gemini AI */}
-            <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <Key className="w-3.5 h-3.5 text-indigo-400" />
-                  <span className="font-semibold text-slate-200">Google Gemini AI</span>
-                </div>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                  geminiStatus.configured
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                }`}>
-                  {geminiStatus.configured ? 'Đã Cấu Hình' : 'Chưa Nhập Key'}
+            {/* Ngôn Ngữ Nhận Diện (OCR) & Dịch Thuật (AI) */}
+            <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
+              <div className="flex items-center gap-1.5 pb-1 border-b border-slate-800/80">
+                <Globe className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="text-[11px] font-semibold text-slate-200">
+                  Ngôn Ngữ Nhận Diện (OCR) & Dịch Thuật (AI)
                 </span>
               </div>
-
-              <input
-                type="password"
-                placeholder={geminiStatus.configured ? 'Dán key mới nếu muốn đổi...' : 'Dán mã AIzaSy...'}
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-slate-200 placeholder-slate-600 focus:border-indigo-500 focus:outline-none"
-              />
-
-              <div className="flex items-center justify-between">
-                <a
-                  href="https://aistudio.google.com/app/apikey"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[10px] text-indigo-400 hover:underline"
-                >
-                  Lấy Key Miễn Phí (15 RPM)
-                </a>
-                <button
-                  type="button"
-                  onClick={handleSaveGeminiKey}
-                  disabled={isSavingKey || !apiKeyInput.trim()}
-                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold disabled:opacity-50 transition"
-                >
-                  {isSavingKey ? 'Đang lưu...' : 'Lưu Key'}
-                </button>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-[10px] text-slate-400 block mb-1 font-medium">Gốc (Video):</span>
+                  <div className="relative flex items-center">
+                    <select
+                      value={sourceLang}
+                      onChange={(e) => onLanguageChange && onLanguageChange(e.target.value, targetLang)}
+                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                    >
+                      <option value="zh">🇨🇳 Tiếng Trung</option>
+                      <option value="en">🇬🇧 Tiếng Anh</option>
+                      <option value="auto">🌐 Tự động</option>
+                    </select>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                  </div>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block mb-1 font-medium">Dịch sang (AI):</span>
+                  <div className="relative flex items-center">
+                    <select
+                      value={targetLang}
+                      onChange={(e) => onLanguageChange && onLanguageChange(sourceLang, e.target.value)}
+                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
+                    >
+                      <option value="vi">🇻🇳 Tiếng Việt</option>
+                      <option value="en">🇬🇧 Tiếng Anh</option>
+                      <option value="zh">🇨🇳 Tiếng Trung</option>
+                    </select>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
+                  </div>
+                </div>
               </div>
-
-              {keyMessage && <div className="text-[11px] text-indigo-400 font-medium">{keyMessage}</div>}
             </div>
+
+
 
             {/* Nút Dịch AI Toàn Bộ */}
             <div className="p-3 bg-indigo-950/40 border border-indigo-800/40 rounded-xl space-y-2">
@@ -1283,60 +1127,25 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               )}
             </div>
 
-            {/* Lồng Tiếng AI Toàn Video */}
-            <div className="p-3 bg-amber-950/30 border border-amber-800/40 rounded-xl space-y-2">
-              <div className="flex items-center gap-1.5 font-semibold text-amber-300">
-                <Mic className="w-4 h-4 text-amber-400" />
-                <span>Lồng Tiếng AI Toàn Bộ Video</span>
+            {/* Trình phát Master Voiceover Audio nếu đã lồng tiếng */}
+            {activeProject?.has_voiceover && (
+              <div className="p-3 bg-amber-950/20 border border-amber-800/40 rounded-xl space-y-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Tệp Thuyết Minh Video</span>
+                  </span>
+                  <span className="text-[10px] text-amber-300 font-mono">
+                    voiceover.mp3
+                  </span>
+                </div>
+                <audio
+                  controls
+                  src={apiClient.getVoiceoverAudioUrl(activeProject.project_id)}
+                  className="w-full h-8 rounded-lg"
+                />
               </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Tạo giọng đọc thuyết minh tiếng Việt tự nhiên và đồng bộ chuẩn thời lượng từng câu phụ đề.
-              </p>
-              <button
-                type="button"
-                onClick={handleDubAllVideo}
-                disabled={isDubbingAll || !activeProject || !hasCues}
-                title={!hasCues ? "Cần quét hoặc nhập phụ đề trước khi lồng tiếng" : "Lồng Tiếng Toàn Bộ Video"}
-                className={`w-full py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-lg flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 ${!hasCues ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-              >
-                {isDubbingAll ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                    <span>Đang Tạo Giọng Đọc...</span>
-                  </>
-                ) : (
-                  <>
-                    <Mic className="w-4 h-4 text-slate-950" />
-                    <span>Lồng Tiếng Toàn Bộ Video</span>
-                  </>
-                )}
-              </button>
-              {dubMsg && (
-                <div className="text-[11px] text-amber-300 bg-slate-950/60 p-2 rounded border border-amber-900 font-medium">
-                  {dubMsg}
-                </div>
-              )}
-
-              {/* Trình phát Master Voiceover Audio nếu có */}
-              {activeProject?.has_voiceover && (
-                <div className="pt-2 border-t border-amber-800/40 space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Đã có tệp giọng đọc</span>
-                    </span>
-                    <span className="text-[10px] text-amber-300 font-mono">
-                      voiceover.mp3
-                    </span>
-                  </div>
-                  <audio
-                    controls
-                    src={apiClient.getVoiceoverAudioUrl(activeProject.project_id)}
-                    className="w-full h-8 rounded-lg"
-                  />
-                </div>
-              )}
-            </div>
+            )}
 
             {/* Xuất Bản Video & File */}
             <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2.5">

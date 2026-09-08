@@ -8,10 +8,16 @@ interface UseTimelineShortcutsOptions {
   duration: number;
   onSeek: (time: number) => void;
   selectedCueId?: string | null;
+  selectedCueIds?: string[];
   cues: SubtitleCueV1[];
   onSplitCue?: (time: number) => void;
   onDeleteCue?: (cueId: string) => void;
+  onDeleteCues?: (cueIds: string[]) => void;
+  onDeselectCue?: () => void;
   onToggleFullscreen?: () => void;
+  onToggleAudioMute?: () => void;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
   enabled?: boolean;
@@ -19,13 +25,18 @@ interface UseTimelineShortcutsOptions {
 
 /**
  * Hook quản lý toàn bộ phím tắt chuẩn CapCut PC & Premiere Pro:
- * - Space: Phát / Tạm dừng (Play / Pause)
- * - Ctrl + B hoặc C: Cắt / Tách câu phụ đề tại vị trí playhead (Split Cue)
+ * - Space hoặc K: Phát / Tạm dừng (Play / Pause)
+ * - J / L: Tua nhanh lùi / tiến 1s
+ * - S hoặc C hoặc Ctrl+B: Cắt / Tách câu phụ đề tại vị trí playhead (Split Cue)
  * - Delete hoặc Backspace: Xóa câu phụ đề đang chọn (Delete Cue)
- * - Mũi tên Trái / Phải: Tua lùi / tiến 1 frame (~0.04s hoặc 0.1s)
+ * - Escape: Bỏ chọn câu phụ đề (Deselect)
+ * - M: Bật / Tắt tiếng (Mute toggle)
+ * - Home / End: Về đầu (0s) hoặc cuối video
+ * - + / = và - / _: Phóng to / Thu nhỏ timeline (Zoom In/Out)
+ * - Mũi tên Trái / Phải: Tua lùi / tiến 1 frame (~0.04s)
  * - Shift + Mũi tên Trái / Phải: Nhảy đến câu phụ đề trước / sau (Jump Cue)
  * - F: Bật / Tắt chế độ toàn màn hình (Fullscreen)
- * - Ctrl + Z / Ctrl + Y: Hoàn tác / Làm lại (Undo / Redo)
+ * - Ctrl + Z / Ctrl + Y / Ctrl + Shift + Z: Hoàn tác / Làm lại (Undo / Redo)
  */
 export function useTimelineShortcuts({
   isPlaying,
@@ -34,10 +45,16 @@ export function useTimelineShortcuts({
   duration,
   onSeek,
   selectedCueId,
+  selectedCueIds,
   cues,
   onSplitCue,
   onDeleteCue,
+  onDeleteCues,
+  onDeselectCue,
   onToggleFullscreen,
+  onToggleAudioMute,
+  onZoomIn,
+  onZoomOut,
   onUndo,
   onRedo,
   enabled = true,
@@ -50,7 +67,8 @@ export function useTimelineShortcuts({
       const target = e.target as HTMLElement | null;
       if (
         target &&
-        (target.tagName === 'INPUT' ||
+        (target.closest('input, textarea, select, [contenteditable="true"]') ||
+          target.tagName === 'INPUT' ||
           target.tagName === 'TEXTAREA' ||
           target.tagName === 'SELECT' ||
           target.isContentEditable)
@@ -59,14 +77,17 @@ export function useTimelineShortcuts({
       }
 
       // 1. Phím Space hoặc K: Play / Pause
-      if (e.code === 'Space' || (!e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'k' || e.key === 'K'))) {
+      if (
+        (!e.ctrlKey && !e.metaKey && !e.altKey && e.code === 'Space') ||
+        (!e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'k' || e.key === 'K'))
+      ) {
         e.preventDefault();
         onTogglePlay();
         return;
       }
 
       // 1.1. Phím J / L: Tua nhanh lùi / tiến 1s chuẩn Premiere / CapCut
-      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
         if (e.key === 'j' || e.key === 'J') {
           e.preventDefault();
           onSeek(Math.max(0, currentTime - 1.0));
@@ -79,8 +100,11 @@ export function useTimelineShortcuts({
         }
       }
 
-      // 2. Ctrl + B hoặc phím C (không kèm Ctrl): Cắt / Tách câu phụ đề tại vị trí con trỏ Playhead
-      if ((e.ctrlKey && (e.key === 'b' || e.key === 'B')) || (!e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'c' || e.key === 'C'))) {
+      // 2. Ctrl + B hoặc phím C hoặc phím S (không kèm Ctrl/Alt): Cắt / Tách câu phụ đề tại vị trí con trỏ Playhead
+      if (
+        ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) ||
+        (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && (e.key === 'c' || e.key === 'C' || e.key === 's' || e.key === 'S'))
+      ) {
         e.preventDefault();
         if (onSplitCue) {
           onSplitCue(currentTime);
@@ -88,13 +112,56 @@ export function useTimelineShortcuts({
         return;
       }
 
-      // 3. Phím Delete hoặc Backspace: Xóa câu phụ đề đang chọn
+      // 3. Phím Delete hoặc Backspace: Xóa câu phụ đề đang chọn (Đơn lẻ hoặc Hàng loạt)
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedCueIds && selectedCueIds.length > 0 && onDeleteCues) {
+          e.preventDefault();
+          onDeleteCues(selectedCueIds);
+          return;
+        }
         if (selectedCueId && onDeleteCue) {
           e.preventDefault();
           onDeleteCue(selectedCueId);
           return;
         }
+      }
+
+      // 3.1. Phím Escape: Bỏ chọn câu phụ đề đang chọn
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onDeselectCue?.();
+        return;
+      }
+
+      // 3.2. Phím M: Tắt / Bật tiếng audio gốc
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault();
+        onToggleAudioMute?.();
+        return;
+      }
+
+      // 3.3. Phím Home / End: Về đầu (0s) hoặc cuối video
+      if (e.key === 'Home') {
+        e.preventDefault();
+        onSeek(0);
+        return;
+      }
+      if (e.key === 'End') {
+        e.preventDefault();
+        if (duration > 0) onSeek(duration);
+        return;
+      }
+
+      // 3.4. Phím + / = và - / _: Phóng to / Thu nhỏ dòng thời gian
+      if (!e.altKey && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        onZoomIn?.();
+        return;
+      }
+      if (!e.altKey && (e.key === '-' || e.key === '_')) {
+        e.preventDefault();
+        onZoomOut?.();
+        return;
       }
 
       // 4. Mũi tên Trái / Phải: Tua 1 frame (~0.04s) hoặc 0.1s
@@ -134,7 +201,7 @@ export function useTimelineShortcuts({
       }
 
       // 5. Phím F: Fullscreen
-      if (!e.ctrlKey && !e.metaKey && (e.key === 'f' || e.key === 'F')) {
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
         e.preventDefault();
         if (onToggleFullscreen) {
           onToggleFullscreen();
@@ -142,19 +209,18 @@ export function useTimelineShortcuts({
         return;
       }
 
-      // 6. Ctrl + Z / Ctrl + Y: Undo / Redo
-      if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) {
+      // 6. Ctrl + Z / Ctrl + Y / Ctrl + Shift + Z: Undo / Redo
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
         if (e.shiftKey) {
-          e.preventDefault();
           onRedo?.();
         } else {
-          e.preventDefault();
           onUndo?.();
         }
         return;
       }
 
-      if (e.ctrlKey && (e.key === 'y' || e.key === 'Y')) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
         e.preventDefault();
         onRedo?.();
         return;
@@ -171,7 +237,11 @@ export function useTimelineShortcuts({
       cues,
       onSplitCue,
       onDeleteCue,
+      onDeselectCue,
       onToggleFullscreen,
+      onToggleAudioMute,
+      onZoomIn,
+      onZoomOut,
       onUndo,
       onRedo,
     ]

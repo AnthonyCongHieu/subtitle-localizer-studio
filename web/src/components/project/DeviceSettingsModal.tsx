@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiClient, DeviceStatusInfo } from '../../api/client';
+import { appLogger } from '../common/GlobalActivityLogger';
 import {
   Smartphone,
   Shield,
@@ -106,9 +107,10 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({ isOpen
       setCustomDeviceId(res.device_id);
       setCustomInstallId(res.install_id);
       setDeviceRotateMessage(`Đã cấp thiết bị mới thành công: Device ID ${res.device_id}`);
+      appLogger.success(`Đã cấp thiết bị mới thành công: Device ID ${res.device_id}`, 'Thiết bị');
       setTimeout(() => setDeviceRotateMessage(null), 5000);
     } catch (err: any) {
-      alert(`Không thể cấp thiết bị mới: ${err?.message}`);
+      appLogger.error(`Không thể cấp thiết bị mới: ${err?.message}`, 'Thiết bị');
     } finally {
       setIsRotatingDevice(false);
     }
@@ -116,7 +118,7 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({ isOpen
 
   const handleSaveCustomDevice = async () => {
     if (!customDeviceId.trim() || !customInstallId.trim()) {
-      alert('Vui lòng điền đủ Device ID và Install ID.');
+      appLogger.warn('Vui lòng điền đủ Device ID và Install ID', 'Thiết bị');
       return;
     }
     setIsSavingCustomDevice(true);
@@ -125,9 +127,10 @@ export const DeviceSettingsModal: React.FC<DeviceSettingsModalProps> = ({ isOpen
       setDeviceInfo(res);
       setShowCustomDeviceInput(false);
       setDeviceRotateMessage('Đã cập nhật thông tin thiết bị tùy chỉnh!');
+      appLogger.success('Đã lưu thông tin thiết bị tùy chỉnh thành công!', 'Thiết bị');
       setTimeout(() => setDeviceRotateMessage(null), 4000);
     } catch (err: any) {
-      alert(`Lỗi lưu thiết bị: ${err?.message}`);
+      appLogger.error(`Lỗi lưu thiết bị: ${err?.message}`, 'Thiết bị');
     } finally {
       setIsSavingCustomDevice(false);
     }

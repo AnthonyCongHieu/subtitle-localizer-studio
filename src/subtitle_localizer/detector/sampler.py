@@ -43,6 +43,7 @@ class AdaptiveFrameSampler:
         roi_norms: Optional[List[Tuple[float, float, float, float]]] = None,
         sample_fps: Optional[float] = None,
         fps: Optional[float] = None,
+        edge_gating_threshold: Optional[float] = None,
     ) -> Tuple[List[Any], List[float]]:
         """Mở video thực tế và trích xuất danh sách crops cùng mốc thời gian PTS.
         Hỗ trợ trích xuất đồng thời từ 1 hoặc nhiều vùng ROI (Multi-Region OCR)."""
@@ -97,6 +98,7 @@ class AdaptiveFrameSampler:
             cap.set(cv2.CAP_PROP_POS_FRAMES, curr_frame_idx)
         use_grab = hasattr(cap, "grab")
         active_diff_threshold = diff_threshold if diff_threshold is not None else self.diff_threshold
+        active_edge_gating = edge_gating_threshold if edge_gating_threshold is not None else 0.0
         prev_crops_gray: List[Optional[np.ndarray]] = [None] * len(boxes)
 
         while curr_frame_idx < max_frame_idx:
@@ -119,15 +121,23 @@ class AdaptiveFrameSampler:
 
             for b_idx, (y1, y2, x1, x2) in enumerate(boxes):
                 crop = frame[y1:y2, x1:x2]
+                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+
+                # Text-Presence Edge Gating (VideoSubFinder algorithm):
+                # Bỏ qua các frame không có năng lượng cạnh tần số cao của chữ
+                if active_edge_gating > 0.0:
+                    edge_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                    if edge_var < active_edge_gating:
+                        continue
+
                 if active_diff_threshold > 0.0 and prev_crops_gray[b_idx] is not None:
-                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
                     if gray.shape == prev_crops_gray[b_idx].shape:
                         diff = float(np.mean(cv2.absdiff(gray, prev_crops_gray[b_idx])))
                         if diff < active_diff_threshold:
                             continue
                     prev_crops_gray[b_idx] = gray
                 elif active_diff_threshold > 0.0:
-                    prev_crops_gray[b_idx] = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+                    prev_crops_gray[b_idx] = gray
 
                 crops.append(crop)
                 pts_list.append(pts)
