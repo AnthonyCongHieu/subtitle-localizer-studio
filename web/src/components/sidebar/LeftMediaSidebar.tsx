@@ -114,9 +114,23 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   const [capcutImportMsg, setCapcutImportMsg] = useState<string | null>(null);
 
   // Dubbing tab state: Đồng bộ giọng đọc với Backend Settings
+  const [dubbingMode, setDubbingMode] = useState<'single' | 'multi'>('single');
   const [selectedVoice, setSelectedVoice] = useState('vi-VN-NamMinhNeural');
+  const [selectedMaleVoice, setSelectedMaleVoice] = useState('vi-VN-NamMinhNeural');
+  const [selectedFemaleVoice, setSelectedFemaleVoice] = useState('vi-VN-HoaiMyNeural');
   const [isTestingVoice, setIsTestingVoice] = useState(false);
   const [testVoiceMsg, setTestVoiceMsg] = useState<string | null>(null);
+
+  // Đồng bộ cấu hình lồng tiếng riêng của video hiện tại nếu có
+  useEffect(() => {
+    if (activeProject?.custom_pipeline_settings?.dubbing) {
+      const dub = activeProject.custom_pipeline_settings.dubbing;
+      if (dub.mode) setDubbingMode(dub.mode);
+      if (dub.voice) setSelectedVoice(dub.voice);
+      if (dub.voice_male) setSelectedMaleVoice(dub.voice_male);
+      if (dub.voice_female) setSelectedFemaleVoice(dub.voice_female);
+    }
+  }, [activeProject?.project_id, activeProject?.custom_pipeline_settings]);
 
   // Preset CRUD state
   const [isCreatingPreset, setIsCreatingPreset] = useState(false);
@@ -249,9 +263,12 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
     setIsDubbingAll(true);
     setDubAllMsg('Đang tạo thuyết minh lồng tiếng toàn bộ video...');
     try {
-      const prov = detectVoiceProvider(selectedVoice);
+      const prov = detectVoiceProvider(dubbingMode === 'single' ? selectedVoice : selectedMaleVoice);
       const res = await apiClient.runDubbing(activeProject.project_id, {
+        mode: dubbingMode,
         voice: selectedVoice,
+        voice_male: selectedMaleVoice,
+        voice_female: selectedFemaleVoice,
         provider: prov,
       });
       setDubAllMsg('✓ Lồng tiếng toàn video hoàn tất! Đã đồng bộ với Timeline.');
@@ -410,23 +427,24 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   };
 
   // Thử giọng đọc mẫu
-  const handleTestVoice = async () => {
+  const handleTestVoice = async (voiceToTest?: string) => {
+    const targetVoice = voiceToTest || (dubbingMode === 'single' ? selectedVoice : selectedMaleVoice);
     setIsTestingVoice(true);
-    setTestVoiceMsg('Đang tạo âm thanh giọng đọc mẫu thật...');
+    setTestVoiceMsg(`Đang tạo âm thanh mẫu (${targetVoice})...`);
     if (testAudioRef.current) {
       testAudioRef.current.pause();
       testAudioRef.current = null;
     }
     try {
-      const prov = detectVoiceProvider(selectedVoice);
+      const prov = detectVoiceProvider(targetVoice);
       const blob = await apiClient.testDubbing({
         text: 'Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio.',
-        voice: selectedVoice,
+        voice: targetVoice,
         provider: prov,
       });
       const url = URL.createObjectURL(blob);
       setTestVoiceAudioUrl(url);
-      setTestVoiceMsg('▶ Đang phát giọng đọc mẫu thật...');
+      setTestVoiceMsg(`▶ Đang phát giọng đọc mẫu (${targetVoice})...`);
       const audio = new Audio(url);
       testAudioRef.current = audio;
       audio.onended = () => {
@@ -963,75 +981,169 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
               Tự động khớp và tạo giọng đọc AI tiếng Việt theo đúng thiết lập toàn cục của hệ thống.
             </p>
 
+            {/* Chế độ phân vai lồng tiếng */}
             <div className="space-y-1.5 pt-1">
-              <div className="flex items-center justify-between">
-                <label className="text-slate-400 text-[10px] block">Chọn giọng đọc chính:</label>
-                {detectVoiceProvider(selectedVoice) === 'capcut' && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                    🎬 CapCut Cloud TTS
-                  </span>
-                )}
-                {detectVoiceProvider(selectedVoice) === 'edge' && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
-                    ⚡ Microsoft Edge-TTS
-                  </span>
-                )}
-                {detectVoiceProvider(selectedVoice) === 'gemini' && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                    🌟 Gemini AI TTS
-                  </span>
-                )}
+              <label className="text-slate-400 text-[10px] block font-medium">Chế độ phân vai:</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setDubbingMode('single')}
+                  className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
+                    dubbingMode === 'single'
+                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
+                  }`}
+                >
+                  Đơn giọng (1 người)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDubbingMode('multi')}
+                  className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
+                    dubbingMode === 'multi'
+                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
+                  }`}
+                >
+                  Đa giọng (Nam / Nữ)
+                </button>
               </div>
-              <select
-                value={selectedVoice}
-                onChange={(e) => handleVoiceChange(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
-              >
-                <optgroup label="🇻🇳 Giọng Đọc Chuẩn Edge TTS (Miễn phí & Tự nhiên)">
-                  <option value="vi-VN-NamMinhNeural">Nam Minh (Nam trầm ấm, kịch tính, chuẩn đài)</option>
-                  <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ truyền cảm, dịu dàng, chuẩn phim)</option>
-                </optgroup>
-
-                <optgroup label="🎬 Giọng Đọc CapCut Hot Trend (Review Phim & TikTok)">
-                  <option value="BV075_streaming">Thanh Niên Tự Tin (Review phim)</option>
-                  <option value="BV074_streaming">Cô Gái Hoạt Ngôn (Tươi sáng, thu hút)</option>
-                  <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (Tâm sự, nhẹ nhàng)</option>
-                  <option value="BV562_streaming">Mai (Thuyết minh chuẩn đài truyền hình)</option>
-                  <option value="vi_female_huong">Hương (Nữ phổ thông miền Bắc)</option>
-                  <option value="BV560_streaming">Alex Đại Đế (Nam trầm quyền uy)</option>
-                  <option value="BV075_streaming_vibrato_dsp">Việt Méo (Hài hước, parody)</option>
-                  <option value="BV074_streaming_dsp">Bé Nhí Nhảnh (Trẻ em dễ thương)</option>
-                </optgroup>
-
-                <optgroup label="🌟 Giọng Đọc Gemini AI TTS (Đa sắc thái)">
-                  <option value="Puck">Puck (Gemini Tự Nhiên)</option>
-                  <option value="Kore">Kore (Gemini Truyền Cảm)</option>
-                  <option value="Fenrir">Fenrir (Gemini Trầm Ấm)</option>
-                  <option value="Aoede">Aoede (Gemini Thanh Thoát)</option>
-                </optgroup>
-
-                <optgroup label="🌍 Giọng Đọc Quốc Tế (English)">
-                  <option value="en-US-JennyNeural">Jenny (US Female Warm)</option>
-                  <option value="en-US-GuyNeural">Guy (US Male Broadcast)</option>
-                  <option value="en-US-AriaNeural">Aria (US Dynamic Narrator)</option>
-                  <option value="en-US-ChristopherNeural">Christopher (US Deep Storyteller)</option>
-                  <option value="en-GB-RyanNeural">Ryan (British Classic)</option>
-                  <option value="en-GB-SoniaNeural">Sonia (British Elegant)</option>
-                </optgroup>
-              </select>
             </div>
 
-            <div className="flex items-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={handleTestVoice}
-                disabled={isTestingVoice}
-                className="flex-1 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
-              >
-                {isTestingVoice ? <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" /> : <Volume2 className="w-3.5 h-3.5 text-amber-400" />}
-                <span>Nghe Thử Giọng Mẫu</span>
-              </button>
-            </div>
+            {/* Khi chọn Đơn Giọng: 1 Giọng Đọc Duy Nhất */}
+            {dubbingMode === 'single' && (
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-400 text-[10px] block">Chọn giọng đọc chính:</label>
+                  {detectVoiceProvider(selectedVoice) === 'capcut' && (
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                      🎬 CapCut Cloud TTS
+                    </span>
+                  )}
+                  {detectVoiceProvider(selectedVoice) === 'edge' && (
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
+                      ⚡ Microsoft Edge-TTS
+                    </span>
+                  )}
+                  {detectVoiceProvider(selectedVoice) === 'gemini' && (
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                      🌟 Gemini AI TTS
+                    </span>
+                  )}
+                </div>
+                <select
+                  value={selectedVoice}
+                  onChange={(e) => handleVoiceChange(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
+                >
+                  <optgroup label="🇻🇳 Giọng Đọc Chuẩn Edge TTS (Miễn phí & Tự nhiên)">
+                    <option value="vi-VN-NamMinhNeural">Nam Minh (Nam trầm ấm, kịch tính, chuẩn đài)</option>
+                    <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ truyền cảm, dịu dàng, chuẩn phim)</option>
+                  </optgroup>
+
+                  <optgroup label="🎬 Giọng Đọc CapCut Hot Trend (Review Phim & TikTok)">
+                    <option value="BV075_streaming">Thanh Niên Tự Tin (Review phim)</option>
+                    <option value="BV074_streaming">Cô Gái Hoạt Ngôn (Tươi sáng, thu hút)</option>
+                    <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (Tâm sự, nhẹ nhàng)</option>
+                    <option value="BV562_streaming">Mai (Thuyết minh chuẩn đài truyền hình)</option>
+                    <option value="vi_female_huong">Hương (Nữ phổ thông miền Bắc)</option>
+                    <option value="BV560_streaming">Alex Đại Đế (Nam trầm quyền uy)</option>
+                    <option value="BV075_streaming_vibrato_dsp">Việt Méo (Hài hước, parody)</option>
+                    <option value="BV074_streaming_dsp">Bé Nhí Nhảnh (Trẻ em dễ thương)</option>
+                  </optgroup>
+
+                  <optgroup label="🌟 Giọng Đọc Gemini AI TTS (Đa sắc thái)">
+                    <option value="Puck">Puck (Gemini Tự Nhiên)</option>
+                    <option value="Kore">Kore (Gemini Truyền Cảm)</option>
+                    <option value="Fenrir">Fenrir (Gemini Trầm Ấm)</option>
+                    <option value="Aoede">Aoede (Gemini Thanh Thoát)</option>
+                  </optgroup>
+
+                  <optgroup label="🌍 Giọng Đọc Quốc Tế (English)">
+                    <option value="en-US-JennyNeural">Jenny (US Female Warm)</option>
+                    <option value="en-US-GuyNeural">Guy (US Male Broadcast)</option>
+                    <option value="en-US-AriaNeural">Aria (US Dynamic Narrator)</option>
+                    <option value="en-US-ChristopherNeural">Christopher (US Deep Storyteller)</option>
+                    <option value="en-GB-RyanNeural">Ryan (British Classic)</option>
+                    <option value="en-GB-SoniaNeural">Sonia (British Elegant)</option>
+                  </optgroup>
+                </select>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleTestVoice(selectedVoice)}
+                    disabled={isTestingVoice}
+                    className="flex-1 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
+                  >
+                    {isTestingVoice ? <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" /> : <Volume2 className="w-3.5 h-3.5 text-amber-400" />}
+                    <span>Nghe Thử Giọng Mẫu</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Khi chọn Đa Giọng: Phân Vai Nam / Nữ */}
+            {dubbingMode === 'multi' && (
+              <div className="space-y-3 pt-1">
+                {/* Giọng Nam */}
+                <div className="space-y-1">
+                  <label className="text-slate-400 text-[10px] block font-medium">Giọng Nam (Phân vai thoại nam):</label>
+                  <select
+                    value={selectedMaleVoice}
+                    onChange={(e) => setSelectedMaleVoice(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="vi-VN-NamMinhNeural">Nam Minh (Edge-TTS trầm ấm)</option>
+                    <option value="BV075_streaming">Thanh Niên Tự Tin (CapCut Review)</option>
+                    <option value="BV560_streaming">Alex Đại Đế (CapCut Uy quyền)</option>
+                    <option value="BV075_streaming_vibrato_dsp">Việt Méo (CapCut Parody)</option>
+                    <option value="Fenrir">Fenrir (Gemini Trầm)</option>
+                    <option value="Puck">Puck (Gemini Tự nhiên)</option>
+                  </select>
+                </div>
+
+                {/* Giọng Nữ */}
+                <div className="space-y-1">
+                  <label className="text-slate-400 text-[10px] block font-medium">Giọng Nữ (Phân vai thoại nữ):</label>
+                  <select
+                    value={selectedFemaleVoice}
+                    onChange={(e) => setSelectedFemaleVoice(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="vi-VN-HoaiMyNeural">Hoài My (Edge-TTS Dịu dàng)</option>
+                    <option value="BV074_streaming">Cô Gái Hoạt Ngôn (CapCut)</option>
+                    <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (CapCut)</option>
+                    <option value="BV562_streaming">Mai (CapCut Thuyết minh)</option>
+                    <option value="vi_female_huong">Hương (CapCut Miền Bắc)</option>
+                    <option value="Kore">Kore (Gemini Nữ)</option>
+                    <option value="Aoede">Aoede (Gemini Thanh thoát)</option>
+                  </select>
+                </div>
+
+                {/* 2 nút nghe thử Nam / Nữ */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleTestVoice(selectedMaleVoice)}
+                    disabled={isTestingVoice}
+                    className="py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer text-[11px]"
+                  >
+                    <Volume2 className="w-3 h-3 text-cyan-400" />
+                    <span>Thử Giọng Nam</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleTestVoice(selectedFemaleVoice)}
+                    disabled={isTestingVoice}
+                    className="py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer text-[11px]"
+                  >
+                    <Volume2 className="w-3 h-3 text-rose-400" />
+                    <span>Thử Giọng Nữ</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {testVoiceMsg && (
               <div className="p-2 bg-indigo-950/60 border border-indigo-800/80 rounded text-[10px] text-indigo-300 text-center font-medium">
@@ -1043,7 +1155,9 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
               <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 space-y-1 animate-in fade-in">
                 <div className="text-[10px] text-amber-300 font-mono flex items-center justify-between">
                   <span>Trình phát giọng đọc mẫu:</span>
-                  <span className="text-slate-400 truncate max-w-[150px]">{selectedVoice}</span>
+                  <span className="text-slate-400 truncate max-w-[150px]">
+                    {dubbingMode === 'single' ? selectedVoice : `${selectedMaleVoice} / ${selectedFemaleVoice}`}
+                  </span>
                 </div>
                 <audio
                   key={testVoiceAudioUrl}
@@ -1059,8 +1173,9 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
               <button
                 type="button"
                 onClick={handleDubAllVideo}
-                disabled={isDubbingAll || !activeProject}
-                className="w-full py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-lg flex items-center justify-center gap-2 shadow-md transition active:scale-98 disabled:opacity-50 cursor-pointer"
+                disabled={isDubbingAll || !activeProject || cues.length === 0}
+                title={cues.length === 0 ? "Cần quét hoặc nhập phụ đề trước khi lồng tiếng" : "Lồng Tiếng Toàn Bộ Video"}
+                className={`w-full py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-lg flex items-center justify-center gap-2 shadow-md transition active:scale-98 disabled:opacity-50 ${cues.length === 0 ? 'cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 {isDubbingAll ? (
                   <>

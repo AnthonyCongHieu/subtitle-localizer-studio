@@ -26,8 +26,9 @@ import {
   Edit2,
   Save,
   Mic,
+  CheckCircle2,
 } from 'lucide-react';
-import { RegionTrackV1, ProjectManifestV1 } from '../../types/api';
+import { RegionTrackV1, ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
 import {
   AspectRatioType,
   MaskStyleType,
@@ -80,6 +81,7 @@ interface RightInspectorPanelProps {
   onResetTransform: () => void;
   onResetAllParameters?: () => void;
   activeProject: ProjectManifestV1 | null;
+  cues?: SubtitleCueV1[];
   onRefreshCues?: () => void;
   isScanning?: boolean;
   onStartScan?: () => void;
@@ -91,6 +93,8 @@ interface RightInspectorPanelProps {
   onSelectRegion?: (id: string) => void;
   onAddRegion?: () => void;
   onDeleteRegion?: (id: string) => void;
+  onUpdateActiveProject?: (patch: Partial<ProjectManifestV1>) => void;
+  onRefreshProject?: () => void;
 }
 
 export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
@@ -126,6 +130,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onResetTransform,
   onResetAllParameters,
   activeProject,
+  cues = [],
   onRefreshCues,
   isScanning = false,
   onStartScan,
@@ -137,7 +142,11 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onSelectRegion,
   onAddRegion,
   onDeleteRegion,
+  onUpdateActiveProject,
+  onRefreshProject,
 }) => {
+  // Kiểm tra dự án có phụ đề hay không để khóa thao tác Dịch và Lồng tiếng (P1 Guard)
+  const hasCues = (cues && cues.length > 0) || (activeProject?.cues_count ? activeProject.cues_count > 0 : false);
   const [activeTab, setActiveTab] = useState<RightPanelTab>('roi');
 
   // Mẫu vị trí gợi ý động (Position Templates CRUD)
@@ -241,9 +250,24 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
     setIsDubbingAll(true);
     setDubMsg('Đang gọi AI lồng tiếng toàn bộ video...');
     try {
-      await apiClient.runDubbing(activeProject.project_id);
+      const dubSettings = activeProject.custom_pipeline_settings?.dubbing;
+      const res = await apiClient.runDubbing(activeProject.project_id, {
+        mode: dubSettings?.mode || 'single',
+        voice: dubSettings?.voice,
+        voice_male: dubSettings?.voice_male,
+        voice_female: dubSettings?.voice_female,
+        provider: dubSettings?.provider,
+        rate: dubSettings?.rate,
+      });
       setDubMsg('✓ Lồng tiếng toàn bộ video thành công!');
+      if (onUpdateActiveProject) {
+        onUpdateActiveProject({
+          has_voiceover: true,
+          voiceover_path: res.audio_url,
+        });
+      }
       if (onRefreshCues) onRefreshCues();
+      if (onRefreshProject) onRefreshProject();
     } catch (err: any) {
       setDubMsg(`Lỗi lồng tiếng: ${err?.message || 'Thất bại'}`);
     } finally {
@@ -259,6 +283,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
       await apiClient.retranslateProject(activeProject.project_id);
       setTranslateMsg('Dịch thuật và xử lý AI hoàn tất!');
       if (onRefreshCues) onRefreshCues();
+      if (onRefreshProject) onRefreshProject();
     } catch (err: any) {
       setTranslateMsg(`Lỗi dịch AI: ${err?.message || 'Thất bại'}`);
     } finally {
@@ -284,6 +309,13 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
         rotation: rotation,
       });
       setExportMessage(`Xuất video thành công: ${res.output_path || 'Thành công'}`);
+      if (onUpdateActiveProject) {
+        onUpdateActiveProject({
+          has_export: true,
+          export_path: res.output_path,
+        });
+      }
+      if (onRefreshProject) onRefreshProject();
     } catch (err: any) {
       setExportMessage(`Lỗi xuất video: ${err?.message || 'Không thành công'}`);
     } finally {
@@ -1228,8 +1260,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               <button
                 type="button"
                 onClick={handleTranslateAllWithAi}
-                disabled={isTranslatingAll || !activeProject}
-                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50"
+                disabled={isTranslatingAll || !activeProject || !hasCues}
+                title={!hasCues ? "Cần quét hoặc nhập phụ đề trước khi dịch" : "Dịch Toàn Bộ Tập Phim"}
+                className={`w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 ${!hasCues ? 'cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 {isTranslatingAll ? (
                   <>
@@ -1262,8 +1295,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               <button
                 type="button"
                 onClick={handleDubAllVideo}
-                disabled={isDubbingAll || !activeProject}
-                className="w-full py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-lg flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 cursor-pointer"
+                disabled={isDubbingAll || !activeProject || !hasCues}
+                title={!hasCues ? "Cần quét hoặc nhập phụ đề trước khi lồng tiếng" : "Lồng Tiếng Toàn Bộ Video"}
+                className={`w-full py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-lg flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 ${!hasCues ? 'cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 {isDubbingAll ? (
                   <>
@@ -1280,6 +1314,26 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               {dubMsg && (
                 <div className="text-[11px] text-amber-300 bg-slate-950/60 p-2 rounded border border-amber-900 font-medium">
                   {dubMsg}
+                </div>
+              )}
+
+              {/* Trình phát Master Voiceover Audio nếu có */}
+              {activeProject?.has_voiceover && (
+                <div className="pt-2 border-t border-amber-800/40 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Đã có tệp giọng đọc</span>
+                    </span>
+                    <span className="text-[10px] text-amber-300 font-mono">
+                      voiceover.mp3
+                    </span>
+                  </div>
+                  <audio
+                    controls
+                    src={apiClient.getVoiceoverAudioUrl(activeProject.project_id)}
+                    className="w-full h-8 rounded-lg"
+                  />
                 </div>
               )}
             </div>

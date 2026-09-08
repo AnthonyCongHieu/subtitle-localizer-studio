@@ -13,6 +13,7 @@ import {
   Settings,
   ChevronLeft,
   Square,
+  AlertTriangle,
 } from 'lucide-react';
 import { ProjectManifestV1 } from '../../types/api';
 import { PresetProfile } from '../../types/presets';
@@ -30,6 +31,8 @@ interface StudioHeaderProps {
   statusMessage?: string | null;
   backendOnline: boolean | null;
   wsConnected: boolean;
+  wsStatus?: 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
   loggerCount: number;
   onToggleLogger: () => void;
   isScanning: boolean;
@@ -56,6 +59,8 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
   statusMessage: _statusMessage,
   backendOnline,
   wsConnected,
+  wsStatus,
+  saveStatus,
   loggerCount,
   onToggleLogger,
   isScanning,
@@ -191,7 +196,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
 
       {/* Bên Phải: Trạng thái Server + Nhật ký + Nút Hành Động Chính */}
       <div className="flex items-center gap-2 min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
-        {/* Trạng thái Server */}
+        {/* Trạng thái Server & WebSocket Live */}
         <div className="hidden sm:flex items-center gap-1.5 text-[11px] bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
           {backendOnline ? (
             <CheckCircle2 className="w-3 h-3 text-emerald-400" />
@@ -200,9 +205,47 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
           )}
           <span className="text-slate-400">Server</span>
           <span className="text-slate-700">|</span>
-          <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-          <span className="text-slate-400">Live</span>
+          {(wsStatus === 'connected' || (wsStatus === undefined && wsConnected)) ? (
+            <>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-emerald-400 font-medium">Live</span>
+            </>
+          ) : (wsStatus === 'connecting' || wsStatus === 'reconnecting') ? (
+            <>
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+              <span className="text-amber-400 font-medium">Đang nối...</span>
+            </>
+          ) : (
+            <>
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
+              <span className="text-slate-500">Mất kết nối</span>
+            </>
+          )}
         </div>
+
+        {/* Trạng thái lưu cấu hình Editor (Auto-Save State) */}
+        {activeProject && saveStatus && saveStatus !== 'idle' && (
+          <div className="hidden md:flex items-center gap-1.5 text-[11px] bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 animate-in fade-in">
+            {saveStatus === 'saving' && (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin text-amber-400" />
+                <span className="text-amber-300 font-medium">Đang lưu...</span>
+              </>
+            )}
+            {saveStatus === 'saved' && (
+              <>
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <span className="text-emerald-300 font-medium">Đã lưu</span>
+              </>
+            )}
+            {saveStatus === 'error' && (
+              <>
+                <AlertTriangle className="w-3 h-3 text-rose-400" />
+                <span className="text-rose-400 font-semibold" title="Không thể lưu vào cơ sở dữ liệu. Vui lòng kiểm tra lại kết nối server.">Lỗi đồng bộ</span>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Nút Nhật Ký */}
         <button

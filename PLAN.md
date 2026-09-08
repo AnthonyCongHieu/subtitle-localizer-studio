@@ -1,92 +1,103 @@
-# Kế Hoạch Triển Khai: Tái Cấu Trúc Hệ Thống Thành 2 Mode (Local vs Cloud API)
+# Kế Hoạch Triển Khai: Ticket T18 — Đồng Bộ Editor Nguyên Tử & Trạng Thái Thao Tác Trung Thực
 
-## 1. Phân Tích Yêu Cầu & Nguồn Tài Liệu Nghiên Cứu
-- **Yêu cầu người dùng:** Phân thành 2 Mode rõ ràng:
-  1. **MODE LOCAL:** Dùng chế độ chất lượng và tốc độ cao nhất (khai thác tối đa GPU RTX 3050 6GB: RapidOCR ONNX CUDA + Demux Stream + Faster-Whisper).
-  2. **MODE API:** Cho phép chọn giữa **API Gemini** (Google Multimodal AI) và **API CapCut** (ByteDance Cloud ASR & Subtitle).
-- **Tài liệu nghiên cứu có sẵn:** Đã có báo cáo chuyên sâu tại [`docs/CAPCUT_API_RESEARCH.md`](file:///d:/Project/subtitle-localizer-studio/docs/CAPCUT_API_RESEARCH.md):
-  - Hệ sinh thái CapCut/JianYing vận hành trên nền tảng ByteDance Volcano Engine (`openspeech.bytedance.com` & `edit-api-sg.capcut.com`).
-  - Dự án tiêu biểu: `K07VN/capcut-tts-api` (STT Cloud API thuần Python hỗ trợ nhận diện tiếng Trung `zh-CN`, tiếng Anh `en-US`, tiếng Việt `vi-VN`).
-
----
-
-## 2. Kiến Trúc 2 Mode Mới
-
-```
-                                  KIẾN TRÚC 2 MODE
-                                         │
-                 ┌───────────────────────┴───────────────────────┐
-                 ▼                                               ▼
-         [1] MODE LOCAL (CỤC BỘ)                         [2] MODE API (ĐÁM MÂY)
-     Tốc độ & Chất lượng cao nhất                         Xử lý thông minh / Zero VRAM
-                 │                                               │
-    • RapidOCR ONNX (CUDA 12 - 140 FPS)             ┌────────────┴────────────┐
-    • FFmpeg Softsub Demux (Tức thì 0.1s)          ▼                         ▼
-    • Faster-Whisper Local (CUDA float16)   [API GOOGLE GEMINI]     [API CAPCUT / BYTEDANCE]
-    • 100% Offline, 0đ chi phí              Gemini 2.5 Flash VLM    CapCut Cloud STT/ASR
-                                            Tự lọc watermark rác    Chuẩn giọng TikTok/Douyin
-```
+## 1. Bối Cảnh & Vấn Đề Xác Minh (Evidence-Based)
+Dựa trên kết quả kiểm thử thực tế từ Chrome và audit hệ thống:
+1. **P0 (Race Condition làm mất Manifest)**: 
+   - Trong `web/src/App.tsx` (dòng 638-654), debounce 500ms tự động kích hoạt đồng thời 2 API request song song: `saveProjectSettings` (`PUT /settings`) và `saveRegions` (`PUT /regions`).
+   - Cả 2 endpoint trong `server.py` đều đọc toàn bộ manifest từ SQLite bằng `repository.get_project()`, sửa trường của mình rồi gọi `repository.save_project(manifest)` ghi đè toàn bộ `manifest_json`.
+   - Kết quả: Request nào ghi sau cùng sẽ đè bẹp và làm mất hoàn toàn dữ liệu của request kia (mất ROI hoặc mất settings).
+2. **P1 (Auto-save nuốt lỗi ngầm)**:
+   - Các lệnh auto-save dùng `.catch(() => {})`, khi backend gặp lỗi hoặc mạng chập chờn thì người dùng không hề hay biết cấu hình chưa được lưu.
+   - Chưa có chỉ báo trạng thái lưu góc trên màn hình.
+3. **P1 (WebSocket nhãn "Live" sai lệch)**:
+   - Trong `App.tsx` dòng 685-686, `setWsConnected(true)` được gọi ngay sau `wsClient.connect()`, không chờ sự kiện `onopen`. Khi mất kết nối (`onclose`, `onerror`), không hề chuyển về `false`.
+4. **P1 (Khóa thao tác Dịch và Lồng tiếng khi 0 subtitle cues)**:
+   - Khi video chưa quét OCR (0 cues), các nút Dịch và Lồng tiếng vẫn bấm được. Endpoint `retranslate` trả về `{ status: "empty" }` (mã HTTP 200) làm UI tưởng thành công, còn TTS trả lỗi 400. Cần vô hiệu hóa (disable) kèm tooltip "Quét phụ đề trước".
 
 ---
 
-## 3. Các Bước Triển Khai Chi Tiết
+## 2. Thay Đổi Cấu Trúc Dữ Liệu & Hợp Đồng API
 
-### Bước 1: Mở Rộng Cấu Hình Backend (`pipeline_settings.py`)
-- Cấu trúc lại `ExtractionSettings`:
-  ```python
-  class ExtractionSettings(BaseModel):
-      # Phân 2 Mode chính:
-      mode: str = "local"  # "local" | "api"
+### 2.1. Backend (`src/subtitle_localizer/persistence/repository.py`)
+- Thêm phương thức cập nhật nguyên tử có khóa giao dịch SQLite:
+  `patch_project(project_id: str, patch_dict: Dict[str, Any]) -> Optional[ProjectManifestV1]`
+  - Sử dụng giao dịch `BEGIN IMMEDIATE` để khóa hàng dự án.
+  - Tải `manifest_json` mới nhất trong giao dịch.
+  - Hợp nhất dữ liệu mới (ví dụ: `regions`, `custom_pipeline_settings`, `source_language`, ...).
+  - Tự động tăng `active_revision += 1` và cập nhật `updated_at`.
+  - Lưu lại `manifest_json` và COMMIT.
+- Cập nhật cả `save_regions` và `save_project_settings` trong `server.py` để sử dụng `patch_project` nhằm triệt tiêu race condition kể cả khi có 2 client gọi riêng lẻ.
 
-      # 1. Cấu hình MODE LOCAL (Chất lượng & Tốc độ cao nhất trên RTX 3050):
-      local_engine: str = "rapidocr"  # "rapidocr" (CUDA) | "whisper" | "demux_first"
-      sample_fps: float = 2.0
-      diff_threshold: float = 3.5
-      enable_gap_rescue: bool = True
-      enable_roi_tightening: bool = True
+### 2.2. Endpoint Gộp Mới (`src/subtitle_localizer/service/server.py`)
+- Thêm endpoint gộp atomic:
+  `PUT /api/v1/projects/{project_id}/editor-state`
+  - Nhận body: `{ "regions": Optional[List[Dict]], "settings": Optional[Dict[str, Any]] }`
+  - Thực hiện cập nhật nguyên tử cả 2 thành phần trong duy nhất 1 database transaction.
+- Sửa endpoint `/api/v1/projects/{project_id}/retranslate`:
+  - Khi `cues` rỗng (len == 0): Trả về HTTP 400 Bad Request với detail rõ ràng: `"Dự án chưa có phụ đề để dịch. Hãy quét phụ đề trước."` (thay vì 200 status "empty").
+- Endpoint `/api/v1/projects/{project_id}/dubbing/run`:
+  - Giữ chuẩn HTTP 400 khi `len(cues) == 0`.
 
-      # 2. Cấu hình MODE API (Đám mây):
-      api_provider: str = "gemini"  # "gemini" | "capcut"
-      gemini_vlm_model: str = "gemini-2.5-flash"
-      capcut_api_endpoint: str = "https://edit-api-sg.capcut.com"
-      capcut_session_token: Optional[str] = None
+### 2.3. Frontend WebSocket Client (`web/src/api/websocket.ts`)
+- Mở rộng trạng thái kết nối:
+  `type WsConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';`
+- Thêm cơ chế lắng nghe trạng thái kết nối:
+  - `onStatusChange(callback: (status: WsConnectionStatus) => void): () => void`
+  - `isConnected(): boolean` (kiểm tra `readyState === WebSocket.OPEN`)
+- Kích hoạt sự kiện chính xác tại `ws.onopen` (`connected`), `ws.onclose` (`reconnecting`/`disconnected`), `ws.onerror` (`disconnected`).
 
-      # 3. Luồng ngôn ngữ toàn cục:
-      default_source_lang: str = "auto"  # "auto" | "zh" | "en" | "vi"
-  ```
-- Giữ các alias và trường cũ để tương thích ngược 100% với worker và client hiện tại.
+### 2.4. Frontend Auto-save & Header (`web/src/App.tsx` & `StudioHeader.tsx`)
+- Trong `App.tsx`:
+  - Gộp 2 lệnh gọi song song thành 1 lệnh gọi duy nhất: `apiClient.saveEditorState(activeProject.project_id, { regions, settings })`.
+  - Quản lý trạng thái lưu: `saveStatus: 'idle' | 'saving' | 'saved' | 'error'`.
+  - Khi lưu lỗi: Không nuốt lỗi, set `saveStatus = 'error'` và bắn log lỗi ra `appLogger.error`.
+  - Lắng nghe `wsClient.onStatusChange` để cập nhật `wsStatus`.
+- Trong `StudioHeader.tsx`:
+  - Hiển thị badge trạng thái lưu:
+    - Đang lưu: Spinner vàng/cyan `Đang lưu...`
+    - Đã lưu: Checkmark xanh lá `Đã lưu`
+    - Lỗi: Cảnh báo đỏ `Lỗi đồng bộ`
+  - Hiển thị nhãn Live trung thực:
+    - Khi `connected`: Chấm xanh nhấp nháy + chữ `Live`
+    - Khi `connecting`/`reconnecting`: Chấm vàng + chữ `Đang nối...`
+    - Khi `disconnected`: Chấm xám/đỏ + chữ `Mất kết nối`
 
-### Bước 2: Tích Hợp Module CapCut API Service (`src/subtitle_localizer/service/capcut_api.py`)
-- Xây dựng CapCut API Adapter dựa trên tài liệu `CAPCUT_API_RESEARCH.md`:
-  - Khởi tạo request nhận diện phụ đề âm thanh (STT) lên endpoint CapCut Cloud.
-  - Xử lý các mã ngôn ngữ `zh-CN`, `en-US`, `vi-VN`.
-  - Parse kết quả utterances thành danh sách phụ đề `SubtitleCueV1`.
-
-### Bước 3: Cập Nhật API Client Frontend (`web/src/api/client.ts`)
-- Khai báo kiểu `ExtractionSettings`:
-  - `mode: 'local' | 'api'`
-  - `api_provider: 'gemini' | 'capcut'`
-  - `local_engine: 'rapidocr' | 'whisper' | 'demux_first'`
-
-### Bước 4: Thiết Kế Lại Giao Diện Tab 1 (`GlobalSettingsView.tsx`)
-- Thay thế giao diện 4 thẻ rời rạc bằng **2 Thẻ Lớn Rõ Ràng (2 Master Mode Cards)**:
-  - 🖥️ **MODE 1: LOCAL (CỤC BỘ TRÊN MÁY - GPU RTX 3050)**
-    - Badge: `100% Offline • Siêu Tốc 140 FPS • 0đ Chi Phí`
-    - Tự động kết hợp: **RapidOCR ONNX CUDA** (quét hardsub 7ms/frame) + **FFmpeg Demux** (bóc softsub có sẵn) + **Faster-Whisper CUDA** (nghe giọng nói).
-  - ☁️ **MODE 2: API ĐÁM MÂY (CLOUD SERVICES)**
-    - Badge: `Zero VRAM • AI Đa Phương Thức`
-    - Cho phép chọn nhanh giữa 2 cổng API:
-      + ✨ **Google Gemini AI API:** Dùng model Gemini 2.5 Flash, đọc chữ thư pháp khó, tự dọn logo/watermark rác.
-      + 🎬 **CapCut / ByteDance API:** Dùng hạ tầng nhận diện của CapCut/TikTok, bóc tách phụ đề tự động chuẩn âm điệu.
-- Bên dưới vẫn giữ nguyên luồng:
-  `Tự Động Auto-Detect Ngôn Ngữ Nguồn ➔ Select Chọn Ngôn Ngữ Dịch Sang (Tiếng Việt / Tiếng Anh / Không Dịch)`.
+### 2.5. Frontend Thao Tác Dịch & Lồng Tiếng (Disable khi 0 Cues)
+- `web/src/components/sidebar/LeftMediaSidebar.tsx`:
+  - Nút "Lồng tiếng toàn bộ video": `disabled={isDubbingAll || !activeProject || cues.length === 0}` kèm tooltip "Quét phụ đề trước".
+- `web/src/components/inspector/RightInspectorPanel.tsx`:
+  - Nhận `cues` từ `App.tsx`.
+  - Nút "Dịch Toàn Bộ Tập Phim": `disabled={isTranslatingAll || !activeProject || cues.length === 0}` kèm tooltip.
+  - Nút "Lồng Tiếng Toàn Bộ Video": `disabled={isDubbingAll || !activeProject || cues.length === 0}` kèm tooltip.
+- `web/src/components/project/DashboardBatchHub.tsx`:
+  - Nút "Dịch lại" và "Tạo giọng (Voice)" trong modal chi tiết tập: `disabled={isSingleRunning || (inspectingProject.cues_count || 0) === 0}` kèm tooltip.
+  - Nút lồng tiếng đơn trên card: `disabled={(project.cues_count || 0) === 0}`.
 
 ---
 
-## 4. Kế Hoạch Kiểm Thử & Nghiệm Thu (ĐÃ HOÀN THÀNH 100%)
-1. **Kiểm tra Frontend:** Chạy `npm run build` thành công xuất sắc (exit code 0, built in 8.11s).
-2. **Kiểm tra Backend:**
-   - Đã gọi API `GET /api/v1/settings/pipeline` xác thực cấu hình `mode`, `local_engine`, `api_provider`, `capcut_api_endpoint`.
-   - Đã gọi `POST /api/v1/settings/capcut-check` kiểm tra kết nối tới `edit-api-sg.capcut.com` (phản hồi thành công độ trễ 177ms).
-3. **Kiểm thử hồi quy Pytest:** Chạy `python -m pytest tests/t01/ tests/t07/` -> **42/42 tests pass 100% (10.38s)**.
-4. **Trạng thái:** Sẵn sàng nghiệm thu và bàn giao.
+## 3. Các Rủi Ro & Biện Pháp Phòng Ngừa
+1. **Rủi ro SQLite Database Lock trong môi trường đa luồng (Multi-threading)**:
+   - *Biện pháp*: Dùng `BEGIN IMMEDIATE;` với cơ chế timeout hợp lý và `try...finally` đảm bảo ROLLBACK ngay khi có exception, không gây treo lock.
+2. **Rủi ro hồi quy với các API clients cũ**:
+   - *Biện pháp*: Giữ nguyên các endpoints `PUT /regions` và `PUT /settings`, nhưng bên trong chuyển sang gọi `patch_project` an toàn nguyên tử.
+3. **Rủi ro UI giật lag do lưu trạng thái**:
+   - *Biện pháp*: Debounce 500ms được giữ nguyên, chỉ gộp payload truyền đi 1 request duy nhất.
+
+---
+
+## 4. Kế Hoạch Kiểm Thử & Xác Minh (Red-First & Evidence)
+1. **Red-first Unit & Concurrency Test**:
+   - Viết `tests/t18/test_atomic_editor_sync.py`:
+     - Tái hiện race condition: 2 luồng đồng thời ghi `save_regions` và `save_project_settings`. Xác nhận cả hai trường đều được bảo toàn 100% trong DB.
+     - Kiểm thử `PUT /editor-state` gộp.
+     - Kiểm thử `retranslate` và `dubbing/run` với dự án 0 cues: xác nhận trả về mã lỗi 400.
+2. **Frontend Build & Lint**:
+   - Chạy `npm run build` trong `web/`: Exit code 0, 0 lỗi TypeScript.
+## 5. Kết Quả Nghiệm Thu & Thẩm Định Độc Lập (Hoàn Tất)
+- **Kiểm thử Red-First (`tests/t18/test_atomic_editor_sync.py`)**: 4/4 bài test đạt yêu cầu (concurrent update bảo toàn dữ liệu, endpoint gộp editor-state, chặn 400 khi 0-cues).
+- **Kiểm thử Toàn Bộ Kho Mã (`python -m pytest tests/`)**: 389/389 tests passed (Exit Code 0).
+- **Frontend Typecheck & Production Build (`npm run build`)**: Thành công 100%, Exit Code 0, 0 lỗi TypeScript.
+- **Quét Ký Tự Lỗi UTF-8 / Mojibake**: 0 ký tự lỗi trên toàn bộ các file sửa đổi/tạo mới.
+- **Thẩm Định Độc Lập (Independent Reviewer Verdict)**: **APPROVED** ✅.
+- **Trạng thái**: `STOPPED_AFTER_TICKET`.
+

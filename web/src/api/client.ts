@@ -75,10 +75,8 @@ export class StudioApiClient {
     if (!res.ok) throw new Error('Không thể lưu phụ đề');
   }
 
-  async saveRegions(projectId: string, regions: RegionTrackV1[]): Promise<RegionTrackV1[]> {
-    // Tự động kẹp tọa độ trong phạm vi hợp lệ [0.0, 1.0] để người dùng trên Web UI có thể kéo ra ngoài mép khung hình
-    // mà khi lưu xuống backend API vẫn tuân thủ chặt chẽ schema kiểm tra không bị lỗi 422
-    const sanitizedRegions = regions.map((r) => {
+  sanitizeRegions(regions: RegionTrackV1[]): RegionTrackV1[] {
+    return regions.map((r) => {
       const rx = Number(r.x) || 0;
       const ry = Number(r.y) || 0;
       const rw = Number(r.width) || 0.1;
@@ -97,6 +95,12 @@ export class StudioApiClient {
         height: Math.round((y2 - y1) * 10000) / 10000,
       };
     });
+  }
+
+  async saveRegions(projectId: string, regions: RegionTrackV1[]): Promise<RegionTrackV1[]> {
+    // Tự động kẹp tọa độ trong phạm vi hợp lệ [0.0, 1.0] để người dùng trên Web UI có thể kéo ra ngoài mép khung hình
+    // mà khi lưu xuống backend API vẫn tuân thủ chặt chẽ schema kiểm tra không bị lỗi 422
+    const sanitizedRegions = this.sanitizeRegions(regions);
 
     const res = await fetch(`${API_BASE}/projects/${projectId}/regions`, {
       method: 'PUT',
@@ -129,6 +133,29 @@ export class StudioApiClient {
       headers: this.headers(),
     });
     if (!res.ok) throw new Error('Không thể khôi phục cài đặt mặc định');
+    return res.json();
+  }
+
+  async saveEditorState(
+    projectId: string,
+    payload: { regions?: RegionTrackV1[]; settings?: Record<string, any> }
+  ): Promise<{ status: string; project_id: string; revision?: number; regions?: RegionTrackV1[]; settings?: any }> {
+    const body: Record<string, any> = {};
+    if (payload.regions) {
+      body.regions = this.sanitizeRegions(payload.regions);
+    }
+    if (payload.settings !== undefined) {
+      body.settings = payload.settings;
+    }
+    const res = await fetch(`${API_BASE}/projects/${projectId}/editor-state`, {
+      method: 'PUT',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Không thể lưu trạng thái editor');
+    }
     return res.json();
   }
 

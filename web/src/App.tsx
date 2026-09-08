@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { apiClient } from './api/client';
-import { wsClient } from './api/websocket';
+import { wsClient, WsConnectionStatus } from './api/websocket';
 import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1, BridgeEventV1 } from './types/api';
 import {
   PresetProfile,
@@ -96,6 +96,8 @@ export const App: React.FC = () => {
   // Trạng thái dự án và video hiện tại
   const [projects, setProjects] = useState<ProjectManifestV1[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectManifestV1 | null>(null);
+  const activeProjectRef = useRef<ProjectManifestV1 | null>(null);
+  activeProjectRef.current = activeProject;
   const [selectedDramaTitle, setSelectedDramaTitle] = useState<string | null>(() => savedState?.selectedDramaTitle || null);
   const [videoUrl, setVideoUrl] = useState<string>('');
   const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
@@ -195,6 +197,8 @@ export const App: React.FC = () => {
   // Trạng thái hệ thống và pipeline
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
+  const [wsStatus, setWsStatus] = useState<WsConnectionStatus>('disconnected');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -365,7 +369,7 @@ export const App: React.FC = () => {
 
   // Nạp danh sách câu phụ đề của dự án
   const loadCues = useCallback(async (projId?: string) => {
-    const id = projId || activeProject?.project_id;
+    const id = projId || activeProjectRef.current?.project_id;
     if (!id) {
       setCues([]);
       return;
@@ -380,7 +384,7 @@ export const App: React.FC = () => {
       console.warn('Chưa nạp được danh sách phụ đề:', err);
       setCues([]);
     }
-  }, [activeProject]);
+  }, []);
 
   // Cập nhật câu phụ đề khi người dùng sửa trực tiếp trên bảng
   const handleUpdateCue = async (updatedCue: SubtitleCueV1) => {
@@ -557,7 +561,18 @@ export const App: React.FC = () => {
       setActiveProject((current) => {
         if (!current) return current;
         const found = list.find((p) => p.project_id === current.project_id);
-        return found ? { ...current, ...found } : current;
+        if (!found) return current;
+        if (
+          found.has_voiceover === current.has_voiceover &&
+          found.voiceover_path === current.voiceover_path &&
+          found.has_export === current.has_export &&
+          found.export_path === current.export_path &&
+          found.cues_count === current.cues_count &&
+          found.updated_at === current.updated_at
+        ) {
+          return current;
+        }
+        return { ...current, ...found };
       });
 
       // Tự động khôi phục lại tập phim đang mở nếu người dùng F5
@@ -632,25 +647,35 @@ export const App: React.FC = () => {
       settingsTab,
     });
 
-    // Tự động đồng bộ ROI và danh sách vùng xuống backend (debounce 500ms)
+    // Tự động đồng bộ ROI và danh sách vùng xuống backend (debounce 500ms) nguyên tử
     if (activeProject?.project_id) {
       const timer = setTimeout(() => {
-        apiClient.saveProjectSettings(activeProject.project_id, {
-          roi: activeRoiRegion,
+        setSaveStatus('saving');
+        apiClient.saveEditorState(activeProject.project_id, {
           regions,
-          aspect_ratio: aspectRatio,
-          mask_style: maskStyle,
-          blur_strength: blurStrength,
-          subtitle_placement: subtitlePlacement,
-          preview_mask: previewMask,
-          source_lang: sourceLang,
-          target_lang: targetLang,
-          rotation,
-          flip_h: isFlippedH,
-          flip_v: isFlippedV,
-          fit_mode: fitMode,
-        } as any).catch(() => {});
-        apiClient.saveRegions(activeProject.project_id, regions).catch(() => {});
+          settings: {
+            roi: activeRoiRegion,
+            regions,
+            aspect_ratio: aspectRatio,
+            mask_style: maskStyle,
+            blur_strength: blurStrength,
+            subtitle_placement: subtitlePlacement,
+            preview_mask: previewMask,
+            source_lang: sourceLang,
+            target_lang: targetLang,
+            rotation,
+            flip_h: isFlippedH,
+            flip_v: isFlippedV,
+            fit_mode: fitMode,
+          },
+        })
+          .then(() => {
+            setSaveStatus('saved');
+          })
+          .catch((err: any) => {
+            setSaveStatus('error');
+            appLogger.error(`Lỗi đồng bộ cấu hình editor: ${err?.message || 'Không thể lưu'}`, 'AutoSave');
+          });
       }, 500);
       return () => clearTimeout(timer);
     }
@@ -677,13 +702,18 @@ export const App: React.FC = () => {
     settingsTab,
   ]);
 
-  // Khởi tạo và lắng nghe WebSocket
+  // Khởi tạo và lắng nghe WebSocket với trạng thái kết nối trung thực
   useEffect(() => {
     checkHealth();
     loadProjects();
 
     wsClient.connect();
-    setWsConnected(true);
+
+    // Lắng nghe trạng thái kết nối thực sự từ WebSocket readyState
+    const unsubStatus = wsClient.onStatusChange((status) => {
+      setWsStatus(status);
+      setWsConnected(status === 'connected');
+    });
 
     const unsub = wsClient.onEvent((evt: BridgeEventV1) => {
       if (evt.event_type === 'stage_started') {
@@ -710,12 +740,13 @@ export const App: React.FC = () => {
     });
 
     return () => {
+      unsubStatus();
       unsub();
       if (localUrlRef.current) {
         URL.revokeObjectURL(localUrlRef.current);
       }
     };
-  }, [checkHealth, loadProjects, loadCues]);
+  }, []);
 
   // Polling tiến trình khi isScanning === true
   useEffect(() => {
@@ -965,6 +996,8 @@ export const App: React.FC = () => {
             statusMessage={statusMessage}
             backendOnline={backendOnline}
             wsConnected={wsConnected}
+            wsStatus={wsStatus}
+            saveStatus={saveStatus}
             loggerCount={loggerCount}
             onToggleLogger={() => appLogger.toggle()}
             isScanning={isScanning}
@@ -1130,7 +1163,15 @@ export const App: React.FC = () => {
               onResetTransform={handleResetTransform}
               onResetAllParameters={handleResetAllParameters}
               activeProject={activeProject}
+              cues={cues}
               onRefreshCues={loadCues}
+              onRefreshProject={loadProjects}
+              onUpdateActiveProject={(patch) => {
+                setActiveProject((prev) => (prev ? { ...prev, ...patch } : null));
+                setProjects((prev) =>
+                  prev.map((p) => (p.project_id === activeProject?.project_id ? { ...p, ...patch } : p))
+                );
+              }}
               isScanning={isScanning}
               onStartScan={handleStartScan}
               onStopScan={handleStopScan}

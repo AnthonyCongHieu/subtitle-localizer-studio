@@ -41,6 +41,8 @@ class AdaptiveFrameSampler:
         diff_threshold: Optional[float] = None,
         start_seconds: float = 0.0,
         roi_norms: Optional[List[Tuple[float, float, float, float]]] = None,
+        sample_fps: Optional[float] = None,
+        fps: Optional[float] = None,
     ) -> Tuple[List[Any], List[float]]:
         """Mở video thực tế và trích xuất danh sách crops cùng mốc thời gian PTS.
         Hỗ trợ trích xuất đồng thời từ 1 hoặc nhiều vùng ROI (Multi-Region OCR)."""
@@ -51,15 +53,16 @@ class AdaptiveFrameSampler:
         if not cap.isOpened():
             return [], []
 
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        video_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1920)
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1080)
 
-        # Tính bước nhảy frame theo sample_fps
-        frame_step = max(1, int(round(fps / self.sample_fps)))
+        # Tính bước nhảy frame theo sample_fps truyền vào hoặc mặc định
+        eff_sample_fps = fps or sample_fps or self.sample_fps
+        frame_step = max(1, int(round(video_fps / max(0.1, eff_sample_fps))))
         if max_duration_seconds is not None and max_duration_seconds > 0:
-            max_frame_idx = min(total_frames, int(max_duration_seconds * fps))
+            max_frame_idx = min(total_frames, int(max_duration_seconds * video_fps))
         else:
             max_frame_idx = total_frames
 
@@ -89,7 +92,7 @@ class AdaptiveFrameSampler:
             # Mặc định lấy 20% đáy màn hình
             boxes = [(int(height * 0.75), height, 0, width)]
 
-        curr_frame_idx = max(0, int(start_seconds * fps))
+        curr_frame_idx = max(0, int(start_seconds * video_fps))
         if curr_frame_idx > 0:
             cap.set(cv2.CAP_PROP_POS_FRAMES, curr_frame_idx)
         use_grab = hasattr(cap, "grab")
@@ -111,7 +114,7 @@ class AdaptiveFrameSampler:
 
             decoder_pts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
             if not math.isfinite(decoder_pts) or decoder_pts < 0:
-                decoder_pts = curr_frame_idx / fps
+                decoder_pts = curr_frame_idx / video_fps
             pts = round(decoder_pts, 3)
 
             for b_idx, (y1, y2, x1, x2) in enumerate(boxes):

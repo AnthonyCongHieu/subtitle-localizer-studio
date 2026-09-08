@@ -107,6 +107,9 @@ const BatchVideoCard: React.FC<{
     voiceover: boolean;
   };
   queueItem?: BatchQueueItem;
+  onRunSingleDubbing?: (proj: ProjectManifestV1) => void;
+  singleActionStatusText?: string;
+  isSingleRunning?: boolean;
 }> = ({
   project,
   isSelected,
@@ -116,6 +119,9 @@ const BatchVideoCard: React.FC<{
   onOpenSettings,
   layerVisibility,
   queueItem,
+  onRunSingleDubbing,
+  singleActionStatusText,
+  isSingleRunning,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -354,21 +360,57 @@ const BatchVideoCard: React.FC<{
           </span>
         </div>
 
-        {/* Nút Phóng To / Mở Studio */}
-        <button
-          onClick={() => onSelectProject(project)}
-          className="p-1 text-slate-400 hover:text-indigo-300 transition flex items-center gap-1 text-[10px] font-semibold"
-          title="Vào Studio"
-        >
-          <Maximize2 className="w-3 h-3" />
-        </button>
+        {/* Nút Phóng To / Mở Studio & Nút Lồng Tiếng Đơn */}
+        <div className="flex items-center gap-1">
+          {onRunSingleDubbing && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRunSingleDubbing(project);
+              }}
+              disabled={isSingleRunning || (project.cues_count || 0) === 0}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                project.has_voiceover
+                  ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-600/60 hover:bg-emerald-900'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
+              }`}
+              title={
+                (project.cues_count || 0) === 0
+                  ? 'Cần quét phụ đề trước khi tạo voice'
+                  : project.has_voiceover
+                  ? 'Đã có voiceover (Bấm để tạo lại)'
+                  : 'Tạo giọng lồng tiếng cho video này'
+              }
+            >
+              <Mic className="w-2.5 h-2.5 text-emerald-400" />
+              <span>{project.has_voiceover ? 'Đã có voice' : 'Tạo voice'}</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => onSelectProject(project)}
+            className="p-1 text-slate-400 hover:text-indigo-300 transition flex items-center gap-1 text-[10px] font-semibold"
+            title="Vào Studio"
+          >
+            <Maximize2 className="w-3 h-3" />
+          </button>
+        </div>
       </div>
 
-      {/* 4b. Lưới 4 Huy Hiệu Trạng Thái Chi Tiết (OCR, Dịch, Lồng Tiếng, Xuất MP4) */}
-      <div className="px-2.5 py-1.5 bg-slate-900/90 border-t border-slate-800/80 grid grid-cols-4 gap-1 text-[10px] font-mono select-none">
+      {/* Thông báo trạng thái thao tác cá nhân trên card */}
+      {singleActionStatusText && (
+        <div className="px-2 py-1 bg-cyan-950/80 border-t border-cyan-800/80 text-[10px] text-cyan-300 font-mono animate-pulse flex items-center gap-1 select-none">
+          <RefreshCw className="w-2.5 h-2.5 animate-spin shrink-0" />
+          <span className="truncate">{singleActionStatusText}</span>
+        </div>
+      )}
+
+      {/* 4b. Lưới 4 Huy Hiệu Trạng Thái Chi Tiết (OCR, Dịch, Voice, Xuất MP4) */}
+      <div className="px-2 py-1.5 bg-slate-900/90 border-t border-slate-800/80 grid grid-cols-4 gap-1 text-[10px] font-mono select-none">
         {/* Badge 1: OCR */}
         <div
-          className={`px-1 py-1 rounded border flex flex-col items-center justify-center text-center ${
+          className={`px-0.5 py-1 rounded border flex flex-col items-center justify-center text-center ${
             (project.cues_count || 0) > 0
               ? 'bg-amber-950/40 border-amber-800/50 text-amber-300'
               : 'bg-slate-950/60 border-slate-800 text-slate-500'
@@ -376,7 +418,7 @@ const BatchVideoCard: React.FC<{
           title={(project.cues_count || 0) > 0 ? `Đã quét được ${project.cues_count} câu phụ đề OCR` : 'Chưa quét OCR'}
         >
           <span className="font-bold flex items-center gap-0.5 leading-none">
-            <FileText className="w-2.5 h-2.5 shrink-0" />
+            <FileText className="w-2 h-2 shrink-0" />
             <span className="truncate">{(project.cues_count || 0) > 0 ? `${project.cues_count}` : '0'}</span>
           </span>
           <span className="text-[8px] opacity-75 mt-0.5">OCR</span>
@@ -384,7 +426,7 @@ const BatchVideoCard: React.FC<{
 
         {/* Badge 2: Dịch */}
         <div
-          className={`px-1 py-1 rounded border flex flex-col items-center justify-center text-center ${
+          className={`px-0.5 py-1 rounded border flex flex-col items-center justify-center text-center ${
             (project.translated_count || 0) > 0
               ? 'bg-cyan-950/40 border-cyan-800/50 text-cyan-300'
               : 'bg-slate-950/60 border-slate-800 text-slate-500'
@@ -392,23 +434,23 @@ const BatchVideoCard: React.FC<{
           title={(project.translated_count || 0) > 0 ? `Đã dịch ${project.translated_count}/${project.cues_count || 0} câu` : 'Chưa dịch phụ đề'}
         >
           <span className="font-bold flex items-center gap-0.5 leading-none">
-            <Languages className="w-2.5 h-2.5 shrink-0" />
+            <Languages className="w-2 h-2 shrink-0" />
             <span className="truncate">{(project.translated_count || 0) > 0 ? `${project.translated_count}` : '0'}</span>
           </span>
           <span className="text-[8px] opacity-75 mt-0.5">Dịch</span>
         </div>
 
-        {/* Badge 3: Lồng tiếng */}
+        {/* Badge 3: Voice MP3 */}
         <div
-          className={`px-1 py-1 rounded border flex flex-col items-center justify-center text-center ${
+          className={`px-0.5 py-1 rounded border flex flex-col items-center justify-center text-center ${
             project.has_voiceover
               ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300'
               : 'bg-slate-950/60 border-slate-800 text-slate-500'
           }`}
-          title={project.has_voiceover ? 'Đã tạo âm thanh lồng tiếng AI' : 'Chưa tạo giọng lồng tiếng'}
+          title={project.has_voiceover ? 'Đã tạo âm thanh lồng tiếng AI (MP3)' : 'Chưa tạo giọng lồng tiếng'}
         >
           <span className="font-bold flex items-center gap-0.5 leading-none">
-            <Mic className="w-2.5 h-2.5 shrink-0" />
+            <Mic className="w-2 h-2 shrink-0" />
             <span>{project.has_voiceover ? '✓' : '—'}</span>
           </span>
           <span className="text-[8px] opacity-75 mt-0.5">Voice</span>
@@ -416,7 +458,7 @@ const BatchVideoCard: React.FC<{
 
         {/* Badge 4: Xuất MP4 */}
         <div
-          className={`px-1 py-1 rounded border flex flex-col items-center justify-center text-center ${
+          className={`px-0.5 py-1 rounded border flex flex-col items-center justify-center text-center ${
             project.has_export
               ? 'bg-purple-950/40 border-purple-800/50 text-purple-300'
               : 'bg-slate-950/60 border-slate-800 text-slate-500'
@@ -424,7 +466,7 @@ const BatchVideoCard: React.FC<{
           title={project.has_export ? 'Đã render và xuất file video MP4 hoàn chỉnh' : 'Chưa xuất video MP4'}
         >
           <span className="font-bold flex items-center gap-0.5 leading-none">
-            <Film className="w-2.5 h-2.5 shrink-0" />
+            <Film className="w-2 h-2 shrink-0" />
             <span>{project.has_export ? '✓' : '—'}</span>
           </span>
           <span className="text-[8px] opacity-75 mt-0.5">Xuất</span>
@@ -1431,6 +1473,18 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     setIsSingleRunning(true);
     const pid = project.project_id;
     try {
+      if ((stage === 'translate' || stage === 'dubbing') && (project.cues_count || 0) === 0) {
+        setSingleActionStatus((prev) => ({ ...prev, [pid]: '⚠ Cần quét phụ đề OCR trước khi thao tác!' }));
+        setTimeout(() => {
+          setSingleActionStatus((prev) => {
+            const cp = { ...prev };
+            delete cp[pid];
+            return cp;
+          });
+        }, 4000);
+        return;
+      }
+
       if (stage === 'ocr') {
         setSingleActionStatus((prev) => ({ ...prev, [pid]: 'Đang quét OCR phụ đề...' }));
         await apiClient.runPipeline(pid, { sync: true });
@@ -1440,10 +1494,21 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
         await apiClient.retranslateProject(pid);
         setSingleActionStatus((prev) => ({ ...prev, [pid]: '✓ Dịch thuật AI thành công!' }));
       } else if (stage === 'dubbing') {
-        setSingleActionStatus((prev) => ({ ...prev, [pid]: 'Đang tạo lồng tiếng AI...' }));
-        const customVoice = project.custom_pipeline_settings?.dubbing?.voice || batchDubbingVoice;
-        await apiClient.runDubbing(pid, customVoice);
-        setSingleActionStatus((prev) => ({ ...prev, [pid]: '✓ Tạo lồng tiếng thành công!' }));
+        setSingleActionStatus((prev) => ({ ...prev, [pid]: 'Đang tạo voiceover AI...' }));
+        const dubSettings = project.custom_pipeline_settings?.dubbing;
+        const mode = dubSettings?.mode || (batchDubbingMode === 'gender_multi' ? 'multi' : 'single');
+        const chosenVoice = dubSettings?.voice || batchDubbingVoice;
+        const maleVoice = dubSettings?.voice_male;
+        const femaleVoice = dubSettings?.voice_female;
+        await apiClient.runDubbing(pid, {
+          mode,
+          voice: chosenVoice,
+          voice_male: maleVoice,
+          voice_female: femaleVoice,
+          provider: dubSettings?.provider,
+          rate: dubSettings?.rate,
+        });
+        setSingleActionStatus((prev) => ({ ...prev, [pid]: '✓ Tạo voiceover thành công!' }));
       } else if (stage === 'export') {
         setSingleActionStatus((prev) => ({ ...prev, [pid]: 'Đang kết xuất video MP4...' }));
         const chosenPreset = presets.find((p) => p.id === activeBatchPresetId) || defaultPreset;
@@ -1549,12 +1614,16 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
         if (isCancelledRef.current) break;
 
         if (runTranslate) {
-          setQueueItems((prev) =>
-            prev.map((it, i) => (i === idx ? { ...it, status: 'translating' } : it))
-          );
-          setQueueStatusMessage(`[${idx + 1}/${targets.length}] Đang dịch thuật AI: "${targetProj.title}"...`);
-          if (batchTargetLang !== 'none') {
-            await apiClient.retranslateProject(targetProj.project_id);
+          // Nếu đã chạy OCR trước đó trong cùng mẻ xử lý, pipeline backend đã hoàn tất cả khâu trích xuất và dịch thuật.
+          // Chỉ gọi retranslate riêng khi người dùng bỏ chọn quét OCR (chỉ muốn dịch lại kịch bản sẵn có).
+          if (!runOcr) {
+            setQueueItems((prev) =>
+              prev.map((it, i) => (i === idx ? { ...it, status: 'translating' } : it))
+            );
+            setQueueStatusMessage(`[${idx + 1}/${targets.length}] Đang dịch thuật AI: "${targetProj.title}"...`);
+            if (batchTargetLang !== 'none') {
+              await apiClient.retranslateProject(targetProj.project_id);
+            }
           }
         }
 
@@ -1568,7 +1637,19 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             );
             setQueueStatusMessage(`[${idx + 1}/${targets.length}] Đang tạo thuyết minh AI: "${targetProj.title}"...`);
             try {
-              await apiClient.runDubbing(targetProj.project_id, batchDubbingVoice);
+              const targetDubSettings = targetProj.custom_pipeline_settings?.dubbing;
+              const mode = targetDubSettings?.mode || (batchDubbingMode === 'gender_multi' ? 'multi' : 'single');
+              const chosenVoice = targetDubSettings?.voice || batchDubbingVoice;
+              const maleVoice = targetDubSettings?.voice_male;
+              const femaleVoice = targetDubSettings?.voice_female;
+              await apiClient.runDubbing(targetProj.project_id, {
+                mode,
+                voice: chosenVoice,
+                voice_male: maleVoice,
+                voice_female: femaleVoice,
+                provider: targetDubSettings?.provider,
+                rate: targetDubSettings?.rate,
+              });
             } catch (err: any) {
               console.warn('Dubbing error:', err);
             }
@@ -2114,6 +2195,9 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                       onDeleteProject={onDeleteProject}
                       onOpenSettings={(p) => handleOpenInspector(p)}
                       layerVisibility={layerVisibility}
+                      onRunSingleDubbing={(p) => handleRunSingleStage(p, 'dubbing')}
+                      singleActionStatusText={singleActionStatus[proj.project_id]}
+                      isSingleRunning={isSingleRunning}
                     />
                   ))}
                 </div>
@@ -3084,7 +3168,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                             ? 'bg-slate-900 text-slate-300 hover:text-white'
                             : 'bg-slate-900/50 text-slate-600 cursor-not-allowed'
                         }`}
-                        title={inspectingProject.has_export ? 'Xem video đã ghép Sub và Lồng tiếng' : 'Cần xuất MP4 trước để xem bản hoàn thiện'}
+                        title={inspectingProject.has_export ? 'Xem video đã ghép Sub và Lồng tiếng (Bản xuất full)' : 'Cần xuất MP4 trước để xem'}
                       >
                         <Film className="w-3.5 h-3.5 text-purple-300" />
                         <span>🎬 Video Đã Xuất Bản (MP4)</span>
@@ -3093,7 +3177,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                       <button
                         onClick={() => setPreviewVideoMode('raw')}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                          previewVideoMode === 'raw' || !inspectingProject.has_export
+                          previewVideoMode === 'raw'
                             ? 'bg-cyan-600 text-white shadow'
                             : 'bg-slate-900 text-slate-300 hover:text-white'
                         }`}
@@ -3128,8 +3212,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                           <span>Kéo thả khung vàng để chỉnh</span>
                         </span>
                       ) : previewVideoMode === 'rendered' && inspectingProject.has_export ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" />
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950/80 text-purple-300 border border-purple-800/60 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-purple-400" />
                           <span>Đang phát bản xuất MP4</span>
                         </span>
                       ) : (
@@ -3192,7 +3276,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                         {isPortraitVideo ? '📱 Tỷ lệ dọc 9:16 (Phóng to tối đa)' : '🎬 Tỷ lệ ngang 16:9'}
                       </span>
                     </div>
-                    {inspectingProject.has_export && (
+                    {previewVideoMode === 'rendered' && inspectingProject.has_export && (
                       <span className="text-purple-400">
                         Bản xuất: {((inspectingProject.export_file_size_bytes || 0) / (1024 * 1024)).toFixed(2)} MB
                       </span>
@@ -3254,7 +3338,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                           <Activity className="w-3.5 h-3.5 text-cyan-400" />
                           <span>Thông số kỹ thuật</span>
                         </h4>
-                        <div className="grid grid-cols-2 gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-[11px]">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-[11px]">
                           <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800/80">
                             <span className="text-slate-500 block text-[10px] mb-0.5">Thời lượng thực tế</span>
                             <span className="text-cyan-300 font-bold text-xs">
@@ -3279,17 +3363,17 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                             </span>
                           </div>
                           <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800/80">
-                            <span className="text-slate-500 block text-[10px] mb-0.5">Lồng tiếng AI</span>
+                            <span className="text-slate-500 block text-[10px] mb-0.5">Giọng AI (MP3)</span>
                             <span
                               className={`font-bold text-xs ${
                                 inspectingProject.has_voiceover ? 'text-emerald-400' : 'text-slate-500'
                               }`}
                             >
-                              {inspectingProject.has_voiceover ? '✓ Đã hoàn thành' : 'Chưa có'}
+                              {inspectingProject.has_voiceover ? '✓ Đã tạo MP3' : 'Chưa có'}
                             </span>
                           </div>
                           <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800/80">
-                            <span className="text-slate-500 block text-[10px] mb-0.5">Bản xuất MP4</span>
+                            <span className="text-slate-500 block text-[10px] mb-0.5">Bản Xuất MP4</span>
                             <span
                               className={`font-bold text-xs ${
                                 inspectingProject.has_export ? 'text-purple-400' : 'text-slate-500'
@@ -3298,18 +3382,12 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                               {inspectingProject.has_export ? '✓ Đã render' : 'Chưa xuất'}
                             </span>
                           </div>
-                          <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800/80">
-                            <span className="text-slate-500 block text-[10px] mb-0.5">Mã ID dự án</span>
-                            <span className="text-slate-300 truncate block text-xs" title={inspectingProject.project_id}>
-                              {inspectingProject.project_id.slice(-8)}
-                            </span>
-                          </div>
                         </div>
                       </div>
 
                       {/* Trình phát Master Voiceover Audio nếu có */}
                       {inspectingProject.has_voiceover && (
-                        <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/60 space-y-2 animate-in fade-in">
+                        <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/60 space-y-2.5 animate-in fade-in">
                           <div className="flex items-center justify-between text-amber-300 font-semibold text-xs">
                             <span className="flex items-center gap-1.5">
                               <Volume2 className="w-3.5 h-3.5 text-amber-400" />
@@ -3349,7 +3427,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                           </button>
                           <button
                             onClick={() => handleRunSingleStage(inspectingProject, 'translate')}
-                            disabled={isSingleRunning}
+                            disabled={isSingleRunning || (inspectingProject.cues_count || 0) === 0}
+                            title={(inspectingProject.cues_count || 0) === 0 ? "Cần quét phụ đề trước khi dịch" : "Dịch lại toàn bộ phụ đề"}
                             className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-cyan-500/50 hover:bg-cyan-950/20 text-slate-300 hover:text-cyan-300 text-xs font-semibold flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shadow-sm group"
                           >
                             <Languages className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
@@ -3357,11 +3436,12 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                           </button>
                           <button
                             onClick={() => handleRunSingleStage(inspectingProject, 'dubbing')}
-                            disabled={isSingleRunning}
+                            disabled={isSingleRunning || (inspectingProject.cues_count || 0) === 0}
+                            title={(inspectingProject.cues_count || 0) === 0 ? "Cần quét phụ đề trước khi tạo giọng đọc" : "Tạo giọng đọc (Voice)"}
                             className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/50 hover:bg-emerald-950/20 text-slate-300 hover:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shadow-sm group"
                           >
                             <Volume2 className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
-                            <span>Tạo giọng</span>
+                            <span>Tạo giọng (Voice)</span>
                           </button>
                           <button
                             onClick={() => handleRunSingleStage(inspectingProject, 'export')}
@@ -3759,24 +3839,103 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                               </div>
                             </div>
 
-                            <div>
-                              <label className="text-[10px] text-slate-400 block mb-1">Giọng đọc riêng:</label>
-                              <select
-                                value={projectSettingsForm.dubbing.voice}
-                                onChange={(e) =>
-                                  setProjectSettingsForm((prev) =>
-                                    prev ? { ...prev, dubbing: { ...prev.dubbing, voice: e.target.value } } : prev
-                                  )
-                                }
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
-                              >
-                                {ttsVoices.map((v) => (
-                                  <option key={v.voice_id} value={v.voice_id}>
-                                    {v.display_name} ({v.voice_id})
-                                  </option>
-                                ))}
-                              </select>
+                            {/* Chế độ Lồng Tiếng Đơn vs Đa Giọng */}
+                            <div className="space-y-1.5 pt-1 border-t border-slate-800">
+                              <label className="text-[10px] text-slate-400 block font-medium">Chế độ phân vai lồng tiếng:</label>
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setProjectSettingsForm((prev) =>
+                                      prev ? { ...prev, dubbing: { ...prev.dubbing, mode: 'single' } } : prev
+                                    )
+                                  }
+                                  className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
+                                    (projectSettingsForm.dubbing.mode || 'single') === 'single'
+                                      ? 'bg-emerald-950/80 border-emerald-500/70 text-emerald-300 shadow-sm'
+                                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
+                                  }`}
+                                >
+                                  Đơn giọng (1 người)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setProjectSettingsForm((prev) =>
+                                      prev ? { ...prev, dubbing: { ...prev.dubbing, mode: 'multi' } } : prev
+                                    )
+                                  }
+                                  className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
+                                    projectSettingsForm.dubbing.mode === 'multi'
+                                      ? 'bg-emerald-950/80 border-emerald-500/70 text-emerald-300 shadow-sm'
+                                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
+                                  }`}
+                                >
+                                  Đa giọng (Nam / Nữ)
+                                </button>
+                              </div>
                             </div>
+
+                            {/* Lựa chọn giọng theo chế độ */}
+                            {(projectSettingsForm.dubbing.mode || 'single') === 'single' ? (
+                              <div>
+                                <label className="text-[10px] text-slate-400 block mb-1">Giọng đọc chính:</label>
+                                <select
+                                  value={projectSettingsForm.dubbing.voice}
+                                  onChange={(e) =>
+                                    setProjectSettingsForm((prev) =>
+                                      prev ? { ...prev, dubbing: { ...prev.dubbing, voice: e.target.value } } : prev
+                                    )
+                                  }
+                                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                                >
+                                  {ttsVoices.map((v) => (
+                                    <option key={v.voice_id} value={v.voice_id}>
+                                      {v.display_name} ({v.voice_id})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[10px] text-slate-400 block mb-1">Giọng Nam:</label>
+                                  <select
+                                    value={projectSettingsForm.dubbing.voice_male || 'vi-VN-NamMinhNeural'}
+                                    onChange={(e) =>
+                                      setProjectSettingsForm((prev) =>
+                                        prev ? { ...prev, dubbing: { ...prev.dubbing, voice_male: e.target.value } } : prev
+                                      )
+                                    }
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                                  >
+                                    {ttsVoices.map((v) => (
+                                      <option key={v.voice_id} value={v.voice_id}>
+                                        {v.display_name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-slate-400 block mb-1">Giọng Nữ:</label>
+                                  <select
+                                    value={projectSettingsForm.dubbing.voice_female || 'vi-VN-HoaiMyNeural'}
+                                    onChange={(e) =>
+                                      setProjectSettingsForm((prev) =>
+                                        prev ? { ...prev, dubbing: { ...prev.dubbing, voice_female: e.target.value } } : prev
+                                      )
+                                    }
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                                  >
+                                    {ttsVoices.map((v) => (
+                                      <option key={v.voice_id} value={v.voice_id}>
+                                        {v.display_name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {/* 4. Render Mask Style */}

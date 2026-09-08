@@ -31,7 +31,7 @@ export const DramaFolderCard: React.FC<DramaFolderCardProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const total = projects.length;
 
-  // Tính toán số liệu thống kê 4 công đoạn
+  // Tính toán số liệu thống kê các công đoạn
   const ocrDone = projects.filter((p) => (p.cues_count || 0) > 0).length;
   const transDone = projects.filter((p) => (p.translated_count || 0) > 0).length;
   const voiceDone = projects.filter((p) => Boolean(p.has_voiceover)).length;
@@ -153,12 +153,15 @@ export const DramaFolderCard: React.FC<DramaFolderCardProps> = ({
             </span>
             <span className="text-slate-500 text-[9px] mt-0.5">Dịch</span>
           </div>
-          <div className="p-1.5 rounded-lg bg-slate-950/80 border border-slate-800 flex flex-col items-center justify-center text-center">
+          <div
+            className="p-1.5 rounded-lg bg-slate-950/80 border border-slate-800 flex flex-col items-center justify-center text-center"
+            title={`Lồng tiếng: ${voiceDone}/${total} tập đã tạo voiceover`}
+          >
             <span className="text-emerald-400 font-bold flex items-center gap-0.5">
               <Mic className="w-2.5 h-2.5" />
               <span>{voiceDone}/{total}</span>
             </span>
-            <span className="text-slate-500 text-[9px] mt-0.5">Lồng tiếng</span>
+            <span className="text-slate-500 text-[9px] mt-0.5">Voice</span>
           </div>
           <div className="p-1.5 rounded-lg bg-slate-950/80 border border-slate-800 flex flex-col items-center justify-center text-center">
             <span className="text-purple-400 font-bold flex items-center gap-0.5">

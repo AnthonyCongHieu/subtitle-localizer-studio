@@ -463,7 +463,6 @@ def create_app(
             d["has_voiceover"] = voiceover_exists
             d["voiceover_path"] = str(voiceover_path) if voiceover_exists else None
             d["voiceover_file_size_bytes"] = voiceover_path.stat().st_size if voiceover_exists else 0
-
             export_path = resolved_output_root / p.project_id / f"{Path(p.source_video_path).stem}-localized.mp4"
             export_exists = export_path.exists() and export_path.stat().st_size > 0
             d["has_export"] = export_exists
@@ -583,7 +582,6 @@ def create_app(
         d["has_voiceover"] = voiceover_exists
         d["voiceover_path"] = str(voiceover_path) if voiceover_exists else None
         d["voiceover_file_size_bytes"] = voiceover_path.stat().st_size if voiceover_exists else 0
-
         export_path = resolved_output_root / project_id / f"{Path(project.source_video_path).stem}-localized.mp4"
         export_exists = export_path.exists() and export_path.stat().st_size > 0
         d["has_export"] = export_exists
@@ -1119,9 +1117,11 @@ def create_app(
                 detail=f"Invalid normalized ROI: {', '.join(invalid_ids)}",
             )
 
-        manifest.regions = regions
-        repository.save_project(manifest)
-        return [region.to_dict() for region in regions]
+        # Cập nhật nguyên tử không ghi đè custom_pipeline_settings nếu có request song song
+        updated = repository.patch_project(project_id, patch_data={"regions": regions})
+        if not updated:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return [region.to_dict() for region in (updated.regions or [])]
 
     @app.get("/api/v1/projects/{project_id}/settings")
     async def get_project_settings(
@@ -1144,9 +1144,11 @@ def create_app(
         manifest = repository.get_project(project_id)
         if not manifest:
             raise HTTPException(status_code=404, detail="Project not found")
-        manifest.custom_pipeline_settings = settings_data
-        repository.save_project(manifest)
-        return {"status": "success", "custom_pipeline_settings": manifest.custom_pipeline_settings}
+        # Cập nhật nguyên tử không ghi đè regions nếu có request song song
+        updated = repository.patch_project(project_id, patch_data={"custom_pipeline_settings": settings_data})
+        if not updated:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return {"status": "success", "custom_pipeline_settings": updated.custom_pipeline_settings}
 
     @app.delete("/api/v1/projects/{project_id}/settings")
     async def reset_project_settings(
@@ -1157,9 +1159,49 @@ def create_app(
         manifest = repository.get_project(project_id)
         if not manifest:
             raise HTTPException(status_code=404, detail="Project not found")
-        manifest.custom_pipeline_settings = None
-        repository.save_project(manifest)
+        updated = repository.patch_project(project_id, patch_data={"custom_pipeline_settings": None})
+        if not updated:
+            raise HTTPException(status_code=404, detail="Project not found")
         return {"status": "success", "custom_pipeline_settings": None}
+
+    @app.put("/api/v1/projects/{project_id}/editor-state")
+    async def save_editor_state(
+        project_id: str,
+        payload: Dict[str, Any],
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Cập nhật đồng bộ nguyên tử cả ROI/Regions và Cài đặt Settings trong 1 transaction SQLite duy nhất."""
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        patch_data: Dict[str, Any] = {}
+        if "regions" in payload and payload["regions"] is not None:
+            raw_regions = payload["regions"]
+            parsed_regions = [RegionTrackV1.from_dict(r) if isinstance(r, dict) else r for r in raw_regions]
+            invalid_ids = [r.region_id for r in parsed_regions if not r.is_valid()]
+            if invalid_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid normalized ROI: {', '.join(invalid_ids)}",
+                )
+            patch_data["regions"] = parsed_regions
+
+        if "settings" in payload:
+            patch_data["custom_pipeline_settings"] = payload["settings"]
+
+        updated = repository.patch_project(project_id, patch_data=patch_data)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        return {
+            "status": "success",
+            "project_id": project_id,
+            "revision": updated.active_revision,
+            "regions": [r.to_dict() for r in (updated.regions or [])],
+            "settings": updated.custom_pipeline_settings,
+        }
 
     @app.post("/api/v1/projects/{project_id}/pipeline/run")
     async def run_pipeline(
@@ -1321,7 +1363,10 @@ def create_app(
 
         cues = repository.get_cues(project_id)
         if not cues:
-            return {"status": "empty", "cues_count": 0}
+            raise HTTPException(
+                status_code=400,
+                detail="Dự án chưa có phụ đề để dịch. Hãy quét phụ đề trước.",
+            )
 
         translator = worker.translation_registry.get_provider_for_pair(
             manifest.source_language, manifest.target_language
@@ -1332,10 +1377,12 @@ def create_app(
                 cues, source_lang=manifest.source_language, target_lang=manifest.target_language
             )
             repository.save_cues(project_id, translated_cues)
-            manifest.cues_count = len(translated_cues)
-            manifest.translated_count = sum(1 for c in translated_cues if bool((c.translated_text or "").strip()))
-            repository.save_project(manifest)
-            return {"status": "success", "cues_count": len(translated_cues), "translated_count": manifest.translated_count}
+            # Lấy bản ghi manifest mới nhất từ database để tránh ghi đè snapshot cũ làm mất cấu hình ROI/Style
+            current_manifest = repository.get_project(project_id) or manifest
+            current_manifest.cues_count = len(translated_cues)
+            current_manifest.translated_count = sum(1 for c in translated_cues if bool((c.translated_text or "").strip()))
+            repository.save_project(current_manifest)
+            return {"status": "success", "cues_count": len(translated_cues), "translated_count": current_manifest.translated_count}
         finally:
             translator.unload()
 
@@ -1363,6 +1410,20 @@ def create_app(
         voice_male = (body or {}).get("voice_male") or getattr(settings.dubbing, "voice_male", "vi-VN-NamMinhNeural")
         voice_female = (body or {}).get("voice_female") or getattr(settings.dubbing, "voice_female", "vi-VN-HoaiMyNeural")
         prompt_style = (body or {}).get("prompt_style") or getattr(settings.dubbing, "gemini_prompt_style", "dramatic")
+
+        # Lưu cài đặt lồng tiếng (Đơn giọng / Đa giọng, giọng chọn) riêng cho video này
+        if body:
+            if not manifest.custom_pipeline_settings:
+                manifest.custom_pipeline_settings = {}
+            if "dubbing" not in manifest.custom_pipeline_settings:
+                manifest.custom_pipeline_settings["dubbing"] = {}
+            manifest.custom_pipeline_settings["dubbing"]["mode"] = mode
+            manifest.custom_pipeline_settings["dubbing"]["voice"] = voice
+            manifest.custom_pipeline_settings["dubbing"]["voice_male"] = voice_male
+            manifest.custom_pipeline_settings["dubbing"]["voice_female"] = voice_female
+            manifest.custom_pipeline_settings["dubbing"]["provider"] = provider
+            manifest.custom_pipeline_settings["dubbing"]["rate"] = rate
+
         project_output = resolved_output_root / project_id
         project_output.mkdir(parents=True, exist_ok=True)
         out_voiceover = project_output / f"voiceover_{project_id}.mp3"
@@ -1392,10 +1453,16 @@ def create_app(
             export_cues_dir=cues_dir,
         )
 
-        manifest.has_voiceover = True
-        manifest.voiceover_path = str(out_voiceover).replace("\\", "/")
-        manifest.voiceover_file_size_bytes = out_voiceover.stat().st_size if out_voiceover.exists() else 0
-        repository.save_project(manifest)
+        # Lấy manifest mới nhất từ repository để tránh ghi đè mất ROI và settings vừa được cập nhật
+        current_manifest = repository.get_project(project_id) or manifest
+        current_manifest.has_voiceover = True
+        current_manifest.voiceover_path = str(out_voiceover).replace("\\", "/")
+        current_manifest.voiceover_file_size_bytes = out_voiceover.stat().st_size if out_voiceover.exists() else 0
+        if body and manifest.custom_pipeline_settings:
+            if not current_manifest.custom_pipeline_settings:
+                current_manifest.custom_pipeline_settings = {}
+            current_manifest.custom_pipeline_settings["dubbing"] = manifest.custom_pipeline_settings.get("dubbing", {})
+        repository.save_project(current_manifest)
 
         return {
             "status": "completed",
@@ -1607,7 +1674,7 @@ def create_app(
                             boxes.append((rx1, ry1, max(2, rx2 - rx1), max(2, ry2 - ry1)))
                     else:
                         boxes.append((0, int(vh * 0.8), vw, max(2, int(vh * 0.2))))
-                    mask_filter = SubtitleMasker().get_multi_filter_string(boxes=boxes, mode=mask_mode)
+                    mask_filter = SubtitleMasker().get_multi_filter_string(boxes=boxes, mode=mask_mode, blur_strength=blur_strength or 20)
 
             with tempfile.NamedTemporaryFile(
                 dir=project_output,
@@ -1625,6 +1692,7 @@ def create_app(
                 use_nvenc=True,
                 flip_h=flip_h,
                 flip_v=flip_v,
+                rotation=rotation,
             )
 
             # Nếu có file lồng tiếng TTS, tự động hòa trộn vào video xuất kèm audio ducking
@@ -1659,6 +1727,14 @@ def create_app(
 
         if not rendered_path.exists() or not rendered_path.is_file():
             raise HTTPException(status_code=500, detail="MP4 export did not produce an output file")
+
+        # Cập nhật trạng thái xuất file thành công vào manifest để UI hiển thị chuẩn xác
+        current_manifest = repository.get_project(project_id) or project
+        current_manifest.has_export = True
+        current_manifest.export_path = str(rendered_path).replace("\\", "/")
+        current_manifest.export_file_size_bytes = rendered_path.stat().st_size if rendered_path.exists() else 0
+        repository.save_project(current_manifest)
+
         return str(rendered_path)
 
     @app.post("/api/v1/batch/run")

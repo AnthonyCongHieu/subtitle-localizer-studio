@@ -20,6 +20,7 @@ class VideoExporter:
         crf: int = 20,
         flip_h: bool = False,
         flip_v: bool = False,
+        rotation: float = 0.0,
     ) -> List[str]:
         src = Path(source_video_path).resolve()
         out = Path(output_video_path).resolve()
@@ -39,6 +40,16 @@ class VideoExporter:
             filters.append("hflip")
         if flip_v:
             filters.append("vflip")
+
+        # Áp dụng xoay khung hình video thật sự bằng FFmpeg transpose filter
+        if rotation:
+            rot_norm = int(rotation) % 360
+            if rot_norm == 90:
+                filters.append("transpose=1")
+            elif rot_norm == 180:
+                filters.append("hflip,vflip")
+            elif rot_norm == 270:
+                filters.append("transpose=2")
 
         vf_arg = ",".join(filters) if filters else None
         vcodec = "h264_nvenc" if use_nvenc else "libx264"
@@ -75,6 +86,7 @@ class VideoExporter:
         use_nvenc: bool = True,
         flip_h: bool = False,
         flip_v: bool = False,
+        rotation: float = 0.0,
     ) -> Path:
         out = Path(output_video_path).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +104,7 @@ class VideoExporter:
             use_nvenc=use_nvenc,
             flip_h=flip_h,
             flip_v=flip_v,
+            rotation=rotation,
         )
 
         try:
@@ -108,6 +121,7 @@ class VideoExporter:
                         use_nvenc=False,
                         flip_h=flip_h,
                         flip_v=flip_v,
+                        rotation=rotation,
                     )
                     res2 = subprocess.run(fallback_cmd, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
                     if res2.returncode != 0:

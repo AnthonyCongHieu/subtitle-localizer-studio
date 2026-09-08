@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from subtitle_localizer.domain.models import (
     BridgeEventV1,
@@ -55,6 +55,88 @@ class ProjectRepository:
                     time.time(),
                 ),
             )
+
+    def patch_project(
+        self,
+        project_id: str,
+        patch_data: Optional[Dict[str, Any]] = None,
+        updater: Optional[Callable[[ProjectManifestV1], None]] = None,
+    ) -> Optional[ProjectManifestV1]:
+        """
+        Cập nhật nguyên tử một ProjectManifest trong một transaction SQLite duy nhất (BEGIN IMMEDIATE).
+        Khóa hàng để đọc manifest mới nhất từ database, áp dụng patch hoặc hàm cập nhật updater,
+        tự động tăng active_revision và cập nhật updated_at, loại bỏ hoàn toàn race condition.
+        """
+        conn = self.db.get_connection()
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
+            cursor = conn.execute("SELECT manifest_json, active_revision FROM projects WHERE project_id = ?;", (project_id,))
+            row = cursor.fetchone()
+            if not row:
+                conn.execute("ROLLBACK;")
+                return None
+
+            data = json.loads(row["manifest_json"])
+            manifest = ProjectManifestV1.from_dict(data)
+
+            if updater:
+                updater(manifest)
+
+            if patch_data:
+                if "regions" in patch_data:
+                    raw_regions = patch_data["regions"]
+                    manifest.regions = [
+                        RegionTrackV1.from_dict(r) if isinstance(r, dict) else r
+                        for r in raw_regions
+                    ]
+                if "custom_pipeline_settings" in patch_data:
+                    manifest.custom_pipeline_settings = patch_data["custom_pipeline_settings"]
+                if "title" in patch_data:
+                    manifest.title = patch_data["title"]
+                if "source_language" in patch_data:
+                    manifest.source_language = patch_data["source_language"]
+                if "target_language" in patch_data:
+                    manifest.target_language = patch_data["target_language"]
+                if "cues_count" in patch_data:
+                    manifest.cues_count = patch_data["cues_count"]
+                if "translated_count" in patch_data:
+                    manifest.translated_count = patch_data["translated_count"]
+
+            new_revision = (manifest.active_revision or 0) + 1
+            manifest.active_revision = new_revision
+            manifest.updated_at = time.time()
+            manifest_json = json.dumps(manifest.to_dict(), ensure_ascii=False)
+
+            conn.execute(
+                """
+                UPDATE projects SET
+                    title = ?,
+                    source_video_path = ?,
+                    video_fingerprint = ?,
+                    source_language = ?,
+                    target_language = ?,
+                    active_revision = ?,
+                    manifest_json = ?,
+                    updated_at = ?
+                WHERE project_id = ?;
+                """,
+                (
+                    manifest.title,
+                    manifest.source_video_path,
+                    manifest.video_fingerprint,
+                    manifest.source_language,
+                    manifest.target_language,
+                    new_revision,
+                    manifest_json,
+                    manifest.updated_at,
+                    project_id,
+                ),
+            )
+            conn.execute("COMMIT;")
+            return manifest
+        except Exception:
+            conn.execute("ROLLBACK;")
+            raise
 
     def get_project(self, project_id: str) -> Optional[ProjectManifestV1]:
         """Lấy ProjectManifest theo project_id."""

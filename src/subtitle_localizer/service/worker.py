@@ -399,7 +399,7 @@ class BackgroundWorker:
 
                 # Stage 3.8: Hybrid DualFusion Pass (Dung hợp âm thanh RAM-Pipe và thị giác)
                 local_engine = getattr(pipeline_settings.ocr, "local_engine", "hybrid")
-                if local_engine in ("hybrid", "rapidocr") and video_path.exists():
+                if local_engine == "hybrid" and video_path.exists():
                     stage_hybrid = StageRunV1(
                         stage_name="hybrid_fusion",
                         status="running",
