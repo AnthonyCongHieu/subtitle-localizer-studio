@@ -56,7 +56,6 @@ CORE_MODULES: List[Tuple[str, str]] = [
     ("cv2", "opencv-python>=4.10.0"),
     ("onnxruntime", "onnxruntime>=1.16.0"),
     ("rapidocr_onnxruntime", "rapidocr-onnxruntime>=1.4.4"),
-    ("deep_translator", "deep-translator>=1.11.4"),
     ("python_multipart", "python-multipart>=0.0.20"),
     ("requests", "requests>=2.28.0"),
     ("Crypto", "pycryptodome>=3.18.0"),
@@ -186,7 +185,7 @@ def free_port(port: int, force: bool = True) -> bool:
 
 def check_and_fix_configs(root_dir: Path = ROOT_DIR) -> Dict[str, bool]:
     """Kiểm tra và tự động khôi phục các file cấu hình và key pool."""
-    results: Dict[str, bool] = {"env": False, "gemini_pool": False, "groq_pool": False}
+    results: Dict[str, bool] = {"env": False, "gemini_pool": False}
 
     # 1. subtitle_localizer.env
     env_file = root_dir / "subtitle_localizer.env"
@@ -221,21 +220,28 @@ def check_and_fix_configs(root_dir: Path = ROOT_DIR) -> Dict[str, bool]:
             print("[!] 'gemini_keys_pool.json' bị lỗi định dạng. Đã tự động khôi phục cấu trúc JSON hợp lệ.")
     results["gemini_pool"] = gemini_file.exists()
 
-    # 3. groq_keys_pool.json
-    groq_file = root_dir / "groq_keys_pool.json"
-    if not groq_file.exists():
-        groq_file.write_text("[]", encoding="utf-8")
-        print("[*] Đã khởi tạo 'groq_keys_pool.json' rỗng.")
-    else:
-        try:
-            content = json.loads(groq_file.read_text(encoding="utf-8"))
-            if not isinstance(content, list):
-                groq_file.write_text("[]", encoding="utf-8")
-        except Exception:
-            groq_file.write_text("[]", encoding="utf-8")
-    results["groq_pool"] = groq_file.exists()
-
     return results
+
+
+def ensure_local_model(model: str = "qwen2.5:7b-instruct") -> bool:
+    """Verify the local translation model before advertising host readiness."""
+    ollama = shutil.which("ollama")
+    if not ollama:
+        print("[!] Thiếu Ollama; dịch local chưa sẵn sàng.")
+        return False
+    try:
+        listed = subprocess.run([ollama, "list"], capture_output=True, text=True, timeout=15)
+        if listed.returncode == 0 and model.lower() in listed.stdout.lower():
+            print(f"[✅] Local model sẵn sàng: {model}")
+            return True
+        if os.getenv("SL_AUTO_PULL_MODEL", "1") != "1":
+            print(f"[!] Chưa có model {model}; bật SL_AUTO_PULL_MODEL=1 hoặc chạy ollama pull {model}.")
+            return False
+        print(f"[*] Đang tải local model {model}; lần đầu có thể mất vài phút...")
+        return subprocess.run([ollama, "pull", model], timeout=3600).returncode == 0
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[!] Không kiểm tra được local model: {exc}")
+        return False
 
 
 def check_database(db_path: Path | str = ROOT_DIR / "subtitle_localizer.db") -> Tuple[bool, str]:
@@ -250,21 +256,34 @@ def check_database(db_path: Path | str = ROOT_DIR / "subtitle_localizer.db") -> 
         return False, f"Lỗi khởi tạo cơ sở dữ liệu: {e}"
 
 
-def check_frontend(root_dir: Path = ROOT_DIR, auto_build: bool = True) -> Tuple[bool, str]:
-    """Kiểm tra giao diện Web UI (web/dist/index.html) và tự động build nếu thiếu."""
+def check_frontend(root_dir: Path = ROOT_DIR, auto_build: bool = True, force_build: bool = False) -> Tuple[bool, str]:
+    """Kiểm tra giao diện Web UI (web/dist/index.html) và tự động build nếu thiếu hoặc có cập nhật mã nguồn."""
     dist_index = root_dir / "web" / "dist" / "index.html"
-    if dist_index.exists() and dist_index.stat().st_size > 0:
-        return True, "Bản build Web UI (Production) đã sẵn sàng."
+    src_dir = root_dir / "web" / "src"
+
+    needs_build = force_build or not dist_index.exists() or dist_index.stat().st_size == 0
+    if not needs_build and src_dir.exists():
+        dist_mtime = dist_index.stat().st_mtime
+        for f in src_dir.rglob("*"):
+            if f.is_file() and f.stat().st_mtime > dist_mtime:
+                needs_build = True
+                print("[*] Phát hiện mã nguồn giao diện (web/src) mới hơn bản build hiện tại. Đang tự động build lại...")
+                break
+
+    if not needs_build:
+        return True, "Bản build Web UI (Production) đã sẵn sàng và đồng bộ mới nhất."
 
     if not auto_build:
-        return False, "Chưa tìm thấy bản build web/dist/index.html."
+        return False, "Chưa tìm thấy bản build web/dist/index.html hoặc cần build lại."
 
     # Kiểm tra npm để tự động build
     npm_cmd = shutil.which("npm.cmd") or shutil.which("npm")
     if not npm_cmd:
+        if dist_index.exists() and dist_index.stat().st_size > 0:
+            return True, "Bản build Web UI hiện có sẵn sàng (Lưu ý: chưa cài npm để tự động build mã nguồn mới nhất)."
         return False, "Chưa có web/dist và máy chưa cài đặt npm/Node.js để tự động build."
 
-    print("[*] Chưa có bản build Web UI. Đang tự động chạy 'npm run build'...")
+    print("[*] Đang tiến hành build Web UI: 'npm run build'...")
     web_dir = root_dir / "web"
     node_modules = web_dir / "node_modules"
 
@@ -276,6 +295,7 @@ def check_frontend(root_dir: Path = ROOT_DIR, auto_build: bool = True) -> Tuple[
     if build_res.returncode == 0 and dist_index.exists():
         return True, "Đã tự động build Web UI thành công!"
     return False, "Build Web UI thất bại. Vui lòng kiểm tra môi trường Node.js."
+
 
 
 def check_ffmpeg(root_dir: Path = ROOT_DIR) -> Tuple[bool, str]:
@@ -311,7 +331,40 @@ def wait_for_health(port: int = 8899, timeout_seconds: float = 15.0) -> bool:
     return False
 
 
-def run_preflight_checks(root_dir: Path = ROOT_DIR, auto_fix: bool = True, port: int = 8899) -> bool:
+def create_local_worker_agent(port: int = 8899):
+    """Create the host's worker agent using the same runtime as remote workers.
+
+    Kept as a small public launcher hook so smoke tests and alternate launchers
+    can verify host bootstrap without starting uvicorn.  The returned tuple is
+    ``(agent, thread)``; callers own shutdown via ``agent.stop()``.
+    """
+    from subtitle_localizer.persistence.database import Database
+    from subtitle_localizer.persistence.repository import ProjectRepository
+    from subtitle_localizer.service.lan_worker import (
+        LanWorkerAgent, build_pipeline_job_handler, build_download_handler,
+        collect_worker_capabilities,
+    )
+    db_path = Path(os.getenv("SL_DATABASE", str(ROOT_DIR / "subtitle_localizer.db")))
+    database = Database(db_path)
+    database.migrate()
+    repository = ProjectRepository(database)
+    coordinator_url = os.getenv("SL_COORDINATOR_URL", f"http://127.0.0.1:{port}")
+    agent = LanWorkerAgent(
+        coordinator_url,
+        os.getenv("SL_WORKER_ID", "") or None,
+        os.getenv("SL_WORKER_TOKEN", ""),
+        interval_seconds=float(os.getenv("SL_WORKER_INTERVAL", "5")),
+        state_path=Path(os.getenv("SL_WORKER_STATE", str(ROOT_DIR / "worker_state.json"))),
+    )
+    thread = threading.Thread(
+        target=agent.run,
+        args=(build_pipeline_job_handler(repository), build_download_handler(repository), collect_worker_capabilities()),
+        name="local-worker-agent", daemon=True,
+    )
+    return agent, thread
+
+
+def run_preflight_checks(root_dir: Path = ROOT_DIR, auto_fix: bool = True, port: int = 8899, force_build_web: bool = False) -> bool:
     """Chạy toàn bộ 6 bước kiểm tra trạng thái ổn định và tự sửa chữa."""
     print("=" * 72)
     print("      🚀 SUBTITLE LOCALIZER STUDIO - KIỂM TRA ĐỘ ỔN ĐỊNH & TỰ FIX")
@@ -354,7 +407,8 @@ def run_preflight_checks(root_dir: Path = ROOT_DIR, auto_fix: bool = True, port:
 
     # 4. Config files
     configs = check_and_fix_configs(root_dir)
-    print(f"[✅] [4/6] Cấu hình & API Key Pool: Đã đồng bộ (Env: OK, Gemini: OK, Groq: OK).")
+    print(f"[✅] [4/6] Cấu hình local: Đã đồng bộ (Env: OK, local model profile: OK).")
+    ensure_local_model()
 
     # 5. Database
     db_ok, db_msg = check_database(root_dir / "subtitle_localizer.db")
@@ -364,7 +418,7 @@ def run_preflight_checks(root_dir: Path = ROOT_DIR, auto_fix: bool = True, port:
         return False
 
     # 6. Frontend Web UI & FFmpeg
-    fe_ok, fe_msg = check_frontend(root_dir, auto_build=auto_fix)
+    fe_ok, fe_msg = check_frontend(root_dir, auto_build=auto_fix, force_build=force_build_web)
     status_icon = "✅" if fe_ok else "⚠️"
     print(f"[{status_icon}] [6/6] Giao diện Web UI: {fe_msg}")
 
@@ -386,13 +440,46 @@ def run_preflight_checks(root_dir: Path = ROOT_DIR, auto_fix: bool = True, port:
     return True
 
 
-def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int = 8899) -> None:
+def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int = 8899,
+                  local_worker: bool = True) -> None:
     """Khởi động toàn bộ Studio trong 1 cửa sổ CMD duy nhất."""
     import webbrowser
     import uvicorn
     from subtitle_localizer.service.server import create_app
+    from subtitle_localizer.service.lan import LanDiscoveryResponder
 
     app = create_app()
+    try:
+        lan_host = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        lan_host = "127.0.0.1"
+    discovery = LanDiscoveryResponder(f"http://{lan_host}:{port}")
+    discovery.start()
+    local_agent = None
+    local_agent_thread = None
+
+    def _start_local_worker() -> None:
+        """Register this host as a normal LAN worker and process local jobs.
+
+        The agent starts only after the API health endpoint is available, so a
+        single ``start-host`` process is both coordinator and worker without a
+        second command window or race during startup.
+        """
+        nonlocal local_agent, local_agent_thread
+        if not local_worker:
+            return
+        try:
+            local_agent, local_agent_thread = create_local_worker_agent(port)
+            local_agent_thread.start()
+        except Exception as error:
+            # Host remains usable as coordinator; surface a clear diagnostic.
+            print(f"[!] Không thể khởi động worker cục bộ: {error}", flush=True)
+
+    def _stop_local_worker() -> None:
+        if local_agent is not None:
+            local_agent.stop()
+        if local_agent_thread is not None and local_agent_thread.is_alive():
+            local_agent_thread.join(timeout=3.0)
 
     # Thread kiểm tra health và tự động mở trình duyệt
     def _health_and_browser_worker():
@@ -419,12 +506,16 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
 
     health_thread = threading.Thread(target=_health_and_browser_worker, daemon=True)
     health_thread.start()
-
+    _start_local_worker()
     if dev_mode:
         npm_cmd = shutil.which("npm.cmd") or shutil.which("npm")
         if not npm_cmd:
             print("[!] Không tìm thấy npm để chạy chế độ Dev, chuyển về chế độ Production tiêu chuẩn...")
-            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+            try:
+                uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+            finally:
+                _stop_local_worker()
+                discovery.stop()
             return
 
         # Chạy Vite Dev Server đồng thời trong 1 CMD
@@ -453,9 +544,15 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
                 vite_proc.terminate()
             except Exception:
                 pass
+            _stop_local_worker()
+            discovery.stop()
     else:
         # Chế độ tiêu chuẩn: 1 CMD duy nhất, phục vụ trực tiếp cả UI lẫn Backend API
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+        try:
+            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+        finally:
+            _stop_local_worker()
+            discovery.stop()
 
 
 def main() -> None:
@@ -464,11 +561,13 @@ def main() -> None:
     parser.add_argument("--no-fix", action="store_true", help="Không tự động cài đặt hay sửa lỗi")
     parser.add_argument("--no-browser", action="store_true", help="Không tự động mở trình duyệt")
     parser.add_argument("--dev", action="store_true", help="Khởi động song song Vite dev server và Backend trong cùng 1 CMD")
+    parser.add_argument("--build-web", action="store_true", help="Buộc build lại giao diện Web UI (web/dist)")
     parser.add_argument("--port", type=int, default=8899, help="Cổng chạy Backend API (mặc định 8899)")
+    parser.add_argument("--no-local-worker", action="store_true", help="Chỉ chạy coordinator, không đăng ký worker trên máy host")
 
     args = parser.parse_args()
 
-    ok = run_preflight_checks(root_dir=ROOT_DIR, auto_fix=not args.no_fix, port=args.port)
+    ok = run_preflight_checks(root_dir=ROOT_DIR, auto_fix=not args.no_fix, port=args.port, force_build_web=args.build_web)
     if not ok:
         print("\n[!] Hệ thống kiểm tra phát hiện lỗi chưa khắc phục được. Khởi động bị dừng.")
         sys.exit(1)
@@ -479,7 +578,8 @@ def main() -> None:
 
     print("\n[*] Đang khởi động Backend Server và Web Studio...")
     try:
-        launch_studio(dev_mode=args.dev, open_browser=not args.no_browser, port=args.port)
+        launch_studio(dev_mode=args.dev, open_browser=not args.no_browser, port=args.port,
+                      local_worker=not args.no_local_worker)
     except KeyboardInterrupt:
         print("\n\n[OK] Subtitle Localizer Studio đã dừng an toàn theo lệnh của bạn.")
         sys.exit(0)

@@ -98,13 +98,13 @@ class TranslationRuntimeTest(unittest.TestCase):
         self.assertTrue(ext.auto_fallback)
 
         trans = TranslationSettings()
-        self.assertEqual(trans.provider, "gemini")
+        self.assertEqual(trans.provider, "local")
         self.assertEqual(trans.gemini_model, "gemini-3.8-flash")
-        self.assertTrue(trans.auto_fallback)
+        self.assertFalse(trans.auto_fallback)
 
         global_s = GlobalPipelineSettings()
         self.assertEqual(global_s.ocr.mode, "api")
-        self.assertEqual(global_s.translation.provider, "gemini")
+        self.assertEqual(global_s.translation.provider, "local")
 
 
 if __name__ == "__main__":

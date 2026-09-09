@@ -1,6 +1,19 @@
 import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../types/api';
 
-const API_BASE = 'http://127.0.0.1:8899/api/v1';
+// Resolve the API from the page origin so a browser on another LAN machine
+// talks to the host that served the UI (localhost must only be the dev fallback).
+export function getApiBase(): string {
+  const configured = (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_API_BASE;
+  if (configured) return configured.replace(/\/$/, '');
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    const port = window.location.port === '5199' ? '8899' : window.location.port;
+    const origin = `${window.location.protocol}//${window.location.hostname}${port ? `:${port}` : ''}`;
+    return `${origin}/api/v1`;
+  }
+  return 'http://127.0.0.1:8899/api/v1';
+}
+
+const API_BASE = getApiBase();
 
 export class StudioApiClient {
   private token: string;
@@ -1527,19 +1540,23 @@ export interface ExtractionSettings {
   local_engine?: 'rapidocr' | 'whisper' | 'demux' | 'hybrid' | 'pure_ocr';
   api_provider?: 'gemini' | 'capcut' | 'groq';
   api_fusion_mode?: 'hybrid_ocr' | 'api_only';
+  /** @deprecated removed from production; ignored by backend */
+  groq_api_key?: string;
+  groq_model?: 'whisper-large-v3' | 'whisper-large-v3-turbo';
+  hybrid_whisper_model?: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
+  hybrid_confidence_threshold?: number;
+  hybrid_rescue_missing?: boolean;
   capcut_api_endpoint?: string;
   capcut_session_token?: string;
   capcut_mode?: 'cloud_api' | 'desktop_draft';
   capcut_draft_id?: string;
-  groq_api_key?: string;
-  groq_model?: 'whisper-large-v3' | 'whisper-large-v3-turbo';
   auto_fallback?: boolean;
   enable_early_exit?: boolean;
   edge_gating_threshold?: number;
-
-  hybrid_whisper_model?: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
-  hybrid_confidence_threshold?: number;
-  hybrid_rescue_missing?: boolean;
+  whisper_model?: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
+  whisper_device?: 'cuda' | 'cpu';
+  whisper_compute_type?: 'float16' | 'int8_float16' | 'int8';
+  whisper_vad_filter?: boolean;
 
   method?: ExtractionMethod;
 
@@ -1551,11 +1568,6 @@ export interface ExtractionSettings {
   enable_gap_rescue: boolean;
   enable_roi_tightening: boolean;
 
-  // 2. ASR (Faster-Whisper CUDA)
-  whisper_model?: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
-  whisper_device?: 'cuda' | 'cpu';
-  whisper_compute_type?: 'float16' | 'int8_float16' | 'int8';
-  whisper_vad_filter?: boolean;
 
   // 3. VLM Multimodal AI (Gemini Video)
   vlm_provider?: 'gemini' | 'qwen_vl_local';

@@ -6,11 +6,68 @@ without changing the HTTP contract.
 """
 from __future__ import annotations
 
-import threading
 import time
 import json
+import socket
+import threading
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional
+
+DISCOVERY_MAGIC = "subtitle-localizer-coordinator"
+DISCOVERY_VERSION = 1
+DISCOVERY_PORT = 45871
+
+
+class LanDiscoveryResponder:
+    """Responds to UDP discovery requests without exposing registration tokens."""
+    def __init__(self, http_url: str, *, port: int = DISCOVERY_PORT,
+                 fingerprint: str = "", bind: str = "0.0.0.0") -> None:
+        self.http_url = http_url.rstrip("/")
+        self.port = int(port)
+        self.fingerprint = fingerprint
+        self.bind = bind
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def handle_datagram(self, data: bytes, address: tuple[str, int], sock: Any) -> bool:
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if payload.get("magic") != DISCOVERY_MAGIC or payload.get("version") != DISCOVERY_VERSION or payload.get("type") != "discover":
+            return False
+        response = {"magic": DISCOVERY_MAGIC, "version": DISCOVERY_VERSION,
+                    "type": "coordinator", "url": self.http_url,
+                    "fingerprint": self.fingerprint}
+        sock.sendto(json.dumps(response).encode("utf-8"), address)
+        return True
+
+    def serve_forever(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((self.bind, self.port))
+        sock.settimeout(0.5)
+        try:
+            while not self._stop.is_set():
+                try:
+                    data, address = sock.recvfrom(4096)
+                    self.handle_datagram(data, address, sock)
+                except socket.timeout:
+                    continue
+        finally:
+            sock.close()
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self.serve_forever, name="lan-discovery", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
 
 
 @dataclass

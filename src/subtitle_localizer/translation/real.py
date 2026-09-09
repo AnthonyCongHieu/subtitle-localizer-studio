@@ -116,7 +116,10 @@ def _refine_subtitles(text: str, source_text: str) -> str:
 
 
 class RealTranslationProvider(TranslationProvider):
-    """Provider dịch thuật chất lượng cao hỗ trợ Ngữ cảnh Hội thoại, Từ điển Chuyên dụng và Gemini AI."""
+    """Local-model translation provider (Ollama/Qwen).
+
+    Network translation services are intentionally not part of this provider.
+    """
 
     def __init__(self) -> None:
         self.is_loaded = False
@@ -124,13 +127,13 @@ class RealTranslationProvider(TranslationProvider):
 
     def get_descriptor(self) -> ModelDescriptorV1:
         return ModelDescriptorV1(
-            id="google-translator-real",
-            source_url="https://pypi.org/project/deep-translator/",
-            version_or_commit="v1.9.1",
+            id="ollama-qwen-local",
+            source_url="https://ollama.com/library/qwen2.5",
+            version_or_commit="qwen2.5:7b-instruct",
             sha256="0" * 64,
             format="api",
             license="MIT",
-            languages=["zh", "ja", "ko", "en", "vi"],
+            languages=["zh", "en", "vi"],
             runtime="python",
         )
 
@@ -390,12 +393,23 @@ class RealTranslationProvider(TranslationProvider):
 
         from subtitle_localizer.service.pipeline_settings import get_global_pipeline_settings
         pipe_settings = get_global_pipeline_settings().translation
-        provider = getattr(pipe_settings, "provider", "gemini")
+        provider = getattr(pipe_settings, "provider", "local")
 
         translated_ok = False
-        auto_fallback = getattr(pipe_settings, "auto_fallback", True)
+        auto_fallback = getattr(pipe_settings, "auto_fallback", False)
 
         is_pytest = "PYTEST_CURRENT_TEST" in os.environ and "TEST_WITH_GEMINI" not in os.environ
+        # Production translation is local-model-only.  Legacy cloud settings
+        # remain readable for migration/tests but cannot change runtime policy.
+        test_cloud_opt_in = "PYTEST_CURRENT_TEST" in os.environ and "TEST_WITH_GEMINI" in os.environ
+        if not test_cloud_opt_in:
+            provider = "local"
+        else:
+            # Explicit test-only opt-in preserves legacy provider tests without
+            # making cloud translation reachable in normal application runs.
+            provider = "gemini"
+        if not test_cloud_opt_in:
+            auto_fallback = False
 
         # 1. Ưu tiên Mode Gemini AI (mặc định cho provider='gemini', 'auto', hoặc bất kỳ cấu hình mặc định nào)
         if not is_pytest and (provider in ("gemini", "auto") or not provider):
@@ -467,30 +481,5 @@ class RealTranslationProvider(TranslationProvider):
         ]
         if not untranslated:
             return cues
-
-        # Hỗ trợ mocking trong test suite (chỉ kích hoạt khi chạy pytest có mock)
-        if is_pytest:
-            import sys
-            dt_module = sys.modules.get("deep_translator")
-            is_mocked = False
-            gt_cls = None
-            if dt_module is not None:
-                gt_cls = getattr(dt_module, "GoogleTranslator", None)
-                if gt_cls is not None:
-                    from unittest.mock import Mock, MagicMock
-                    if isinstance(gt_cls, (Mock, MagicMock)) or getattr(gt_cls, "__module__", "") != "deep_translator.google":
-                        is_mocked = True
-
-            if is_mocked and gt_cls is not None:
-                src = "zh-CN" if source_lang == "zh" else source_lang
-                tgt = "vi" if target_lang == "vi" else target_lang
-                translator = gt_cls(source=src, target=tgt)
-                for cue in untranslated:
-                    try:
-                        translated = translator.translate(cue.source_text.strip())
-                        if translated and translated.strip():
-                            cue.translated_text = translated.strip()
-                    except Exception as error:
-                        raise RuntimeError(f"Translation failed: {error}") from error
 
         return cues

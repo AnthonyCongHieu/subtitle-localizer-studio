@@ -6,6 +6,7 @@ import re
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from importlib import metadata
 import unicodedata
@@ -196,7 +197,31 @@ class RapidOcrProvider(OcrProvider):
         self.execution_provider: Optional[str] = None
         self._dll_handles: List[Any] = []
         self._active_infer_count: int = 0
-        self.recognition_batch_size = max(1, min(32, int(recognition_batch_size)))
+        self._recognition_batch_size = 1
+        self.recognition_batch_size = recognition_batch_size
+        # Per-call counters used by the coordinator benchmark/quality gates.  Keep
+        # these lightweight and reset them at the beginning of ``recognize``.
+        self._metrics: dict[str, Any] = {}
+
+    @property
+    def recognition_batch_size(self) -> int:
+        return self._recognition_batch_size
+
+    @recognition_batch_size.setter
+    def recognition_batch_size(self, value: int) -> None:
+        """Clamp the batch size and apply it to an already-loaded RapidOCR engine."""
+        size = max(1, min(32, int(value)))
+        self._recognition_batch_size = size
+        engine = getattr(self, "engine", None)
+        recognizer = getattr(engine, "text_rec", None)
+        if recognizer is not None and hasattr(recognizer, "rec_batch_num"):
+            recognizer.rec_batch_num = size
+
+    @property
+    def metrics(self) -> dict[str, Any]:
+        """Return a snapshot of metrics for the most recent ``recognize`` call."""
+        with self._lock:
+            return dict(self._metrics)
 
     def get_descriptor(self) -> ModelDescriptorV1:
         return ModelDescriptorV1(
@@ -301,6 +326,7 @@ class RapidOcrProvider(OcrProvider):
         if x2 <= x1 or y2 <= y1:
             return text, score, box, False
         try:
+            self._metrics["reread_calls"] = self._metrics.get("reread_calls", 0) + 1
             reread, _ = eng(image[y1:y2, x1:x2], use_det=False, use_cls=False)
         except Exception:
             return text, score, box, False
@@ -419,6 +445,17 @@ class RapidOcrProvider(OcrProvider):
             self._active_infer_count += 1
 
         try:
+            started = time.perf_counter()
+            self._metrics = {
+                "crops_total": len(crops),
+                "duplicate_skips": 0,
+                "candidate_images": 0,
+                "inference_calls": 0,
+                "inference_errors": 0,
+                "reread_calls": 0,
+                "batch_size": self.recognition_batch_size,
+                "execution_provider": self.execution_provider,
+            }
             observations: List[OcrObservationV1] = []
             total_crops = len(crops)
             prev_img_data: Optional[np.ndarray] = None
@@ -463,6 +500,7 @@ class RapidOcrProvider(OcrProvider):
                                 model_metadata=dict(prev_observation.model_metadata),
                             )
                             observations.append(dup)
+                        self._metrics["duplicate_skips"] += 1
                         continue
 
                 prev_img_data = img_data
@@ -471,10 +509,13 @@ class RapidOcrProvider(OcrProvider):
                 candidate_texts: List[str] = []
                 inference_errors: List[str] = []
                 candidates = build_ocr_candidates(img_data, include_advanced=include_advanced)
+                self._metrics["candidate_images"] += len(candidates)
                 for candidate_index, candidate in enumerate(candidates):
                     try:
+                        self._metrics["inference_calls"] += 1
                         result, _ = engine(candidate)
                     except Exception as error:
+                        self._metrics["inference_errors"] += 1
                         inference_errors.append(str(error))
                         continue
                     if not result:
@@ -574,8 +615,10 @@ class RapidOcrProvider(OcrProvider):
                     progress_callback(total_crops, total_crops)
                 except Exception:
                     pass
-
+            self._metrics["elapsed_seconds"] = round(time.perf_counter() - started, 4)
             return observations
         finally:
+            if self._metrics and "elapsed_seconds" not in self._metrics:
+                self._metrics["elapsed_seconds"] = round(time.perf_counter() - started, 4)
             with self._lock:
                 self._active_infer_count = max(0, self._active_infer_count - 1)

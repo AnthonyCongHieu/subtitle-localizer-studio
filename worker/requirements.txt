@@ -1,0 +1,3 @@
+# Kept beside the portable worker launcher so the folder can be packaged alone.
+# The canonical dependency list remains ../requirements.txt.
+-r ../requirements.txt

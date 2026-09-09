@@ -55,6 +55,32 @@ def test_quality_mode_rejects_low_confidence_scene_text():
     assert recognize(CandidateEngine([[[BOX, "开A", .74]]] * 4)) == []
 
 
+def test_ocr_metrics_report_candidate_and_inference_work():
+    provider = RapidOcrProvider(recognition_batch_size=8)
+    provider.is_loaded = True
+    provider.engine = CandidateEngine([[[BOX, "好雨", .99]]] * 4)
+    result = provider.recognize(
+        [np.zeros((60, 140, 3), dtype=np.uint8)], [2.5], "zh"
+    )
+    assert result and result[0].raw_text == "好雨"
+    metrics = provider.metrics
+    assert metrics["crops_total"] == 1
+    assert metrics["candidate_images"] == 4
+    assert metrics["inference_calls"] == 4
+    assert metrics["batch_size"] == 8
+    assert metrics["elapsed_seconds"] >= 0
+
+
+def test_batch_size_is_bounded_and_applied_to_loaded_recognizer():
+    provider = RapidOcrProvider(recognition_batch_size=999)
+    assert provider.recognition_batch_size == 32
+    recognizer = type("Recognizer", (), {"rec_batch_num": 1})()
+    provider.engine = type("Engine", (), {"text_rec": recognizer})()
+    provider.recognition_batch_size = 0
+    assert provider.recognition_batch_size == 1
+    assert recognizer.rec_batch_num == 1
+
+
 def test_reread_preserves_verified_leading_character_despite_high_detector_score():
     result = recognize(CandidateEngine(
         [[[BOX, "般跑六天。", .999457]], [[BOX, "般跑六天。", .998967]],

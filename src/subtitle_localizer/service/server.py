@@ -14,9 +14,9 @@ from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, Web
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 try:
-    from pydantic import BaseModel, field_validator
+    from pydantic import BaseModel, Field, field_validator
 except ImportError:
-    from pydantic import BaseModel, validator as field_validator
+    from pydantic import BaseModel, Field, validator as field_validator
 
 from subtitle_localizer.service.pipeline_settings import (
     GlobalPipelineSettings,
@@ -45,10 +45,12 @@ class CreateProjectRequest(BaseModel):
     source_video_path: str
     source_language: str = "zh"
     target_language: str = "vi"
+    media_items: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class BatchCreateProjectsRequest(BaseModel):
-    items: List[CreateProjectRequest]
+    items: List[CreateProjectRequest] = Field(default_factory=list)
+    folder_groups: List[Dict[str, Any]] = Field(default_factory=list)
     regions: Optional[List[Dict[str, Any]]] = None
 
 
@@ -87,14 +89,6 @@ class GeminiPoolRequest(BaseModel):
 
 
 class GeminiVerifyRequest(BaseModel):
-    index: Optional[int] = None
-
-
-class GroqPoolRequest(BaseModel):
-    keys: List[str] = []
-
-
-class GroqVerifyRequest(BaseModel):
     index: Optional[int] = None
 
 
@@ -413,11 +407,11 @@ class TestTranslationRequest(BaseModel):
     text: str
     source_lang: str = "zh"
     target_lang: str = "vi"
-    provider: str = "gemini"
+    provider: str = "local"
     gemini_model: str = "gemini-2.5-flash"
     local_model: str = "qwen2.5:7b-instruct"
     local_endpoint: str = "http://localhost:11434"
-    auto_fallback: bool = True
+    auto_fallback: bool = False
     prompt_tone: str = "dramatic"
     use_glossary: bool = True
 
@@ -716,14 +710,19 @@ def create_app(
     @app.post("/api/v1/projects")
     async def create_project(req: CreateProjectRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
+        media_items = [dict(item) for item in req.media_items if item.get("source_video_path")]
+        if not media_items:
+            media_items = [{"source_video_path": req.source_video_path}]
+        primary_path = str(media_items[0]["source_video_path"])
         manifest = ProjectManifestV1(
             project_id=f"proj-{uuid.uuid4().hex[:8]}",
             title=req.title,
-            source_video_path=req.source_video_path,
+            source_video_path=primary_path,
             video_fingerprint="fp_" + uuid.uuid4().hex[:12],
             source_language=req.source_language,
             target_language=req.target_language,
             active_revision=1,
+            media_items=media_items,
         )
         video_path = Path(manifest.source_video_path)
         if video_path.exists() and video_path.is_file():
@@ -738,15 +737,30 @@ def create_app(
     async def batch_create_projects(req: BatchCreateProjectsRequest, authorization: Optional[str] = Header(None)) -> List[Dict[str, Any]]:
         verify_auth(authorization)
         created_projects = []
-        for item in req.items:
+        items = list(req.items)
+        for group in req.folder_groups:
+            videos = [str(path) for path in group.get("videos", []) if path]
+            if videos:
+                items.append(CreateProjectRequest(
+                    title=str(group.get("title") or Path(videos[0]).parent.name or "Project"),
+                    source_video_path=videos[0],
+                    source_language=str(group.get("source_language", "zh")),
+                    target_language=str(group.get("target_language", "vi")),
+                    media_items=[{"source_video_path": path} for path in videos],
+                ))
+        for item in items:
+            media_items = [dict(media) for media in item.media_items if media.get("source_video_path")]
+            if not media_items:
+                media_items = [{"source_video_path": item.source_video_path}]
             manifest = ProjectManifestV1(
                 project_id=f"proj-{uuid.uuid4().hex[:8]}",
                 title=item.title,
-                source_video_path=item.source_video_path,
+                source_video_path=str(media_items[0]["source_video_path"]),
                 video_fingerprint="fp_" + uuid.uuid4().hex[:12],
                 source_language=item.source_language,
                 target_language=item.target_language,
                 active_revision=1,
+                media_items=media_items,
             )
             if req.regions:
                 manifest.regions = [
@@ -1679,7 +1693,7 @@ def create_app(
             pass
 
         from subtitle_localizer.dubbing.tts import generate_timed_voiceover
-        await generate_timed_voiceover(
+        generated_voiceover = await generate_timed_voiceover(
             cues=cues,
             voice=voice,
             output_path=out_voiceover,
@@ -1692,6 +1706,25 @@ def create_app(
             prompt_style=prompt_style,
             export_cues_dir=cues_dir,
         )
+
+        if (not out_voiceover.exists() or out_voiceover.stat().st_size == 0) and generated_voiceover:
+            candidate = Path(generated_voiceover)
+            if candidate.exists() and candidate.stat().st_size > 0 and candidate != out_voiceover:
+                import shutil
+                shutil.copyfile(candidate, out_voiceover)
+
+        if not out_voiceover.exists() or out_voiceover.stat().st_size == 0:
+            repository.save_stage_run(
+                project_id,
+                StageRunV1(
+                    stage_name="dubbing",
+                    status="failed",
+                    progress=0.0,
+                    errors=["Không tạo được audio TTS; kiểm tra provider/Internet/voice."],
+                    end_time=time.time(),
+                ),
+            )
+            raise HTTPException(status_code=502, detail="TTS không tạo được file audio; dự án chưa hoàn tất")
 
         # Lấy manifest mới nhất từ repository để tránh ghi đè mất ROI và settings vừa được cập nhật
         current_manifest = repository.get_project(project_id) or manifest
@@ -2245,59 +2278,6 @@ def create_app(
         pool.save_to_file("gemini_keys_pool.json")
         return {"status": "success", "pool_status": pool.get_status()}
 
-    @app.get("/api/v1/settings/groq-pool")
-    async def get_groq_pool_status_endpoint(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-        """Lấy thông tin trạng thái xoay tua của Groq Key Pool (số lượng, active, cooldown, latency)."""
-        verify_auth(authorization)
-        from subtitle_localizer.cloud.groq_pool import get_global_groq_pool
-        pool = get_global_groq_pool()
-        return pool.get_status()
-
-    @app.post("/api/v1/settings/groq-pool")
-    async def update_groq_pool_endpoint(
-        req: GroqPoolRequest,
-        authorization: Optional[str] = Header(None),
-    ) -> Dict[str, Any]:
-        """Cập nhật và lưu danh sách Groq API Keys vào Pool xoay tua."""
-        verify_auth(authorization)
-        from subtitle_localizer.cloud.groq_pool import get_global_groq_pool, DEFAULT_GROQ_KEY_POOL_FILE
-        pool = get_global_groq_pool()
-        pool.load_keys(req.keys)
-        pool.save_to_file(DEFAULT_GROQ_KEY_POOL_FILE)
-        return {"status": "success", "pool_status": pool.get_status()}
-
-    @app.post("/api/v1/settings/groq-pool/verify")
-    async def verify_groq_pool_endpoint(
-        req: Optional[GroqVerifyRequest] = None,
-        authorization: Optional[str] = Header(None),
-    ) -> Dict[str, Any]:
-        """Kiểm tra thực tế trạng thái hoạt động của toàn bộ keys hoặc 1 key chỉ định."""
-        verify_auth(authorization)
-        from subtitle_localizer.cloud.groq_pool import get_global_groq_pool
-        pool = get_global_groq_pool()
-        if req and req.index is not None:
-            res = pool.verify_key_by_index(req.index)
-            if res is None:
-                raise HTTPException(status_code=404, detail="Key index not found")
-            return {"status": "success", "result": res, "pool_status": pool.get_status()}
-        pool.verify_all_keys()
-        return {"status": "success", "pool_status": pool.get_status()}
-
-    @app.delete("/api/v1/settings/groq-pool/key/{index}")
-    async def delete_groq_key_endpoint(
-        index: int,
-        authorization: Optional[str] = Header(None),
-    ) -> Dict[str, Any]:
-        """Xóa một key khỏi Groq Pool theo số thứ tự (index)."""
-        verify_auth(authorization)
-        from subtitle_localizer.cloud.groq_pool import get_global_groq_pool, DEFAULT_GROQ_KEY_POOL_FILE
-        pool = get_global_groq_pool()
-        ok = pool.delete_key(index)
-        if not ok:
-            raise HTTPException(status_code=404, detail="Key index not found")
-        pool.save_to_file(DEFAULT_GROQ_KEY_POOL_FILE)
-        return {"status": "success", "pool_status": pool.get_status()}
-
     @app.get("/api/v1/settings/pipeline")
     async def get_pipeline_settings_endpoint(
         authorization: Optional[str] = Header(None),
@@ -2357,57 +2337,6 @@ def create_app(
             endpoint = raw_ep
         client = CapCutSubtitleClient(endpoint=endpoint)
         return client.test_connection()
-
-    @app.post("/api/v1/settings/groq-check")
-    async def test_groq_endpoint(
-        body: Optional[Dict[str, Any]] = None,
-        authorization: Optional[str] = Header(None),
-    ) -> Dict[str, Any]:
-        """Kiểm tra API Key và độ trễ tới Groq Cloud ASR."""
-        verify_auth(authorization)
-        import time
-        import requests
-        api_key = (body or {}).get("api_key") or os.environ.get("GROQ_API_KEY", "")
-        if not api_key:
-            return {
-                "ok": False,
-                "latency_ms": 0,
-                "message": "Chưa nhập Groq API Key",
-            }
-        t0 = time.time()
-        try:
-            resp = requests.get(
-                "https://api.groq.com/openai/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=10,
-            )
-            latency_ms = int((time.time() - t0) * 1000)
-            if resp.status_code == 200:
-                return {
-                    "ok": True,
-                    "latency_ms": latency_ms,
-                    "message": "Kết nối Groq Cloud LPU thành công!",
-                    "models_count": len(resp.json().get("data", [])),
-                }
-            elif resp.status_code == 401:
-                return {
-                    "ok": False,
-                    "latency_ms": latency_ms,
-                    "message": "Groq API Key không chính xác hoặc đã hết hạn (HTTP 401)",
-                }
-            else:
-                return {
-                    "ok": False,
-                    "latency_ms": latency_ms,
-                    "message": f"Máy chủ Groq trả về HTTP {resp.status_code}: {resp.text[:100]}",
-                }
-        except Exception as ex:
-            latency_ms = int((time.time() - t0) * 1000)
-            return {
-                "ok": False,
-                "latency_ms": latency_ms,
-                "message": f"Không thể kết nối Groq: {ex}",
-            }
 
     @app.post("/api/v1/settings/local-llm-check")
     async def test_local_llm_endpoint(
@@ -2481,6 +2410,7 @@ def create_app(
         verify_auth(authorization)
         import subprocess
         import shutil
+        import sys
         import urllib.request
         import time
 
@@ -2541,7 +2471,10 @@ def create_app(
             return {"original": "", "translated": "", "provider_used": "none", "latency_ms": 0}
 
         translated = ""
-        provider_used = req.provider
+        # The production endpoint is deliberately local-only.  Ignore legacy
+        # provider values sent by older clients rather than silently routing
+        # text to Gemini/Google.
+        provider_used = "local"
 
         tone_desc = {
             "dramatic": "kịch tính, hấp dẫn, chuẩn phim truyền hình",
@@ -2621,38 +2554,19 @@ def create_app(
                     logger.warning(f"Test Local Qwen translation failed: {e_local} | {e_native}")
             return ""
 
-        auto_fb = getattr(req, "auto_fallback", True)
+        auto_fb = False  # production policy: local model only
 
-        if req.provider == "gemini":
-            translated = _try_gemini()
-            if not translated and auto_fb:
-                translated = _try_local()
-                if translated:
-                    provider_used = "local_qwen (Tự động chuyển từ Gemini)"
-        elif req.provider in ("local", "local_model", "auto"):
-            translated = _try_local()
-            if not translated and auto_fb:
-                translated = _try_gemini()
-                if translated:
-                    provider_used = "gemini (Tự động cứu hộ do Local LLM chưa bật)"
+        translated = _try_local()
 
-        # Fallback hoặc Google Web nếu Gemini/Local không có kết quả
+        # Never fall back to Google Translate (or any other network provider).
+        # An unavailable local model is reported explicitly so operators can
+        # start Ollama/install the requested model instead of getting a silent
+        # change in translation quality or data residency.
         if not translated:
-            try:
-                from deep_translator import GoogleTranslator
-                src = "zh-CN" if req.source_lang == "zh" else req.source_lang
-                tgt = "vi" if req.target_lang == "vi" else req.target_lang
-                translated = GoogleTranslator(source=src, target=tgt).translate(text)
-                provider_used = f"google_web (fallback from {req.provider})" if req.provider in ("gemini", "local", "local_model") else "google_web"
-            except Exception as e:
-                if req.provider in ("local", "local_model"):
-                    endpoint = (req.local_endpoint or "http://localhost:11434").rstrip("/")
-                    model = req.local_model or "qwen2.5:7b-instruct"
-                    translated = f"[Lưu ý: Chưa khởi động Local LLM tại {endpoint}. Hãy mở PowerShell chạy 'ollama run {model}', hoặc chuyển sang Mode API để dịch ngay bằng Gemini]"
-                elif req.provider == "gemini":
-                    translated = f"[Lưu ý: Gemini API tạm thời không phản hồi. Hãy bấm 'Kiểm Tra Tất Cả Keys' hoặc kiểm tra kết nối mạng]"
-                else:
-                    translated = f"[Lỗi dịch: {e}]"
+            endpoint = (req.local_endpoint or "http://localhost:11434").rstrip("/")
+            model = req.local_model or "qwen2.5:7b-instruct"
+            translated = f"[Local LLM unavailable at {endpoint}; start Ollama and install {model}]"
+            provider_used = "local_unavailable"
 
         if req.use_glossary and not translated.startswith("["):
             translated = _refine_subtitles(translated, text)

@@ -1,6 +1,7 @@
 """Subtitle Localizer Studio - Backend Server Launcher."""
 import os
 import sys
+import socket
 from pathlib import Path
 
 # Fix Windows console encoding cho tiếng Việt
@@ -35,6 +36,7 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 import uvicorn
 from subtitle_localizer.service.server import create_app
+from subtitle_localizer.service.lan import LanDiscoveryResponder
 
 app = create_app()
 
@@ -42,4 +44,13 @@ if __name__ == "__main__":
     print("=" * 60)
     print("  Subtitle Localizer Studio Backend Server (127.0.0.1:8899)")
     print("=" * 60)
+    # Advertise this coordinator to workers on the local subnet.  Discovery
+    # carries endpoint metadata only; authentication remains HTTP bearer auth.
+    try:
+        lan_host = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        lan_host = "127.0.0.1"
+    discovery = LanDiscoveryResponder(f"http://{lan_host}:8899")
+    discovery.start()
+    print("  LAN coordinator: UDP discovery port 45871")
     uvicorn.run(app, host="0.0.0.0", port=8899, log_level="info")

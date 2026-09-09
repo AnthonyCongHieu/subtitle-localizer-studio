@@ -10,7 +10,6 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from subtitle_localizer.cloud.capcut_bridge import CapCutBridgeExtractor
 from subtitle_localizer.cloud.gemini_vlm import GeminiVideoVlmExtractor
-from subtitle_localizer.cloud.groq_whisper import GroqWhisperExtractor
 from subtitle_localizer.domain.models import ProjectManifestV1, SubtitleCueV1
 from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
@@ -122,46 +121,6 @@ class CloudProvidersTest(unittest.TestCase):
         parsed = extractor.parse_draft_json(Path("non_existent_draft_999.json"))
         self.assertEqual(parsed, [])
 
-    # ================= 3. GROQ WHISPER TESTS =================
-    def test_groq_missing_key_raises_value_error(self) -> None:
-        extractor = GroqWhisperExtractor(api_key="")
-        fake_video = Path(self.temp_dir.name) / "fake.mp4"
-        fake_video.write_bytes(b"dummy")
-        with patch.dict("os.environ", {}, clear=True):
-            with self.assertRaises(ValueError):
-                extractor.extract_cues(fake_video)
-
-    @patch("requests.post")
-    def test_groq_extract_cues_success(self, mock_post: MagicMock) -> None:
-        extractor = GroqWhisperExtractor(api_key="gsk_test_key")
-        fake_video = Path(self.temp_dir.name) / "fake.mp4"
-        fake_video.write_bytes(b"dummy")
-
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "segments": [
-                {"start": 0.5, "end": 2.8, "text": "Chào mừng các bạn đến với studio"},
-                {"start": 3.2, "end": 5.5, "text": "Hôm nay chúng ta sẽ bắt đầu"},
-            ]
-        }
-        mock_post.return_value = mock_resp
-
-        # Mock audio extraction to avoid running actual ffmpeg on dummy video
-        with patch.object(extractor, "_extract_audio") as mock_extract:
-            def create_fake_mp3(vpath, outpath):
-                outpath.write_bytes(b"fake_mp3_data")
-            mock_extract.side_effect = create_fake_mp3
-
-            cues = extractor.extract_cues(fake_video, source_lang="vi")
-
-            self.assertEqual(len(cues), 2)
-            self.assertEqual(cues[0].start_pts, 0.5)
-            self.assertEqual(cues[0].end_pts, 2.8)
-            self.assertEqual(cues[0].source_text, "Chào mừng các bạn đến với studio")
-            self.assertIn("groq_whisper_extracted", cues[0].quality_flags)
-
     # ================= 4. WORKER CLOUD INTEGRATION TESTS =================
     def test_worker_dispatches_gemini_in_mode_api(self) -> None:
         video_path = Path(self.temp_dir.name) / "worker_video.mp4"
@@ -205,47 +164,6 @@ class CloudProvidersTest(unittest.TestCase):
             # Check language auto-detection
             updated_manifest = self.repo.get_project("test_cloud_gemini")
             self.assertEqual(updated_manifest.source_language, "zh")
-
-    def test_worker_dispatches_groq_in_mode_api(self) -> None:
-        video_path = Path(self.temp_dir.name) / "worker_groq_video.mp4"
-        video_path.write_bytes(b"dummy_video_bytes")
-
-        manifest = ProjectManifestV1(
-            project_id="test_cloud_groq",
-            title="Groq Test Project",
-            source_video_path=str(video_path),
-            video_fingerprint="fp_groq",
-            source_language="auto",
-            target_language="none",
-        )
-        self.repo.save_project(manifest)
-
-        mock_cues = [
-            SubtitleCueV1(
-                cue_id="groq_cue_1",
-                start_pts=2.0,
-                end_pts=4.5,
-                source_text="Xin chào các bạn đã quay trở lại",
-                quality_flags=["groq_whisper_extracted"],
-            )
-        ]
-
-        settings = GlobalPipelineSettings(
-            ocr=OcrSettings(mode="api", api_provider="groq", groq_api_key="gsk_test")
-        )
-        set_global_pipeline_settings(settings)
-
-        worker = BackgroundWorker(self.repo)
-        with patch("subtitle_localizer.cloud.groq_whisper.GroqWhisperExtractor.extract_cues", return_value=mock_cues):
-            success = worker.run_pipeline_synchronous("test_cloud_groq")
-            self.assertTrue(success)
-
-            saved_cues = self.repo.get_cues("test_cloud_groq")
-            self.assertEqual(len(saved_cues), 1)
-            self.assertEqual(saved_cues[0].source_text, "Xin chào các bạn đã quay trở lại")
-
-            updated_manifest = self.repo.get_project("test_cloud_groq")
-            self.assertEqual(updated_manifest.source_language, "vi")
 
 
 if __name__ == "__main__":

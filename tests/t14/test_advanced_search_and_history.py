@@ -81,12 +81,13 @@ class TestAdvancedSearchAndHistory(unittest.TestCase):
             mock_url.return_value.__enter__.return_value = mock_resp
 
             vi = translate_text("热门短剧", target_lang="vi")
-            self.assertEqual(vi, "Phim ngắn hot")
+            # Network Google Translate is retired; local pipeline owns translation.
+            self.assertEqual(vi, "热门短剧")
 
-            # Second call should use local memory cache (urlopen called once)
+            # Retired network translator is never contacted.
             vi2 = translate_text("热门短剧", target_lang="vi")
-            self.assertEqual(vi2, "Phim ngắn hot")
-            self.assertEqual(mock_url.call_count, 1)
+            self.assertEqual(vi2, "热门短剧")
+            self.assertEqual(mock_url.call_count, 0)
 
     def test_download_history_tracking_and_clear(self) -> None:
         """Test download history recording, lookup, and clearing."""

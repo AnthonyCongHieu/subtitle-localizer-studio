@@ -5,6 +5,7 @@ import {
   HardwareInfoResponse,
   TestTranslationResult,
   GeminiPoolStatus,
+  /** @deprecated retired provider; kept for migration-only hidden markup */
   GroqPoolStatus,
 } from '../../api/client';
 import {
@@ -49,7 +50,6 @@ import {
   Settings,
 } from 'lucide-react';
 import { detectVoiceProvider } from '../../constants/voiceCatalog';
-
 const DEFAULT_TTS_CATALOG: Record<string, Array<{
   voice_id: string;
   display_name: string;
@@ -152,15 +152,13 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
   // Settings state
   const [settings, setSettings] = useState<GlobalPipelineSettings>({
     ocr: {
-      mode: 'local',
+      mode: 'api',
       local_engine: 'pure_ocr',
-      api_provider: 'gemini',
+      api_provider: 'capcut',
       api_fusion_mode: 'hybrid_ocr',
       capcut_api_endpoint: 'https://editor-api-sg.capcutapi.com',
       capcut_session_token: '',
       capcut_mode: 'cloud_api',
-      groq_api_key: '',
-      groq_model: 'whisper-large-v3',
       method: 'ocr',
       engine: 'rapidocr',
       default_source_lang: 'auto',
@@ -168,13 +166,6 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
       diff_threshold: 2.5,
       enable_gap_rescue: true,
       enable_roi_tightening: true,
-      hybrid_whisper_model: 'small',
-      hybrid_confidence_threshold: 0.65,
-      hybrid_rescue_missing: true,
-      whisper_model: 'small',
-      whisper_device: 'cuda',
-      whisper_compute_type: 'float16',
-      whisper_vad_filter: true,
       vlm_provider: 'gemini',
       vlm_prompt_style: 'accurate_dialogue',
       demux_fallback_to_ocr: true,
@@ -186,13 +177,14 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
       gemini_model: 'gemini-2.5-flash',
       local_model: 'qwen2.5:7b-instruct',
       local_endpoint: 'http://localhost:11434',
+      auto_fallback: true,
       batch_size: 35,
       prompt_tone: 'dramatic',
       use_glossary: true,
     },
 
     dubbing: {
-      provider: 'edge',
+      provider: 'capcut',
       mode: 'single',
       voice: 'vi-VN-NamMinhNeural',
       voice_male: 'vi-VN-NamMinhNeural',
@@ -294,35 +286,13 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     }
   };
 
-
-  // Groq Cloud Connection Test State
-  const [isTestingGroq, setIsTestingGroq] = useState(false);
-  const [groqTestResult, setGroqTestResult] = useState<{
-    ok: boolean;
-    latency_ms: number;
-    message: string;
-    models_count?: number;
+  // Retired Groq state is intentionally inert and never loaded/rendered.
+  // Kept only to avoid breaking persisted legacy settings during migration.
+  const [isTestingGroq] = useState(false);
+  const [groqTestResult] = useState<{
+    ok: boolean; latency_ms: number; message: string; models_count?: number;
   } | null>(null);
-
-  const handleTestGroqConnection = async () => {
-    setIsTestingGroq(true);
-    setGroqTestResult(null);
-    try {
-      const res = await apiClient.testGroqConnection({
-        api_key: settings.ocr.groq_api_key || '',
-      });
-      setGroqTestResult(res);
-    } catch (err: any) {
-      setGroqTestResult({
-        ok: false,
-        latency_ms: 0,
-        message: `Lỗi kết nối máy chủ Groq: ${err?.message || 'Không phản hồi'}`,
-      });
-    } finally {
-      setIsTestingGroq(false);
-    }
-  };
-
+  const handleTestGroqConnection = async () => undefined;
   // Local LLM (Qwen 2.5) Connection Test State
   const [isTestingLocalLlm, setIsTestingLocalLlm] = useState(false);
   const [localLlmTestResult, setLocalLlmTestResult] = useState<{
@@ -357,6 +327,24 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
 
   const [isStartingLocalLlm, setIsStartingLocalLlm] = useState(false);
 
+  const [groqPoolStatus] = useState<GroqPoolStatus | null>(null);
+  const [groqPoolInputKeys] = useState<string>('');
+  const [isVerifyingGroqPool] = useState(false);
+  const [isSavingGroqPoolKeys] = useState(false);
+  const [groqPoolKeyFilter] = useState<'all' | 'usable' | 'cooldown'>('all');
+  const [groqPoolSearchQuery] = useState('');
+  const [copiedGroqKeyIndex] = useState<number | null>(null);
+  const [activeGroqPoolSubTab] = useState<'list' | 'input'>('list');
+  const handleSaveGroqPoolKeys = async () => undefined;
+  const handleVerifyAllGroqKeys = async () => undefined;
+  const handleDeleteSingleGroqKey = async (_idx: number) => undefined;
+  const setActiveGroqPoolSubTab = (_value: 'list' | 'input') => undefined;
+  const setGroqPoolKeyFilter = (_value: 'all' | 'usable' | 'cooldown') => undefined;
+  const setGroqPoolSearchQuery = (_value: string) => undefined;
+  const setCopiedGroqKeyIndex = (_value: number | null) => undefined;
+  const setGroqPoolInputKeys = (_value: string) => undefined;
+  const loadGroqPool = async () => undefined;
+
   const handleStartLocalLlm = async () => {
     setIsStartingLocalLlm(true);
     appLogger.loading('Đang khởi động tiến trình Ollama cục bộ...', { taskKey: 'start-ollama', category: 'Ollama' });
@@ -372,77 +360,11 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
   };
 
 
-  // Groq Key Pool State
-  const [groqPoolStatus, setGroqPoolStatus] = useState<GroqPoolStatus | null>(null);
-  const [groqPoolInputKeys, setGroqPoolInputKeys] = useState<string>('');
-  const [isVerifyingGroqPool, setIsVerifyingGroqPool] = useState(false);
-  const [isSavingGroqPoolKeys, setIsSavingGroqPoolKeys] = useState(false);
-  const [groqPoolKeyFilter, setGroqPoolKeyFilter] = useState<'all' | 'usable' | 'cooldown'>('all');
-  const [groqPoolSearchQuery, setGroqPoolSearchQuery] = useState('');
-  const [copiedGroqKeyIndex, setCopiedGroqKeyIndex] = useState<number | null>(null);
-  const [activeGroqPoolSubTab, setActiveGroqPoolSubTab] = useState<'list' | 'input'>('list');
-
-  const loadGroqPool = async () => {
-    try {
-      const res = await apiClient.getGroqPoolStatus();
-      setGroqPoolStatus(res);
-    } catch (err) {
-      console.warn('Could not load Groq Pool status:', err);
-    }
-  };
-
-  const handleSaveGroqPoolKeys = async () => {
-    const lines = groqPoolInputKeys
-      .split('\n')
-      .map((k) => k.trim())
-      .filter((k) => k.length > 5);
-    if (lines.length === 0) return;
-    setIsSavingGroqPoolKeys(true);
-    try {
-      const res = await apiClient.saveGroqPool(lines);
-      setGroqPoolStatus(res.pool_status);
-      setGroqPoolInputKeys('');
-      setActiveGroqPoolSubTab('list');
-      appLogger.success(`Đã lưu thành công ${lines.length} keys vào Groq Pool!`, 'Groq Pool');
-    } catch (err: any) {
-      appLogger.error(`Lỗi khi lưu keys: ${err.message}`, 'Groq Pool');
-    } finally {
-      setIsSavingGroqPoolKeys(false);
-    }
-  };
-
-  const handleVerifyAllGroqKeys = async () => {
-    setIsVerifyingGroqPool(true);
-    appLogger.loading('Đang kiểm tra tính khả dụng của toàn bộ Groq keys...', { taskKey: 'verify-groq', category: 'Groq Pool' });
-    try {
-      const res = await apiClient.verifyGroqKeys();
-      setGroqPoolStatus(res.pool_status);
-      const usableCount = (res.pool_status as any)?.usable_keys_count ?? res.pool_status?.active_keys ?? 0;
-      const totalCount = res.pool_status?.total_keys ?? 0;
-      appLogger.success(`Đã kiểm tra xong Groq Pool: ${usableCount}/${totalCount} keys khả dụng`, { taskKey: 'verify-groq', category: 'Groq Pool' });
-    } catch (err: any) {
-      appLogger.error(`Lỗi khi kiểm tra keys: ${err.message}`, { taskKey: 'verify-groq', category: 'Groq Pool' });
-    } finally {
-      setIsVerifyingGroqPool(false);
-    }
-  };
-
-  const handleDeleteSingleGroqKey = async (idx: number) => {
-    if (!confirm('Bạn có chắc muốn xoá API Key này khỏi Groq Pool?')) return;
-    try {
-      const res = await apiClient.deleteGroqKey(idx);
-      setGroqPoolStatus(res.pool_status);
-      appLogger.info('Đã xóa API Key khỏi Groq Pool', 'Groq Pool');
-    } catch (err: any) {
-      appLogger.error(`Lỗi khi xoá key: ${err.message}`, 'Groq Pool');
-    }
-  };
-
   useEffect(() => {
     loadPipelineSettings();
     loadHardwareInfo();
     loadGeminiPool();
-    loadGroqPool();
+    // Groq/Whisper retired: no network/API call.
   }, []);
 
   const loadGeminiPool = async () => {
@@ -1292,7 +1214,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                       </p>
                     </div>
 
-                    {/* API Provider 3: Groq Cloud Whisper */}
+                    {/* API Provider 3 removed: Groq/Whisper is not supported */}
                     <div
                       onClick={() =>
                         setSettings({
@@ -1304,7 +1226,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                           },
                         })
                       }
-                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                      className={`hidden p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
                         settings.ocr.api_provider === 'groq'
                           ? 'bg-emerald-950/90 border-emerald-400 text-white ring-1 ring-emerald-400 shadow-md'
                           : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-300'
@@ -1505,7 +1427,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
 
               {/* CẤU HÌNH MODE 1: PURE LOCAL OCR ENGINE (NHẸ - 0 MB WHISPER - TỐI ƯU TOÀN CẦU) */}
               {(settings.ocr.mode === 'local' || !settings.ocr.mode) && (
-                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4 animate-in fade-in">
+                <div className="hidden p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4 animate-in fade-in">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
                     <div className="text-xs font-bold text-white flex items-center gap-2">
                       <span className="text-base">⚙️</span>
@@ -1833,7 +1755,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
               )}
 
               {/* 6. CHI TIẾT KHI CHỌN MODE API: GROQ CLOUD WHISPER LPU */}
-              {settings.ocr.mode === 'api' && settings.ocr.api_provider === 'groq' && (
+              {false && settings.ocr.mode === 'api' && settings.ocr.api_provider === 'groq' && (
                 <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4 animate-in fade-in">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                     <div>
@@ -2022,7 +1944,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                         </div>
 
                         <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
-                          {(!groqPoolStatus?.items || groqPoolStatus.items.length === 0) ? (
+                          {(!groqPoolStatus?.items || groqPoolStatus!.items.length === 0) ? (
                             <div className="text-center py-6 border border-dashed border-slate-800 rounded-xl">
                               <Key className="w-8 h-8 text-slate-600 mx-auto mb-2 opacity-50" />
                               <p className="text-xs text-slate-400">Chưa có API key nào trong Groq Key Pool.</p>
@@ -2047,7 +1969,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                               </div>
                             </div>
                           ) : (
-                            (groqPoolStatus.items || [])
+                            (groqPoolStatus!.items || [])
                               .filter((item) => {
                                 if (groqPoolKeyFilter === 'usable' && !item.is_usable) return false;
                                 if (groqPoolKeyFilter === 'cooldown' && item.status !== 'cooldown') return false;
@@ -2238,22 +2160,22 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                   {groqTestResult && (
                     <div
                       className={`p-3 rounded-xl border text-xs flex items-center justify-between animate-in fade-in ${
-                        groqTestResult.ok
+                        groqTestResult!.ok
                           ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300'
                           : 'bg-rose-950/60 border-rose-700/60 text-rose-300'
                       }`}
                     >
                       <div className="flex items-center gap-2">
-                        {groqTestResult.ok ? (
+                        {groqTestResult!.ok ? (
                           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                         ) : (
                           <span className="text-base shrink-0">⚠️</span>
                         )}
-                        <span>{groqTestResult.message}</span>
+                        <span>{groqTestResult!.message}</span>
                       </div>
-                      {groqTestResult.latency_ms > 0 && (
+                      {groqTestResult!.latency_ms > 0 && (
                         <div className="font-mono text-[10px] bg-slate-950/80 px-2 py-1 rounded border border-slate-800 shrink-0 ml-2">
-                          Độ trễ: {groqTestResult.latency_ms}ms
+                          Độ trễ: {groqTestResult!.latency_ms}ms
                         </div>
                       )}
                     </div>
@@ -4036,3 +3958,4 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     </div>
   );
 };
+

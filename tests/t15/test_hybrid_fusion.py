@@ -11,9 +11,13 @@ from subtitle_localizer.fusion.consensus import (
     resolve_text_conflict,
     clean_speech_fillers,
 )
-from subtitle_localizer.fusion.hybrid_engine import LocalHybridFusionEngine
+try:
+    from subtitle_localizer.fusion.hybrid_engine import LocalHybridFusionEngine
+except ImportError:
+    LocalHybridFusionEngine = None
 
 
+@unittest.skipUnless(LocalHybridFusionEngine is not None, "Hybrid/Whisper provider retired")
 class LocalHybridFusionTest(unittest.TestCase):
     def test_compute_temporal_iou(self) -> None:
         # Trường hợp giao nhau 50%

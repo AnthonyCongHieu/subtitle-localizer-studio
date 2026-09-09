@@ -4201,7 +4201,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                                     <>
                                       <option value="capcut">CapCut ASR (ByteDance)</option>
                                       <option value="gemini">Google Gemini VLM</option>
-                                      <option value="groq">Groq Whisper LPU</option>
                                     </>
                                   ) : (
                                     <>

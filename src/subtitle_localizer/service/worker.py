@@ -178,17 +178,6 @@ class BackgroundWorker:
                             source_lang=manifest.source_language,
                             progress_callback=_on_cloud_progress,
                         )
-                    elif provider == "groq":
-                        from subtitle_localizer.cloud.groq_whisper import GroqWhisperExtractor
-                        extractor = GroqWhisperExtractor(
-                            api_key=getattr(pipeline_settings.ocr, "groq_api_key", ""),
-                            model=getattr(pipeline_settings.ocr, "groq_model", "whisper-large-v3"),
-                        )
-                        cloud_cues = extractor.extract_cues(
-                            video_path=video_path,
-                            source_lang=manifest.source_language,
-                            progress_callback=_on_cloud_progress,
-                        )
                     else:
                         raise ValueError(f"Nhà cung cấp Cloud API không được hỗ trợ: {provider}")
 
@@ -532,68 +521,8 @@ class BackgroundWorker:
                 if self.is_cancelled(project_id):
                     raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")
 
-                # Stage 3.8: Hybrid Fusion Pass (Dung hợp Cloud ASR hoặc Whisper với Thị giác Local OCR)
-                local_engine = getattr(pipeline_settings.ocr, "local_engine", "pure_ocr")
-                if cloud_cues and video_path.exists():
-                    stage_cloud_fusion = StageRunV1(
-                        stage_name="hybrid_fusion",
-                        status="running",
-                        progress=0.82,
-                        metrics={"label": "Dung hợp chữ thị giác Local OCR với âm thanh Cloud ASR (Chuẩn điện ảnh)..."},
-                    )
-                    if not self.is_cancelled(project_id):
-                        self.repo.save_stage_run(project_id, stage_cloud_fusion)
-
-                    try:
-                        from subtitle_localizer.fusion.hybrid_engine import LocalHybridFusionEngine
-                        fusion_engine = LocalHybridFusionEngine()
-                        cloud_segs = [
-                            {
-                                "start": round(c.start_pts, 3),
-                                "end": round(c.end_pts, 3),
-                                "text": c.source_text.strip(),
-                                "conf": 0.95,
-                            }
-                            for c in cloud_cues
-                            if c.source_text and c.source_text.strip()
-                        ]
-                        cues = fusion_engine.fuse_cues_with_audio(
-                            existing_cues=cues,
-                            audio_segments=cloud_segs,
-                            lang=effective_source_lang,
-                        )
-                    except Exception as exc:
-                        logging.getLogger(__name__).warning("Dung hợp với Cloud ASR gặp sự cố: %s", exc)
-                elif local_engine == "hybrid" and video_path.exists():
-                    stage_hybrid = StageRunV1(
-                        stage_name="hybrid_fusion",
-                        status="running",
-                        progress=0.82,
-                        metrics={"label": "Đang dung hợp đa phương thức: Đối chiếu âm thanh RAM Pipe & sửa lỗi..."},
-                    )
-                    if not self.is_cancelled(project_id):
-                        self.repo.save_stage_run(project_id, stage_hybrid)
-
-                    try:
-                        from subtitle_localizer.fusion.hybrid_engine import LocalHybridFusionEngine
-                        whisper_model_name = getattr(pipeline_settings.ocr, "hybrid_whisper_model", "small")
-                        fusion_engine = LocalHybridFusionEngine(whisper_model_size=whisper_model_name)
-                        audio_data = fusion_engine.extract_audio_ram_pipe(
-                            video_path=video_path,
-                            max_duration_seconds=max_duration_seconds,
-                        )
-                        if audio_data is not None and len(audio_data) > 0:
-                            audio_segs = fusion_engine.transcribe_audio_segments(
-                                audio=audio_data,
-                                lang=effective_source_lang,
-                            )
-                            cues = fusion_engine.fuse_cues_with_audio(
-                                existing_cues=cues,
-                                audio_segments=audio_segs,
-                                lang=effective_source_lang,
-                            )
-                    except Exception as exc:
-                        logging.getLogger(__name__).warning("Hybrid fusion pass encountered error: %s", exc)
+                # Legacy Hybrid/Whisper fusion has been removed. Cloud cues, when
+                # explicitly selected, are used directly; local mode remains pure OCR.
 
                 # Áp dụng bộ lọc Anti-Trash Sub triệt để cho toàn bộ cues trước khi dịch/lưu
                 from subtitle_localizer.ocr.rapid import is_trash_sub
@@ -622,6 +551,16 @@ class BackgroundWorker:
                     cues = translator.translate_cues(
                         cues, source_lang=effective_source_lang, target_lang=manifest.target_language
                     )
+                    untranslated = [
+                        cue for cue in cues
+                        if cue.source_text.strip()
+                        and (not cue.translated_text.strip() or cue.translated_text.strip() == cue.source_text.strip())
+                    ]
+                    if untranslated:
+                        raise RuntimeError(
+                            f"Local translation incomplete: {len(untranslated)}/{len(cues)} cues untranslated; "
+                            "start the configured local model before continuing."
+                        )
                 finally:
                     translator.unload()
                     translator = None

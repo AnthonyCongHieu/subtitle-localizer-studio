@@ -288,7 +288,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={isCreating || !title.trim() || !videoPath.trim()}
+              disabled={isCreating || !title.trim() || (mode === 'single' ? !videoPath.trim() : !folderGroups.length)}
               className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-indigo-600/20 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             >
               {isCreating ? 'Đang xử lý...' : 'Tạo Dự Án'}

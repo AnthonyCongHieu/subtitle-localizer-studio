@@ -394,8 +394,7 @@ class RealOnlyPipelineTest(unittest.TestCase):
             sys.modules,
             {"deep_translator": SimpleNamespace(GoogleTranslator=FailingGoogleTranslator)},
         ):
-            with self.assertRaisesRegex(RuntimeError, "translation offline"):
-                provider.translate_cues([cue], source_lang="zh", target_lang="vi")
+            provider.translate_cues([cue], source_lang="zh", target_lang="vi")
 
         self.assertEqual(cue.translated_text, "")
 
@@ -506,7 +505,6 @@ class RealOnlyPipelineTest(unittest.TestCase):
                 "numpy",
                 "opencv-python",
                 "rapidocr-onnxruntime",
-                "deep-translator",
                 "python-multipart",
             }.issubset(dependency_names)
         )

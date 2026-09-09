@@ -10,7 +10,6 @@ dependencies = [
     "opencv-python>=4.10.0",
     "onnxruntime>=1.23.2",
     "rapidocr-onnxruntime>=1.4.4",
-    "deep-translator>=1.11.4",
     "python-multipart>=0.0.20",
 ]
 

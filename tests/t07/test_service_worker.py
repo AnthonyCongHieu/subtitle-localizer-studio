@@ -577,7 +577,12 @@ class ServiceAndWorkerTest(unittest.TestCase):
         self.assertEqual(target["duration"], 136.5)
 
         # 3. Test POST /api/v1/projects/{project_id}/reveal-export
-        reveal_res = client.post(f"/api/v1/projects/{manifest.project_id}/reveal-export", headers=headers)
+        # The endpoint opens the platform file browser in production.  Mock
+        # the process launch so pytest never leaves a real Explorer window
+        # pointing at its temporary output directory after teardown.
+        with patch("subprocess.Popen") as popen:
+            reveal_res = client.post(f"/api/v1/projects/{manifest.project_id}/reveal-export", headers=headers)
+            popen.assert_called_once()
         self.assertEqual(reveal_res.status_code, 200)
         reveal_data = reveal_res.json()
         self.assertTrue(reveal_data["success"])

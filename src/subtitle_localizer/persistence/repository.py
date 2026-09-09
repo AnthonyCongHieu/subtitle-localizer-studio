@@ -381,3 +381,9 @@ class ProjectRepository:
                 )
             )
         return events
+
+    def get_latest_event_sequence(self) -> int:
+        """Return the persisted event cursor so a restarted API continues it."""
+        conn = self.db.get_connection()
+        row = conn.execute("SELECT COALESCE(MAX(sequence), 0) AS latest FROM bridge_events;").fetchone()
+        return int(row["latest"] if row else 0)

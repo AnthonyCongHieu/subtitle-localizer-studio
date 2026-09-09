@@ -7,7 +7,7 @@ import platform
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 logger = logging.getLogger(__name__)
 
@@ -25,26 +25,18 @@ class ExtractionSettings(BaseModel):
 
     # Khi mode == "local":
     # Mặc định: Thuần Local OCR siêu nhẹ (RapidOCR ONNX FP16), bỏ hoàn toàn Whisper để giải phóng VRAM và chống dính BGM
-    local_engine: str = "pure_ocr"  # "pure_ocr" | "rapidocr" | "hybrid" | "whisper" | "demux"
+    local_engine: str = "pure_ocr"  # "pure_ocr" | "rapidocr" | "demux" (legacy hybrid/whisper are ignored)
 
-    # Khi mode == "api":
-    # - "capcut": ByteDance Volcano Engine Subtitle ASR (Chuẩn nhận diện âm thanh của TikTok / CapCut - Khuyên dùng)
-    # - "gemini": Google Gemini Multimodal VLM (Nhìn hình, đọc chữ, hiểu cốt truyện, dùng Key Pool 43 keys)
-    # - "groq": Groq Cloud Whisper LPU (Siêu tốc 0.5s, Whisper Large-v3)
-    api_provider: str = "capcut"  # "capcut" | "gemini" | "groq"
-    api_fusion_mode: str = "hybrid_ocr"  # "hybrid_ocr" (Cloud ASR + Local OCR - Chuẩn điện ảnh) | "api_only" (Thuần API)
+    # Khi mode == "api": chỉ hỗ trợ các provider còn được duy trì.
+    api_provider: str = "capcut"  # "capcut" | "gemini"
+    api_fusion_mode: str = "hybrid_ocr"  # Cloud + Local OCR; api_only dùng cloud trực tiếp
     capcut_api_endpoint: str = "https://editor-api-sg.capcutapi.com"
     capcut_session_token: str = ""
     capcut_mode: str = "cloud_api"  # "cloud_api" | "desktop_draft"
     capcut_draft_id: Optional[str] = ""
-    groq_api_key: str = ""
-    groq_model: str = "whisper-large-v3"  # "whisper-large-v3" | "whisper-large-v3-turbo"
 
-    # Phương thức tương thích ngược:
-    # 1. "ocr" -> Quét chữ trên màn hình (RapidOCR ONNX / PaddleOCR)
-    # 2. "asr_whisper" -> Nhận diện giọng nói âm thanh (Faster-Whisper CUDA)
-    # 3. "vlm_gemini" -> AI thị giác video đa phương thức (Gemini 2.5 Flash Multimodal)
-    # 4. "demux_stream" -> Bóc tách luồng phụ đề có sẵn (FFmpeg Softsub Demux)
+    # Phương thức tương thích ngược (chỉ giữ các phương thức không dùng ASR).
+    # Dữ liệu cũ asr_whisper/hybrid bị chuẩn hóa về ocr khi nạp.
     method: str = "ocr"
 
     # 1. Cấu hình OCR (Thị giác):
@@ -69,11 +61,6 @@ class ExtractionSettings(BaseModel):
     include_advanced_preprocessing: bool = False
     edge_gating_threshold: float = 0.0  # Lọc bỏ frame không có nét chữ (Laplacian/Sobel energy)
 
-    # 2. Cấu hình ASR (Faster-Whisper CUDA - chỉ kích hoạt khi chọn local_engine == 'hybrid'):
-    whisper_model: str = "small"  # "tiny" | "base" | "small" | "medium" | "large-v3"
-    whisper_device: str = "cuda"  # "cuda" | "cpu"
-    whisper_compute_type: str = "float16"  # "float16" | "int8_float16" | "int8"
-    whisper_vad_filter: bool = True
 
     # 3. Cấu hình VLM Multimodal AI:
     vlm_provider: str = "gemini"  # "gemini" | "qwen_vl_local"
@@ -83,10 +70,20 @@ class ExtractionSettings(BaseModel):
     demux_fallback_to_ocr: bool = True
     demux_stream_lang: str = "auto"
 
-    # 5. Cấu hình Đa Phương Thức Lai (Hybrid DualFusion):
-    hybrid_whisper_model: str = "small"
-    hybrid_confidence_threshold: float = 0.65
-    hybrid_rescue_missing: bool = True
+    @root_validator(pre=True)
+    def normalize_retired_modes(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        values = dict(values or {})
+        if values.get("local_engine") in {"hybrid", "whisper"} or values.get("method") == "asr_whisper":
+            values["local_engine"] = "pure_ocr"
+            values["method"] = "ocr"
+        if values.get("api_provider") == "groq":
+            values["api_provider"] = "capcut"
+        if values.get("api_fusion_mode") not in {"hybrid_ocr", "api_only"}:
+            values["api_fusion_mode"] = "hybrid_ocr"
+        return values
+
+
+
 
 
 # Alias tương thích ngược hoàn toàn
@@ -94,21 +91,20 @@ OcrSettings = ExtractionSettings
 
 
 class TranslationSettings(BaseModel):
-    provider: str = "gemini"  # "gemini" | "local" | "google_web"
+    provider: str = "local"
     target_language: str = "vi"  # "vi" | "en" | "zh" | "none"
     gemini_model: str = "gemini-3.8-flash"  # "gemini-3.8-flash" | "gemini-3.7-flash" | "gemini-2.5-flash"
     local_model: str = "qwen2.5:7b-instruct"  # "qwen2.5:7b-instruct" | "qwen2.5:3b-instruct" | "qwen2.5:14b-instruct"
     local_endpoint: str = "http://localhost:11434"  # Ollama / llama.cpp / OpenAI-compatible endpoint
-    auto_fallback: bool = True  # Tự động chuyển đổi cứu hộ giữa Local và Gemini khi một bên gặp sự cố
+    auto_fallback: bool = False
     batch_size: int = 35
     prompt_tone: str = "dramatic"  # "dramatic" | "daily" | "humorous" | "literal"
     use_glossary: bool = True
 
 
-
 class DubbingSettings(BaseModel):
     enabled: bool = True
-    provider: str = "edge"  # "edge" | "capcut" | "gemini" | "local"
+    provider: str = "capcut"  # "edge" | "capcut" | "gemini" | "local"; CapCut lỗi fallback Edge
     mode: str = "single"  # "single" (1 người) | "multi" (nhiều người / phân vai nam nữ)
     voice: str = "vi-VN-NamMinhNeural"  # Giọng chính khi ở mode 1 người
     voice_male: str = "vi-VN-NamMinhNeural"  # Giọng nam khi ở mode phân vai
@@ -163,6 +159,18 @@ def load_pipeline_settings(filepath: Path | str = DEFAULT_SETTINGS_FILE) -> Glob
     if p.exists():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
+            # Drop removed providers/legacy ASR fields before validation. This
+            # keeps old profiles readable without exposing or executing them.
+            ocr_data = data.get("ocr") if isinstance(data, dict) else None
+            if isinstance(ocr_data, dict):
+                if ocr_data.get("local_engine") in {"hybrid", "whisper"}:
+                    ocr_data["local_engine"] = "pure_ocr"
+                if ocr_data.get("method") == "asr_whisper":
+                    ocr_data["method"] = "ocr"
+                if ocr_data.get("api_provider") == "groq":
+                    ocr_data["api_provider"] = "capcut"
+                for key in ("groq_api_key", "groq_model", "whisper_model", "whisper_device", "whisper_compute_type", "whisper_vad_filter", "hybrid_whisper_model", "hybrid_confidence_threshold", "hybrid_rescue_missing"):
+                    ocr_data.pop(key, None)
             parse_fn = getattr(GlobalPipelineSettings, "model_validate", getattr(GlobalPipelineSettings, "parse_obj", None))
             _global_settings = parse_fn(data)
             return _global_settings

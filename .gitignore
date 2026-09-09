@@ -47,6 +47,8 @@ groq_keys_pool.json
 .agents/
 *_history.json
 *_cache.json
+*_state.json
+worker_state.json
 src/subtitle_localizer/downloader/*.json
 !src/subtitle_localizer/downloader/config.json
 

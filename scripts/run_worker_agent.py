@@ -12,14 +12,17 @@ from subtitle_localizer.service.lan_worker import LanWorkerAgent, build_pipeline
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Start a LAN worker agent")
-    parser.add_argument("--coordinator", default=os.getenv("SL_COORDINATOR_URL", "http://127.0.0.1:8899"))
+    # Empty by default: discover the coordinator over UDP on the local LAN.
+    # Set SL_COORDINATOR_URL or --coordinator for another subnet/VLAN.
+    parser.add_argument("--coordinator", default=os.getenv("SL_COORDINATOR_URL", ""))
     parser.add_argument("--worker-id", default=os.getenv("SL_WORKER_ID", ""))
     parser.add_argument("--token", default=os.getenv("SL_WORKER_TOKEN", ""))
     parser.add_argument("--database", default=os.getenv("SL_DATABASE", "subtitle_localizer.db"))
     parser.add_argument("--interval", type=float, default=5.0)
     args = parser.parse_args()
-    if not args.worker_id or not args.token:
-        parser.error("--worker-id và --token (hoặc SL_WORKER_ID/SL_WORKER_TOKEN) là bắt buộc")
+    # Worker ID and coordinator URL are discoverable on the LAN.  A token is
+    # still accepted (and recommended when the coordinator enforces auth),
+    # but an empty token keeps the zero-config local/LAN setup usable.
     database = Database(Path(args.database))
     database.migrate()
     repository = ProjectRepository(database)

@@ -1,5 +1,6 @@
 import sys
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
@@ -63,7 +64,9 @@ class DubbingModesEndpointTest(unittest.TestCase):
 
     @patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover")
     def test_run_dubbing_multi_mode_saves_settings(self, mock_tts):
-        mock_tts.return_value = Path("dummy_voiceover.mp3")
+        dummy = Path(tempfile.gettempdir()) / "subtitle_localizer_dummy_voiceover.mp3"
+        dummy.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00")
+        mock_tts.return_value = dummy
 
         # Tạo dự án mẫu thứ 2
         create_res = self.client.post("/api/v1/projects", json={

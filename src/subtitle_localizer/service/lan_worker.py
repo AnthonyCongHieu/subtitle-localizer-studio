@@ -8,8 +8,59 @@ import subprocess
 import threading
 import time
 import urllib.request
+import hashlib
+import uuid
+import ipaddress
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+
+DISCOVERY_MAGIC = "subtitle-localizer-coordinator"
+DISCOVERY_VERSION = 1
+DISCOVERY_PORT = 45871
+
+
+def stable_worker_id(hostname: Optional[str] = None, machine_id: Optional[str] = None) -> str:
+    """Return a stable, privacy-preserving id for a worker machine."""
+    host = (hostname or socket.gethostname()).strip().lower()
+    identity = machine_id or hex(uuid.getnode())
+    digest = hashlib.sha256(f"{host}:{identity}".encode("utf-8")).hexdigest()[:16]
+    return f"worker-{digest}"
+
+
+def discover_coordinator(*, timeout: float = 2.0, port: int = DISCOVERY_PORT,
+                         broadcast_address: str = "255.255.255.255",
+                         allowed_subnets: Optional[list[str]] = None,
+                         socket_factory: Any = socket.socket) -> Optional[Dict[str, Any]]:
+    """Discover a coordinator on the local LAN using a small UDP handshake.
+
+    Only endpoint metadata is exchanged; registration tokens are never sent.
+    """
+    request = json.dumps({"magic": DISCOVERY_MAGIC, "version": DISCOVERY_VERSION,
+                          "type": "discover"}).encode("utf-8")
+    sock = socket_factory(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(max(0.1, float(timeout)))
+        sock.sendto(request, (broadcast_address, int(port)))
+        while True:
+            data, address = sock.recvfrom(4096)
+            payload = json.loads(data.decode("utf-8"))
+            if allowed_subnets:
+                try:
+                    source_ip = ipaddress.ip_address(address[0])
+                    if not any(source_ip in ipaddress.ip_network(net, strict=False) for net in allowed_subnets):
+                        continue
+                except ValueError:
+                    continue
+            if (payload.get("magic") == DISCOVERY_MAGIC and
+                    payload.get("version") == DISCOVERY_VERSION and
+                    payload.get("type") == "coordinator"):
+                payload.setdefault("ip", address[0])
+                return payload
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    finally:
+        sock.close()
 
 
 def collect_worker_capabilities() -> Dict[str, Any]:
@@ -36,16 +87,36 @@ def collect_worker_capabilities() -> Dict[str, Any]:
 
 
 class LanWorkerAgent:
-    def __init__(self, coordinator_url: str, worker_id: str, token: str, *, interval_seconds: float = 5.0, opener: Any = urllib.request.urlopen, state_path: Optional[Path | str] = None) -> None:
-        self.coordinator_url = coordinator_url.rstrip("/")
-        self.worker_id = worker_id
+    def __init__(self, coordinator_url: Optional[str] = None, worker_id: Optional[str] = None,
+                 token: str = "", *, interval_seconds: float = 5.0,
+                 opener: Any = urllib.request.urlopen, state_path: Optional[Path | str] = None,
+                 discovery_timeout: float = 2.0, discovery_port: int = DISCOVERY_PORT,
+                 discovery_subnets: Optional[list[str]] = None,
+                 discovery_fn: Callable[..., Optional[Dict[str, Any]]] = discover_coordinator) -> None:
+        self.coordinator_url = (coordinator_url or "").rstrip("/")
+        self.worker_id = worker_id or stable_worker_id()
         self.token = token
         self.interval_seconds = max(1.0, float(interval_seconds))
         self.opener = opener
         self.state_path = Path(state_path) if state_path else None
+        self.discovery_timeout = discovery_timeout
+        self.discovery_port = discovery_port
+        self.discovery_subnets = discovery_subnets
+        self.discovery_fn = discovery_fn
         self._pending_updates: list[tuple[str, Dict[str, Any]]] = []
         self._load_outbox()
         self._stop = threading.Event()
+
+    def discover(self) -> Optional[Dict[str, Any]]:
+        if self.coordinator_url:
+            return {"url": self.coordinator_url, "source": "manual"}
+        kwargs: Dict[str, Any] = {"timeout": self.discovery_timeout, "port": self.discovery_port}
+        if self.discovery_subnets is not None:
+            kwargs["allowed_subnets"] = self.discovery_subnets
+        result = self.discovery_fn(**kwargs)
+        if result and result.get("url"):
+            self.coordinator_url = str(result["url"]).rstrip("/")
+        return result
 
     def _load_outbox(self) -> None:
         if not self.state_path or not self.state_path.exists():
@@ -81,6 +152,8 @@ class LanWorkerAgent:
             return json.loads(response.read().decode("utf-8"))
 
     def register(self, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self.coordinator_url and not self.discover():
+            raise ConnectionError("Không tìm thấy coordinator trong LAN")
         payload = {"worker_id": self.worker_id, "hostname": socket.gethostname(), "platform": "windows"}
         payload.update(metadata or {})
         return self._request("POST", "/api/v1/admin/workers/register", payload)
@@ -120,7 +193,14 @@ class LanWorkerAgent:
             raise
 
     def run(self, job_handler: Callable[[Dict[str, Any], "LanWorkerAgent"], None], download_handler: Optional[Callable[[Dict[str, Any], "LanWorkerAgent"], None]] = None, registration_metadata: Optional[Dict[str, Any]] = None) -> None:
-        self.register(registration_metadata)
+        while not self._stop.is_set():
+            try:
+                self.register(registration_metadata)
+                break
+            except Exception:
+                self._stop.wait(min(self.interval_seconds, 5.0))
+        if self._stop.is_set():
+            return
         while not self._stop.is_set():
             try:
                 self._flush_outbox()
