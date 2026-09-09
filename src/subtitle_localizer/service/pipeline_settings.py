@@ -49,12 +49,24 @@ class ExtractionSettings(BaseModel):
 
     # 1. Cấu hình OCR (Thị giác):
     engine: str = "rapidocr"  # "rapidocr" | "paddle"
+    primary_backend: str = "rapidocr"  # "rapidocr" | "paddle" | "auto"
+    fallback_backend: str = "rapidocr"
+    # Number of detected text crops processed per recognizer call. RapidOCR
+    # supports this batching internally; it does not batch video frames.
+    recognition_batch_size: int = 6
     default_source_lang: str = "auto"  # "auto" | "zh" | "en" | "vi"
     sample_fps: float = 2.5
     diff_threshold: float = 2.5
     enable_gap_rescue: bool = True
+    # Bound expensive rescue OCR per suspicious interval.
+    gap_rescue_max_frames: int = 20
     enable_roi_tightening: bool = True
     enable_early_exit: bool = True  # Tăng tốc OCR suy luận cascade, ngắt sớm khi crop rõ nét
+    # Preset production: giảm suy luận dư thừa nhưng giữ detector/model hiện tại.
+    performance_profile: str = "full_speed_quality"  # "full_speed_quality" | "maximum_recall"
+    # Chỉ bật các biến thể tiền xử lý nâng cao khi cần cứu hộ chất lượng.
+    # Mặc định tắt để tránh nhân số lượt detector/recognizer trên mọi frame.
+    include_advanced_preprocessing: bool = False
     edge_gating_threshold: float = 0.0  # Lọc bỏ frame không có nét chữ (Laplacian/Sobel energy)
 
     # 2. Cấu hình ASR (Faster-Whisper CUDA - chỉ kích hoạt khi chọn local_engine == 'hybrid'):

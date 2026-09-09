@@ -26,6 +26,41 @@ class OcrRuntimeTest(unittest.TestCase):
         # Fallback provider theo language
         zh_provider = registry.get_provider_for_language("zh")
         self.assertIsNotNone(zh_provider)
+        self.assertEqual(registry.get_provider_for_language("zh", preferred="paddle").get_descriptor().id, "paddleocr-v5-mobile-ch")
+
+    def test_paddle_v3_result_adapter_preserves_text_and_boxes(self) -> None:
+        from subtitle_localizer.ocr.paddle import PaddleOcrAdapter
+        import numpy as np
+
+        provider = PaddleOcrAdapter(model_version="v5-mobile", language="ch")
+
+        class FakeEngine:
+            def predict(self, crop, **kwargs):
+                return [{
+                    "rec_boxes": np.array([[[1, 2], [11, 2], [11, 12], [1, 12]]]),
+                    "rec_texts": ["测试字幕"],
+                    "rec_scores": [0.97],
+                }]
+
+        provider.engine = FakeEngine()
+        result = provider.recognize([np.zeros((20, 20, 3), dtype=np.uint8)], [1.5], "zh")
+        self.assertEqual(result[0].raw_text, "测试字幕")
+        self.assertEqual(result[0].boxes, [[1.0, 2.0, 11.0, 12.0]])
+        self.assertEqual(result[0].confidence, 0.97)
+
+    def test_paddle_inference_error_is_explicit_for_worker_fallback(self) -> None:
+        from subtitle_localizer.ocr.paddle import PaddleOcrAdapter
+        import numpy as np
+
+        provider = PaddleOcrAdapter(model_version="v5-mobile", language="ch")
+
+        class FailingEngine:
+            def predict(self, crop, **kwargs):
+                raise RuntimeError("CUDA session failed")
+
+        provider.engine = FailingEngine()
+        with self.assertRaisesRegex(RuntimeError, "PaddleOCR inference failed"):
+            provider.recognize([np.zeros((20, 20, 3), dtype=np.uint8)], [1.5], "zh")
 
     def test_mock_ocr_inference_multilingual(self) -> None:
         provider = MockOcrProvider()

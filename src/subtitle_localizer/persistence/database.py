@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 MIGRATIONS = {
     1: """
@@ -114,6 +114,24 @@ MIGRATIONS = {
 
     COMMIT;
     """,
+    3: """
+    CREATE TABLE IF NOT EXISTS lan_workers (
+        worker_id TEXT PRIMARY KEY,
+        worker_json TEXT NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS lan_jobs (
+        job_id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        job_json TEXT NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS lan_downloads (
+        request_id TEXT PRIMARY KEY,
+        download_json TEXT NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    """,
 }
 
 
@@ -196,7 +214,7 @@ class Database:
                     try:
                         src_conn = sqlite3.connect(str(backup_path))
                         src_conn.row_factory = sqlite3.Row
-                        for tbl in ["projects", "cues", "regions", "stage_runs", "bridge_events"]:
+                        for tbl in ["projects", "cues", "regions", "stage_runs", "bridge_events", "lan_workers", "lan_jobs", "lan_downloads"]:
                             try:
                                 cur = src_conn.execute(f"SELECT rowid FROM {tbl}")
                                 rowids = cur.fetchall()

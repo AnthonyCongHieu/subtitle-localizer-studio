@@ -42,6 +42,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-translate", action="store_true")
     parser.add_argument("--max-duration", type=float, default=600.0)
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--video",
+        help="Run one exact MP4 filename from --input-dir (useful for full-duration benchmarks)",
+    )
     args = parser.parse_args(argv)
     if args.max_duration <= 0:
         parser.error("--max-duration must be positive")
@@ -225,6 +229,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"Input directory does not exist: {input_dir}")
 
     videos = sorted(input_dir.glob("*.mp4"))
+    if args.video:
+        videos = [p for p in videos if p.name == args.video]
     if args.limit is not None:
         videos = videos[: args.limit]
     if not videos:

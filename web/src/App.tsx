@@ -24,6 +24,7 @@ import { DownloadQueueHub } from './components/project/DownloadQueueHub';
 import { VideoDownloaderHub } from './components/project/VideoDownloaderHub';
 import { ExportModal } from './components/editor/ExportModal';
 import { GlobalActivityLogger, appLogger, useAppLoggerCount } from './components/common/GlobalActivityLogger';
+import { AdminLanView } from './components/admin/AdminLanView';
 import { useTimelineShortcuts } from './hooks/useTimelineShortcuts';
 import { extractDramaInfo } from './utils/drama';
 
@@ -50,7 +51,7 @@ interface StoredStudioState {
   subtitleFontSize?: number;
   subtitleFontFamily?: string;
   subtitleTextColor?: string;
-  viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings';
+  viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin';
   downloaderTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings';
   settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render';
 }
@@ -79,7 +80,7 @@ export const App: React.FC = () => {
   const hasRestoredProjectRef = useRef<boolean>(false);
 
   // Chế độ màn hình: Dashboard, Studio, Hàng Đợi, Trung Tâm Tải Video, hoặc Thiết Lập Hệ Thống
-  const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings'>(
+  const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin'>(
     () => savedState?.viewMode || 'dashboard'
   );
   const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>(
@@ -1377,7 +1378,9 @@ export const App: React.FC = () => {
       {/* ========================================================================= */}
       {/* 1. VIEW ROUTER: DOWNLOADER / QUEUE / DASHBOARD / STUDIO */}
       {/* ========================================================================= */}
-      {viewMode === 'downloader' ? (
+      {viewMode === 'admin' ? (
+        <AdminLanView onBack={() => setViewMode('dashboard')} />
+      ) : viewMode === 'downloader' ? (
         <VideoDownloaderHub
           initialTab={downloaderTab || 'queue'}
           onTabChange={setDownloaderTab}
@@ -1435,6 +1438,7 @@ export const App: React.FC = () => {
             setDownloaderTab('queue');
             setViewMode('downloader');
           }}
+          onOpenAdmin={() => setViewMode('admin')}
           onOpenDownloader={(tab) => {
             setDownloaderTab(tab || 'search');
             setViewMode('downloader');

@@ -13,7 +13,7 @@ from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
 from subtitle_localizer.service.server import create_app
 from subtitle_localizer.service.worker import BackgroundWorker
-from subtitle_localizer.service.pipeline_settings import GlobalPipelineSettings
+from subtitle_localizer.service.pipeline_settings import GlobalPipelineSettings, merge_pipeline_settings
 
 
 class ProjectSettingsAndRoiTest(unittest.TestCase):
@@ -159,6 +159,22 @@ class ProjectSettingsAndRoiTest(unittest.TestCase):
         self.assertEqual(merged.ocr.sample_fps, 5.0)
         self.assertEqual(merged.translation.prompt_tone, "humorous")
         self.assertEqual(merged.translation.target_language, base.translation.target_language)
+
+    def test_ocr_advanced_preprocessing_is_opt_in(self) -> None:
+        base = GlobalPipelineSettings()
+        self.assertEqual(base.ocr.performance_profile, "full_speed_quality")
+        self.assertFalse(base.ocr.include_advanced_preprocessing)
+        merged = merge_pipeline_settings(
+            base, {"ocr": {"include_advanced_preprocessing": True}}
+        )
+        self.assertTrue(merged.ocr.include_advanced_preprocessing)
+
+    def test_ocr_maximum_recall_profile_enables_advanced_preprocessing(self) -> None:
+        base = GlobalPipelineSettings()
+        merged = merge_pipeline_settings(
+            base, {"ocr": {"performance_profile": "maximum_recall"}}
+        )
+        self.assertEqual(merged.ocr.performance_profile, "maximum_recall")
 
     def test_merge_pipeline_settings_ducking_volume(self) -> None:
         from subtitle_localizer.service.pipeline_settings import merge_pipeline_settings, GlobalPipelineSettings

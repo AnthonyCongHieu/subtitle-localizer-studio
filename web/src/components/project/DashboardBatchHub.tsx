@@ -78,6 +78,7 @@ interface DashboardBatchHubProps {
   onBatchProjectsCreated?: (newProjects: ProjectManifestV1[]) => void;
   onOpenQueue?: () => void;
   onOpenDownloader?: (tab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings') => void;
+  onOpenAdmin?: () => void;
   selectedDramaTitle?: string | null;
   onSelectDramaTitle?: (title: string | null) => void;
 }
@@ -600,6 +601,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   onBatchProjectsCreated,
   onOpenQueue,
   onOpenDownloader,
+  onOpenAdmin,
   selectedDramaTitle: propSelectedDramaTitle,
   onSelectDramaTitle,
 }) => {
@@ -1872,6 +1874,11 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
             >
               <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
               <span>Hàng Đợi</span>
+            </button>
+          )}
+          {onOpenAdmin && (
+            <button onClick={onOpenAdmin} className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-cyan-300 hover:text-white hover:bg-cyan-950/40 transition cursor-pointer" title="Quản lý worker và job LAN">
+              <Activity className="w-3.5 h-3.5" /><span>Admin LAN</span>
             </button>
           )}
           <button

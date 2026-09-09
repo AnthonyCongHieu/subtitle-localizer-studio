@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
@@ -163,9 +164,15 @@ class PipelineCancelAndDedupTest(unittest.TestCase):
         )
         self.repo.save_project(proj)
 
-        res = client.post(f"/api/v1/projects/{proj_id}/reveal-export", headers=headers)
+        # Do not spawn a real Explorer window from the test process.  The
+        # temporary output root is removed during tearDown, which otherwise
+        # leaves Explorer showing "Location is not available".
+        with patch("subprocess.Popen") as popen:
+            res = client.post(f"/api/v1/projects/{proj_id}/reveal-export", headers=headers)
+            popen.assert_called_once()
         self.assertEqual(res.status_code, 200)
         self.assertTrue(res.json()["success"])
+        self.assertTrue(Path(res.json()["path"]).is_dir())
 
     def test_frontend_progress_and_cancel_immediate_contracts(self) -> None:
         app_file = REPOSITORY_ROOT / "web" / "src" / "App.tsx"

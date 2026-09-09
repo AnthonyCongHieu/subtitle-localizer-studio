@@ -1099,6 +1099,52 @@ export class StudioApiClient {
     if (!res.ok) throw new Error('Không thể nạp phụ đề từ CapCut');
     return res.json();
   }
+
+  async listWorkers(): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/admin/workers`, { headers: this.headers() });
+    if (!res.ok) throw new Error('Không thể tải danh sách worker');
+    return res.json();
+  }
+
+  async listAdminJobs(status?: string): Promise<any[]> {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    const res = await fetch(`${API_BASE}/admin/jobs${query}`, { headers: this.headers() });
+    if (!res.ok) throw new Error('Không thể tải hàng đợi LAN');
+    return res.json();
+  }
+
+  async listDownloadApprovals(status?: string): Promise<any[]> {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    const res = await fetch(`${API_BASE}/admin/downloads${query}`, { headers: this.headers() });
+    if (!res.ok) throw new Error('Không thể tải danh sách yêu cầu duyệt');
+    return res.json();
+  }
+
+  async decideDownload(requestId: string, approved: boolean): Promise<any> {
+    const res = await fetch(`${API_BASE}/admin/downloads/${encodeURIComponent(requestId)}/decision`, {
+      method: 'POST', headers: this.headers(), body: JSON.stringify({ approved }),
+    });
+    if (!res.ok) throw new Error('Không thể cập nhật quyết định tải');
+    return res.json();
+  }
+
+  async setWorkerStatus(workerId: string, status: 'online' | 'draining' | 'disabled'): Promise<any> {
+    const res = await fetch(`${API_BASE}/admin/workers/${encodeURIComponent(workerId)}/status?status=${status}`, { method: 'POST', headers: this.headers() });
+    if (!res.ok) throw new Error('Không thể cập nhật trạng thái worker');
+    return res.json();
+  }
+
+  async cancelAdminJob(jobId: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/admin/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', headers: this.headers() });
+    if (!res.ok) throw new Error('Không thể hủy job');
+    return res.json();
+  }
+
+  async retryAdminJob(jobId: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/admin/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', headers: this.headers() });
+    if (!res.ok) throw new Error('Không thể retry job');
+    return res.json();
+  }
 }
 
 export interface DirectoryValidateResponse {

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("subtitle_localizer.server")
-from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, Response
+from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, Response, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 try:
@@ -37,6 +37,7 @@ from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
 from subtitle_localizer.service.websocket import WebSocketManager
 from subtitle_localizer.service.worker import BackgroundWorker
+from subtitle_localizer.service.lan import LanCoordinator
 
 
 class CreateProjectRequest(BaseModel):
@@ -104,6 +105,60 @@ class AutoDetectRoiRequest(BaseModel):
 class PipelineRunRequest(BaseModel):
     max_duration_seconds: Optional[float] = None
     sync: bool = False
+
+
+class WorkerRegistrationRequest(BaseModel):
+    worker_id: str
+    hostname: str = ""
+    ip_address: str = ""
+    platform: str = "windows"
+    app_version: str = ""
+    model_version: str = ""
+    gpu_name: str = ""
+    vram_mb: int = 0
+    capabilities: Dict[str, bool] = {}
+
+
+class WorkerHeartbeatRequest(BaseModel):
+    queue_depth: int = 0
+    active_job_id: Optional[str] = None
+    gpu_name: Optional[str] = None
+    vram_mb: Optional[int] = None
+    last_error: Optional[str] = None
+
+
+class LanJobRequest(BaseModel):
+    project_id: str
+    worker_id: Optional[str] = None
+    idempotency_key: str
+    job_type: str = "ocr"
+    profile: str = "full_speed_quality"
+    video_fingerprint: str = ""
+
+
+class LanJobUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    progress: Optional[float] = None
+    metrics: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+class DownloadPreviewRequest(BaseModel):
+    request_id: Optional[str] = None
+    worker_id: str
+    source: str
+    title: str = ""
+    thumbnail_url: str = ""
+    duration_seconds: Optional[float] = None
+    size_bytes: Optional[int] = None
+
+
+class DownloadDecisionRequest(BaseModel):
+    approved: bool
+
+
+class DownloadUpdateRequest(BaseModel):
+    status: str
 
 
 class BatchDeleteProjectsRequest(BaseModel):
@@ -392,9 +447,20 @@ def create_app(
     repo: Optional[ProjectRepository] = None,
     auth_token: Optional[str] = None,
     output_root: Path | str = "outputs",
+    worker: Optional[BackgroundWorker] = None,
 ) -> FastAPI:
     """Tạo instance ứng dụng FastAPI với đầy đủ routes, auth và websocket."""
     app = FastAPI(title="Subtitle Localizer Studio API", version="1.0.0")
+
+    # Optional LAN boundary. Empty means backwards-compatible token-only auth.
+    @app.middleware("http")
+    async def lan_ip_whitelist(request: Request, call_next):
+        allowed_lan_ips = {item.strip() for item in os.getenv("SL_LAN_ALLOWED_IPS", "").split(",") if item.strip()}
+        if allowed_lan_ips and request.url.path.startswith("/api/v1/admin/"):
+            client_ip = request.client.host if request.client else ""
+            if client_ip not in allowed_lan_ips:
+                return Response(content='{"detail":"IP không được phép truy cập LAN admin"}', status_code=403, media_type="application/json")
+        return await call_next(request)
 
     # Load local environment config if present
     env_file = Path("subtitle_localizer.env")
@@ -408,10 +474,19 @@ def create_app(
     db.migrate()
     repository = repo or ProjectRepository(db)
     ws_manager = WebSocketManager(repository)
-    worker = BackgroundWorker(repository)
+    worker = worker or BackgroundWorker(repository)
     resolved_output_root = Path(output_root).resolve()
     running_project_ids: set[str] = set()
     running_lock = threading.Lock()
+    lan = LanCoordinator(db)
+    app.state.lan_coordinator = lan
+
+    async def broadcast_lan(event_type: str, payload: Dict[str, Any], *, job_id: Optional[str] = None) -> None:
+        """Push LAN control-plane changes through the existing authenticated WS channel."""
+        try:
+            await ws_manager.broadcast_event("__lan__", event_type, payload, job_id=job_id)
+        except Exception:
+            logger.exception("LAN websocket broadcast failed")
 
     from subtitle_localizer.service.downloader import DownloadManager, parse_media_target, test_proxy_connection
     from subtitle_localizer.downloader import hongguo_parser as parser
@@ -438,6 +513,143 @@ def create_app(
     @app.get("/api/v1/health")
     async def health_check() -> Dict[str, str]:
         return {"status": "healthy", "version": "1.0.0"}
+
+    @app.post("/api/v1/admin/workers/register")
+    async def register_worker(request: WorkerRegistrationRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            result = lan.register_worker(request.model_dump() if hasattr(request, "model_dump") else request.dict()).to_dict()
+            await broadcast_lan("worker_registered", result)
+            return result
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/v1/admin/workers/{worker_id}/heartbeat")
+    async def worker_heartbeat(worker_id: str, request: WorkerHeartbeatRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            data = request.model_dump(exclude_none=True) if hasattr(request, "model_dump") else request.dict(exclude_none=True)
+            result = lan.heartbeat(worker_id, data).to_dict()
+            await broadcast_lan("worker_heartbeat", result)
+            return result
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
+    @app.post("/api/v1/admin/workers/{worker_id}/status")
+    async def set_worker_status(worker_id: str, status: str = Query(...), authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            return lan.set_worker_status(worker_id, status).to_dict()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
+    @app.get("/api/v1/admin/workers")
+    async def list_workers(authorization: Optional[str] = Header(None)) -> List[Dict[str, Any]]:
+        verify_auth(authorization)
+        return lan.list_workers()
+
+    @app.post("/api/v1/admin/jobs")
+    async def create_lan_job(request: LanJobRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            data = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+            result = lan.create_job(data).to_dict()
+            await broadcast_lan("job_updated", result, job_id=result.get("job_id"))
+            return result
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
+    @app.get("/api/v1/admin/jobs")
+    async def list_lan_jobs(status: Optional[str] = Query(None), authorization: Optional[str] = Header(None)) -> List[Dict[str, Any]]:
+        verify_auth(authorization)
+        return lan.list_jobs(status=status)
+
+    @app.post("/api/v1/admin/workers/{worker_id}/claim")
+    async def claim_worker_job(worker_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            job = lan.claim_next_job(worker_id)
+            return {"job": job.to_dict() if job else None}
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
+    @app.patch("/api/v1/admin/jobs/{job_id}")
+    async def update_lan_job(job_id: str, request: LanJobUpdateRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            data = request.model_dump(exclude_none=True) if hasattr(request, "model_dump") else request.dict(exclude_none=True)
+            result = lan.update_job(job_id, data).to_dict()
+            await broadcast_lan("job_updated", result, job_id=job_id)
+            return result
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job không tồn tại") from error
+
+    @app.post("/api/v1/admin/jobs/{job_id}/cancel")
+    async def cancel_lan_job(job_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            return lan.cancel_job(job_id).to_dict()
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job không tồn tại") from error
+
+    @app.post("/api/v1/admin/jobs/{job_id}/retry")
+    async def retry_lan_job(job_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            return lan.retry_job(job_id).to_dict()
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job không tồn tại") from error
+
+    @app.post("/api/v1/admin/downloads/preview")
+    async def create_download_preview(request: DownloadPreviewRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            data = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+            return lan.create_download_preview(data).to_dict()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
+    @app.get("/api/v1/admin/downloads")
+    async def list_download_approvals(status: Optional[str] = Query(None), authorization: Optional[str] = Header(None)) -> List[Dict[str, Any]]:
+        verify_auth(authorization)
+        return lan.list_downloads(status=status)
+
+    @app.post("/api/v1/admin/downloads/{request_id}/decision")
+    async def decide_download(request_id: str, request: DownloadDecisionRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            return lan.decide_download(request_id, request.approved).to_dict()
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Yêu cầu tải không tồn tại") from error
+
+    @app.post("/api/v1/admin/workers/{worker_id}/claim-download")
+    async def claim_worker_download(worker_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            item = lan.claim_download(worker_id)
+            return {"download": item.to_dict() if item else None}
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
+    @app.patch("/api/v1/admin/downloads/{request_id}")
+    async def update_lan_download(request_id: str, request: DownloadUpdateRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            return lan.update_download(request_id, {"status": request.status}).to_dict()
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Yêu cầu tải không tồn tại") from error
 
     @app.get("/api/v1/projects")
     async def list_projects(authorization: Optional[str] = Header(None)) -> List[Dict[str, Any]]:
@@ -602,6 +814,12 @@ def create_app(
     @app.delete("/api/v1/projects/{project_id}")
     async def delete_project(project_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, bool]:
         verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if manifest:
+            # Prevent stale voiceover metadata from surviving cue/project removal.
+            manifest.has_voiceover = False
+            manifest.voiceover_path = None
+            repository.save_project(manifest)
         deleted = repository.delete_project(project_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -1249,6 +1467,17 @@ def create_app(
             try:
                 worker.run_pipeline_synchronous(project_id, max_duration_seconds=max_dur)
             except Exception as e:
+                repository.save_stage_run(
+                    project_id,
+                    StageRunV1(
+                        stage_name="pipeline",
+                        status="failed",
+                        progress=0.0,
+                        metrics={"label": "Pipeline thất bại", "error": str(e)},
+                        errors=[str(e)],
+                        end_time=time.time(),
+                    ),
+                )
                 import traceback
                 traceback.print_exc()
             finally:
@@ -1278,6 +1507,10 @@ def create_app(
         worker.cancel_project(project_id)
         with running_lock:
             running_project_ids.discard(project_id)
+
+        # Remove stale stage rows before recording the single cancellation
+        # marker; otherwise a previous running detector row remains visible.
+        repository.clear_stage_runs(project_id)
 
         cancel_stage = StageRunV1(
             stage_name="cancelled",
@@ -1368,6 +1601,7 @@ def create_app(
                 detail="Dự án chưa có phụ đề để dịch. Hãy quét phụ đề trước.",
             )
 
+        repository.save_stage_run(project_id, StageRunV1(stage_name="translation", status="running", progress=0.0, metrics={"label": "Đang dịch lại phụ đề"}))
         translator = worker.translation_registry.get_provider_for_pair(
             manifest.source_language, manifest.target_language
         )
@@ -1382,7 +1616,11 @@ def create_app(
             current_manifest.cues_count = len(translated_cues)
             current_manifest.translated_count = sum(1 for c in translated_cues if bool((c.translated_text or "").strip()))
             repository.save_project(current_manifest)
+            repository.save_stage_run(project_id, StageRunV1(stage_name="translation", status="completed", progress=1.0, metrics={"label": f"Đã dịch {len(translated_cues)} câu"}, end_time=time.time()))
             return {"status": "success", "cues_count": len(translated_cues), "translated_count": current_manifest.translated_count}
+        except Exception as error:
+            repository.save_stage_run(project_id, StageRunV1(stage_name="translation", status="failed", metrics={"label": "Dịch thất bại"}, errors=[str(error)], end_time=time.time()))
+            raise
         finally:
             translator.unload()
 
@@ -1430,6 +1668,8 @@ def create_app(
         cues_dir = project_output / "cues"
         cues_dir.mkdir(parents=True, exist_ok=True)
 
+        repository.save_stage_run(project_id, StageRunV1(stage_name="dubbing", status="running", progress=0.0, metrics={"label": "Đang tạo lồng tiếng"}))
+
         duration = 0.0
         try:
             from subtitle_localizer.media.probe import probe_media
@@ -1463,6 +1703,7 @@ def create_app(
                 current_manifest.custom_pipeline_settings = {}
             current_manifest.custom_pipeline_settings["dubbing"] = manifest.custom_pipeline_settings.get("dubbing", {})
         repository.save_project(current_manifest)
+        repository.save_stage_run(project_id, StageRunV1(stage_name="dubbing", status="completed", progress=1.0, metrics={"label": f"Đã lồng tiếng {len(cues)} câu"}, end_time=time.time()))
 
         return {
             "status": "completed",
@@ -2588,38 +2829,44 @@ def create_app(
             raise HTTPException(status_code=404, detail="Project not found")
         from pathlib import Path
         source_path = Path(project.source_video_path)
+        project_output = (resolved_output_root / project_id).resolve()
+        # Ensure Explorer never receives a path that is absent (for example
+        # after a previous temporary output directory was cleaned up).
+        project_output.mkdir(parents=True, exist_ok=True)
         export_path = (resolved_output_root / project_id / f"{source_path.stem}-localized.mp4").resolve()
         voiceover_path = (resolved_output_root / project_id / f"voiceover_{project_id}.mp3").resolve()
         
         target_to_select = export_path if export_path.exists() else (voiceover_path if voiceover_path.exists() else None)
-        target_to_open = target_to_select if target_to_select else (resolved_output_root / project_id).resolve()
-        if not target_to_open.exists():
-            (resolved_output_root / project_id).resolve().mkdir(parents=True, exist_ok=True)
+        target_to_open = target_to_select if target_to_select else project_output
             
         import sys
         import subprocess
         try:
             if sys.platform == "win32":
                 if target_to_select and target_to_select.exists():
-                    subprocess.Popen(f'explorer /select,"{str(target_to_select)}"')
+                    subprocess.Popen(["explorer.exe", f"/select,{target_to_select}"])
                 else:
-                    subprocess.Popen(f'explorer "{str((resolved_output_root / project_id).resolve())}"')
+                    subprocess.Popen(["explorer.exe", str(project_output)])
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", str(target_to_open)] if target_to_open.exists() else ["open", str((resolved_output_root / project_id).resolve())])
+                subprocess.Popen(["open", "-R", str(target_to_open)] if target_to_select else ["open", str(project_output)])
             else:
-                subprocess.Popen(["xdg-open", str((resolved_output_root / project_id).resolve())])
+                subprocess.Popen(["xdg-open", str(project_output)])
             return {"success": True, "path": str(target_to_open)}
         except Exception as e:
             logger.warning(f"Failed to reveal export path: {e}")
             return {"success": False, "error": str(e), "path": str(target_to_open)}
 
     @app.get("/api/v1/projects/{project_id}/video/stream")
-    def stream_project_video(project_id: str):
+    def stream_project_video(project_id: str, quality: str = "original"):
         project = repository.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         from pathlib import Path
         video_path = Path(project.source_video_path)
+        if quality in {"360p", "480p", "720p", "1080p"}:
+            cached_proxy = (resolved_output_root / project_id / "proxies" / f"proxy_{quality}.mp4").resolve()
+            if cached_proxy.exists() and cached_proxy.is_file():
+                video_path = cached_proxy
         if not video_path.exists():
             # Trả về 404 nếu video không tồn tại
             raise HTTPException(status_code=404, detail="Video file not found on disk")
@@ -2729,7 +2976,7 @@ def create_app(
     async def list_models(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
         return {
-            "ocr": ["rapidocr", "paddle-zh", "paddle-ja", "paddle-ko", "paddle-en"],
+            "ocr": ["rapidocr"],
             "translation": ["gemini", "gemma", "nllb", "opus", "real"],
         }
 

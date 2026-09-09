@@ -290,39 +290,100 @@ class BackgroundWorker:
                             self.repo.save_stage_run(project_id, st)
 
                 engine_name = getattr(pipeline_settings.ocr, "engine", "rapidocr")
-                if engine_name == "paddle":
-                    provider_key = f"paddle-{manifest.source_language}" if f"paddle-{manifest.source_language}" in self.ocr_registry._providers else "paddle-zh"
-                    ocr_provider = self.ocr_registry.get_provider(provider_key) or self.ocr_registry.get_provider_for_language(manifest.source_language)
-                else:
-                    ocr_provider = self.ocr_registry.get_provider_for_language(manifest.source_language)
+                primary = getattr(pipeline_settings.ocr, "primary_backend", engine_name)
+                # Preserve the pre-profile `engine=paddle` project setting.
+                if engine_name == "paddle" and primary == "rapidocr":
+                    primary = "paddle"
+                if primary == "auto":
+                    primary = "paddle"
+                allow_fallback = primary == "paddle"
+                ocr_provider = self.ocr_registry.get_provider_for_language(
+                    manifest.source_language,
+                    preferred=primary,
+                )
+                fallback_name = getattr(pipeline_settings.ocr, "fallback_backend", "rapidocr")
+                fallback_provider = self.ocr_registry.get_fallback_for_language(
+                    manifest.source_language, preferred=fallback_name
+                )
+                # RapidOCR batches detected text crops internally. Apply the
+                # validated profile value before loading the ONNX sessions.
+                batch_size = max(
+                    1,
+                    min(32, int(getattr(pipeline_settings.ocr, "recognition_batch_size", 6))),
+                )
+                for provider in (ocr_provider, fallback_provider):
+                    if hasattr(provider, "recognition_batch_size"):
+                        provider.recognition_batch_size = batch_size
                 try:
                     ocr_provider.load()
-                except Exception:
-                    if hasattr(ocr_provider, "_load_cpu"):
-                        ocr_provider._load_cpu()
+                except Exception as load_error:
+                    if not allow_fallback or ocr_provider is fallback_provider:
+                        if hasattr(ocr_provider, "_load_cpu"):
+                            ocr_provider._load_cpu()
+                        else:
+                            raise
                     else:
-                        raise
+                        logging.getLogger(__name__).warning(
+                            "Primary OCR backend unavailable; falling back to RapidOCR: %s",
+                            load_error,
+                        )
+                        ocr_provider = fallback_provider
+                        ocr_provider.load()
 
                 try:
                     import inspect
                     sig = inspect.signature(ocr_provider.recognize)
                     extra_kwargs = {}
+                    performance_profile = getattr(
+                        pipeline_settings.ocr, "performance_profile", "full_speed_quality"
+                    )
+                    include_advanced = (
+                        performance_profile == "maximum_recall"
+                        or (
+                            performance_profile not in ("full_speed_quality", "maximum_recall")
+                            and getattr(pipeline_settings.ocr, "include_advanced_preprocessing", False)
+                        )
+                    )
                     if "progress_callback" in sig.parameters:
                         extra_kwargs["progress_callback"] = _on_ocr_progress
                     if "include_advanced" in sig.parameters:
-                        extra_kwargs["include_advanced"] = True
+                        extra_kwargs["include_advanced"] = include_advanced
                     if "enable_early_exit" in sig.parameters:
                         extra_kwargs["enable_early_exit"] = getattr(pipeline_settings.ocr, "enable_early_exit", True)
-                    observations = ocr_provider.recognize(
-                        crops=crops,
-                        pts_list=pts_list,
-                        language=manifest.source_language,
-                        **extra_kwargs,
-                    )
+                    try:
+                        observations = ocr_provider.recognize(
+                            crops=crops,
+                            pts_list=pts_list,
+                            language=manifest.source_language,
+                            **extra_kwargs,
+                        )
+                    except Exception as infer_error:
+                        if not allow_fallback or ocr_provider is fallback_provider:
+                            raise
+                        logging.getLogger(__name__).warning(
+                            "Primary OCR inference failed; falling back to RapidOCR: %s",
+                            infer_error,
+                        )
+                        try:
+                            ocr_provider.unload()
+                        except Exception:
+                            pass
+                        ocr_provider = fallback_provider
+                        ocr_provider.load()
+                        observations = ocr_provider.recognize(
+                            crops=crops,
+                            pts_list=pts_list,
+                            language=manifest.source_language,
+                            **extra_kwargs,
+                        )
 
                     # Auto Gap-Rescue Pass: Tự động phân tích các khoảng trống nghi ngờ giữa các câu
                     # và quét sâu để cứu các câu phụ đề mờ hoặc chớp nhoáng (Zero-Miss Automation)
                     if pipeline_settings.ocr.enable_gap_rescue and observations and len(observations) >= 4:
+                        rescue_frame_limit = max(
+                            1,
+                            int(getattr(pipeline_settings.ocr, "gap_rescue_max_frames", 20)),
+                        )
                         pre_cues = self.reconstructor.build_cues(observations)
                         if len(pre_cues) >= 2:
                             gap_intervals = []
@@ -357,7 +418,7 @@ class BackgroundWorker:
                                         fps=2.5,
                                     )
                                     for c, p in zip(g_crops, g_pts):
-                                        if g_start < p < g_end and len(rescue_crops) < 50:
+                                        if g_start < p < g_end and len(rescue_crops) < rescue_frame_limit * (g_idx + 1):
                                             rescue_crops.append(c)
                                             rescue_pts.append(p)
 
@@ -365,7 +426,7 @@ class BackgroundWorker:
                                     try:
                                         rescue_extra = {}
                                         if "include_advanced" in sig.parameters:
-                                            rescue_extra["include_advanced"] = True
+                                            rescue_extra["include_advanced"] = include_advanced
 
                                         def _on_rescue_progress(r_cur: int, r_tot: int) -> None:
                                             if self.is_cancelled(project_id):

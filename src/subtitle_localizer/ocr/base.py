@@ -24,6 +24,10 @@ class OcrProvider(ABC):
         """Giải phóng model khỏi VRAM để nhường chỗ cho Translation hoặc Render stage."""
         pass
 
+    def runtime_status(self) -> dict[str, Any]:
+        """Return non-sensitive runtime state for diagnostics and benchmarks."""
+        return {"loaded": False}
+
     @abstractmethod
     def recognize(
         self,

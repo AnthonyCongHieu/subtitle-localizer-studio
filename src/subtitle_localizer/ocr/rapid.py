@@ -189,13 +189,14 @@ def _prepare_windows_cuda_dlls() -> List[Any]:
 class RapidOcrProvider(OcrProvider):
     """Real OCR Engine sử dụng RapidOCR ONNX Runtime tối ưu cho CPU và GPU."""
 
-    def __init__(self) -> None:
+    def __init__(self, recognition_batch_size: int = 6) -> None:
         self._lock = threading.RLock()
         self.engine: Optional[Any] = None
         self.is_loaded = False
         self.execution_provider: Optional[str] = None
         self._dll_handles: List[Any] = []
         self._active_infer_count: int = 0
+        self.recognition_batch_size = max(1, min(32, int(recognition_batch_size)))
 
     def get_descriptor(self) -> ModelDescriptorV1:
         return ModelDescriptorV1(
@@ -254,6 +255,8 @@ class RapidOcrProvider(OcrProvider):
                     self.engine.text_det.limit_side_len = 736
                     if hasattr(self.engine.text_det, "postprocess_op") and hasattr(self.engine.text_det.postprocess_op, "unclip_ratio"):
                         self.engine.text_det.postprocess_op.unclip_ratio = 1.8
+                if hasattr(self.engine, "text_rec") and hasattr(self.engine.text_rec, "rec_batch_num"):
+                    self.engine.text_rec.rec_batch_num = self.recognition_batch_size
                 # RapidOCR can silently fall back even when CUDA is advertised.
                 sessions = (
                     self.engine.text_det.infer.session,
