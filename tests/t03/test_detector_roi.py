@@ -5,7 +5,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-from subtitle_localizer.detector.roi import propose_default_roi
+from subtitle_localizer.detector.roi import propose_default_roi, propose_default_rois
 from subtitle_localizer.detector.sampler import AdaptiveFrameSampler
 from subtitle_localizer.detector.temporal import NativeTemporalDetector, SubtitleEvent
 from subtitle_localizer.detector.videosubfinder import VideoSubFinderAdapter
@@ -26,6 +26,14 @@ class DetectorAndRoiTest(unittest.TestCase):
         self.assertTrue(roi_port.is_valid())
         self.assertGreaterEqual(roi_port.y, 0.60)
         self.assertGreaterEqual(roi_port.height, 0.15)
+
+    def test_default_rois_cover_moving_caption_bands(self) -> None:
+        rois = propose_default_rois(1920, 1080)
+        self.assertGreaterEqual(len(rois), 3)
+        self.assertTrue(all(r.is_valid() for r in rois))
+        ys = [r.y for r in rois]
+        self.assertTrue(any(y < 0.2 for y in ys))
+        self.assertTrue(any(y > 0.7 for y in ys))
 
     def test_adaptive_sampler_sample_selection(self) -> None:
         sampler = AdaptiveFrameSampler(sample_fps=2.0, min_interval_pts=0.3)

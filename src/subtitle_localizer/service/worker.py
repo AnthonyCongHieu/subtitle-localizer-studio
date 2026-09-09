@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from subtitle_localizer.detector.boundary_refiner import FrameAccurateBoundaryRefiner
 from subtitle_localizer.detector.roi import compute_tight_roi_from_observations, propose_default_roi
-from subtitle_localizer.detector.sampler import AdaptiveFrameSampler
+from subtitle_localizer.detector.sampler import AdaptiveFrameSampler, merge_voice_intervals
 from subtitle_localizer.domain.models import StageRunV1, SubtitleCueV1
 from subtitle_localizer.ocr.registry import OcrRegistry
 from subtitle_localizer.persistence.repository import ProjectRepository
@@ -39,6 +39,84 @@ class BackgroundWorker:
     def clear_cancel(self, project_id: str) -> None:
         with self._cancel_lock:
             self._cancelled_projects.discard(project_id)
+
+    @staticmethod
+    def _resolve_primary_backend(
+        engine_name: str,
+        configured_backend: str,
+        model_tier: str = "mobile",
+    ) -> str:
+        """Resolve the persisted OCR profile to a concrete registry key.
+
+        ``auto`` is the breakthrough profile exposed by the web UI.  It uses
+        PP-OCRv5 (and therefore the hardware-tuned batch controller) as the
+        preferred backend; the existing worker load path still falls back to
+        RapidOCR when the PP-OCRv5 assets/runtime are unavailable.
+        """
+        primary = configured_backend or engine_name or "rapidocr"
+        if engine_name == "ppocrv5" and primary == "rapidocr":
+            primary = "ppocrv5"
+        # Preserve the pre-profile explicit Paddle setting for old projects.
+        if engine_name == "paddle" and primary == "rapidocr":
+            primary = "paddle"
+        if primary == "auto":
+            primary = "ppocrv5"
+        if primary == "ppocrv5":
+            normalized_tier = model_tier if model_tier in {"mobile", "server"} else "mobile"
+            primary = f"ppocrv5-{normalized_tier}"
+        return primary
+
+    @staticmethod
+    def _prepare_ppocrv5_inputs(
+        crops: list,
+        pts_list: list[float],
+        detector_provider,
+        anti_noise=None,
+    ) -> tuple[list, list[float]]:
+        """Detect line boxes with RapidOCR before PP-OCRv5 recognition.
+
+        PP-OCRv5 assets in this repository are recognition-only.  Feeding a
+        complete subtitle-band ROI directly to that model squeezes multiple
+        lines into one tensor and loses text.  This bridge keeps DBNet as the
+        detector while allowing PP-OCRv5 to provide batched recognition.
+        """
+        import cv2
+        import numpy as np
+
+        if not getattr(detector_provider, "engine", None):
+            detector_provider.load()
+        engine = detector_provider.engine
+        line_crops, line_pts = [], []
+        for image, pts in zip(crops, pts_list):
+            result, _ = engine(image, use_det=True, use_cls=False, use_rec=False)
+            if not result:
+                continue
+            for item in result:
+                try:
+                    raw_item = np.asarray(item, dtype=float)
+                except (TypeError, ValueError):
+                    raw_item = np.asarray([], dtype=float)
+                try:
+                    polygon = raw_item if raw_item.shape == (4, 2) else np.asarray(item[0], dtype=float)
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if polygon.shape != (4, 2) or not np.isfinite(polygon).all():
+                    continue
+                height, width = image.shape[:2]
+                x1 = max(0, int(np.floor(polygon[:, 0].min())))
+                y1 = max(0, int(np.floor(polygon[:, 1].min())))
+                x2 = min(width, int(np.ceil(polygon[:, 0].max())) + 1)
+                y2 = min(height, int(np.ceil(polygon[:, 1].max())) + 1)
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                line = np.ascontiguousarray(image[y1:y2, x1:x2])
+                if anti_noise is not None:
+                    valid, _reason = anti_noise.is_valid_candidate(line, x2 - x1, y2 - y1)
+                    if not valid:
+                        continue
+                line_crops.append(line)
+                line_pts.append(float(pts))
+        return line_crops, line_pts
 
     @staticmethod
     def _detect_language(text: str) -> str:
@@ -203,14 +281,14 @@ class BackgroundWorker:
 
                 # Quyết định dung hợp hay dùng trực tiếp cues từ cloud:
                 # Mode 2 (CapCut API) mặc định dung hợp với Local OCR (tương đương Mode 3 trong benchmark).
-                # Với Gemini/Groq hoặc khi api_fusion_mode == 'api_only' hoặc video không mở được: dùng trực tiếp cloud cues.
-                import cv2
-                _test_cap = cv2.VideoCapture(str(video_path))
-                video_can_decode = bool(_test_cap.isOpened())
-                _test_cap.release()
-
+                # Với Gemini hoặc khi api_fusion_mode == 'api_only': dùng
+                # trực tiếp cloud cues.
                 if cloud_cues:
-                    if provider == "capcut" and api_fusion_mode == "hybrid_ocr" and video_can_decode:
+                    # Hybrid CapCut mode attempts voice-gated local OCR.  The
+                    # sampler fails closed for undecodable inputs, preserving
+                    # cloud cues while still allowing mocked/alternate
+                    # stream providers to supply local crops.
+                    if provider == "capcut" and api_fusion_mode == "hybrid_ocr":
                         # Tiếp tục xuống khối Local OCR bên dưới để lấy Ground Truth và dung hợp
                         pass
                     else:
@@ -233,26 +311,103 @@ class BackgroundWorker:
                 self.sampler.sample_fps = max(0.5, float(pipeline_settings.ocr.sample_fps))
                 self.sampler.diff_threshold = float(pipeline_settings.ocr.diff_threshold)
 
-                crops, pts_list = self.sampler.sample_video_frames(
-                    video_path=video_path,
-                    roi_norm=roi_tuple,
-                    roi_norms=rois_tuples,
-                    max_duration_seconds=max_duration_seconds,
-                    diff_threshold=pipeline_settings.ocr.diff_threshold,
-                    edge_gating_threshold=getattr(pipeline_settings.ocr, "edge_gating_threshold", 0.0),
-                )
+                crops, pts_list = [], []
+                # In hybrid CapCut mode the cloud transcript provides sparse
+                # voice windows; sample only those windows before falling back
+                # to a full ROI scan.  This keeps the API/worker fusion path
+                # deterministic while avoiding unnecessary decoder work.
+                if cloud_cues and api_fusion_mode == "hybrid_ocr":
+                    voice_windows = merge_voice_intervals(
+                        [(cue.start_pts, cue.end_pts) for cue in cloud_cues]
+                    )
+                    try:
+                        stream = self.sampler.stream_voice_windows(
+                            video_path=video_path,
+                            voice_windows=voice_windows,
+                            roi_norm=roi_tuple,
+                            roi_norms=rois_tuples,
+                            sample_fps=pipeline_settings.ocr.sample_fps,
+                        )
+                        for crop, pts in stream:
+                            crops.append(crop)
+                            pts_list.append(pts)
+                    except RuntimeError as stream_error:
+                        logging.getLogger(__name__).warning(
+                            "Voice-gated sampling failed; preserving cloud cues: %s",
+                            stream_error,
+                        )
+                use_nvdec = bool(getattr(pipeline_settings.ocr, "enable_nvdec_hwaccel", False))
+                if use_nvdec:
+                    from subtitle_localizer.detector.nvdec_decoder import NvdecVideoDecoder
+                    decoder = NvdecVideoDecoder(
+                        video_path,
+                        gpu_id=getattr(pipeline_settings.ocr, "nvdec_device_id", 0),
+                    )
+                    try:
+                        if decoder.open():
+                            decoder_fps = float(getattr(decoder.hw_stream, "average_rate", 25.0) or 25.0)
+                            sample_step = max(1, int(round(decoder_fps / max(0.5, float(pipeline_settings.ocr.sample_fps)))))
+                            for crop, pts in decoder.decode_frames_roi(
+                                roi_norm=roi_tuple,
+                                sample_step=sample_step,
+                                max_duration_seconds=max_duration_seconds,
+                            ):
+                                crops.append(crop)
+                                pts_list.append(pts)
+                    finally:
+                        decoder.close()
+                if not crops or not pts_list:
+                    # Preserve the mature OpenCV sampler as a fallback (and for
+                    # CPU-only installs where PyAV/NVDEC is unavailable).
+                    crops, pts_list = self.sampler.sample_video_frames(
+                        video_path=video_path,
+                        roi_norm=roi_tuple,
+                        roi_norms=rois_tuples,
+                        max_duration_seconds=max_duration_seconds,
+                        diff_threshold=pipeline_settings.ocr.diff_threshold,
+                        edge_gating_threshold=getattr(pipeline_settings.ocr, "edge_gating_threshold", 0.0),
+                    )
                 if not crops or not pts_list:
                     if cloud_cues:
                         cues = cloud_cues
                     else:
                         raise RuntimeError(f"No video frames could be decoded: {video_path}")
 
+                recognition_crops, recognition_pts = crops, pts_list
+                requested_engine = getattr(pipeline_settings.ocr, "engine", "rapidocr")
+                configured_backend = getattr(pipeline_settings.ocr, "primary_backend", "")
+                if recognition_crops and (requested_engine == "ppocrv5" or configured_backend in {"ppocrv5", "auto"}):
+                    detector = self.ocr_registry.get_provider_for_language(manifest.source_language, preferred="rapidocr")
+                    funnel = None
+                    if getattr(pipeline_settings.ocr, "enable_anti_noise_funnel", False):
+                        from subtitle_localizer.ocr.anti_noise import AntiNoiseFunnel
+                        funnel = AntiNoiseFunnel(
+                            ar_min=pipeline_settings.ocr.anti_noise_ar_min,
+                            h_max=pipeline_settings.ocr.anti_noise_h_max,
+                            swt_cov_max=pipeline_settings.ocr.anti_noise_swt_cov_max,
+                            lum_min=pipeline_settings.ocr.anti_noise_lum_min,
+                            dhash_thresh=pipeline_settings.ocr.stroke_dhash_threshold,
+                        )
+                    try:
+                        # Reduce DBNet work on wide subtitle bands when using
+                        # the PP-OCRv5 recognition bridge.
+                        detector.load()
+                        text_detector = getattr(getattr(detector, "engine", None), "text_det", None)
+                        if text_detector is not None:
+                            text_detector.limit_type = getattr(pipeline_settings.ocr, "dbnet_limit_type", "max")
+                            text_detector.limit_side_len = int(getattr(pipeline_settings.ocr, "dbnet_limit_side_len", 960))
+                        recognition_crops, recognition_pts = self._prepare_ppocrv5_inputs(crops, pts_list, detector, funnel)
+                    finally:
+                        detector.unload()
+                    if not recognition_crops:
+                        raise RuntimeError("PP-OCRv5 detector produced no text line crops")
+
                 # Stage 2: OCR Inference Stage
                 stage2 = StageRunV1(
                     stage_name="ocr_inference",
                     status="running",
                     progress=0.2,
-                    metrics={"current": 0, "total": len(crops), "label": f"Bắt đầu nhận diện OCR ({len(crops)} frames)..."},
+                        metrics={"current": 0, "total": len(recognition_crops), "label": f"Bắt đầu nhận diện OCR ({len(recognition_crops)} crops)..."},
                 )
                 if not self.is_cancelled(project_id):
                     self.repo.save_stage_run(project_id, stage2)
@@ -279,27 +434,53 @@ class BackgroundWorker:
                             self.repo.save_stage_run(project_id, st)
 
                 engine_name = getattr(pipeline_settings.ocr, "engine", "rapidocr")
-                primary = getattr(pipeline_settings.ocr, "primary_backend", engine_name)
-                # Preserve the pre-profile `engine=paddle` project setting.
-                if engine_name == "paddle" and primary == "rapidocr":
-                    primary = "paddle"
-                if primary == "auto":
-                    primary = "paddle"
-                allow_fallback = primary == "paddle"
+                primary = self._resolve_primary_backend(
+                    engine_name,
+                    getattr(pipeline_settings.ocr, "primary_backend", engine_name),
+                    getattr(pipeline_settings.ocr, "ppocr_model_tier", "mobile"),
+                )
+                fallback_name = getattr(pipeline_settings.ocr, "fallback_backend", "rapidocr")
+                allow_fallback = bool(getattr(pipeline_settings.ocr, "auto_fallback", True)) and primary != fallback_name
                 ocr_provider = self.ocr_registry.get_provider_for_language(
                     manifest.source_language,
                     preferred=primary,
                 )
-                fallback_name = getattr(pipeline_settings.ocr, "fallback_backend", "rapidocr")
                 fallback_provider = self.ocr_registry.get_fallback_for_language(
                     manifest.source_language, preferred=fallback_name
                 )
+                # A valid cloud transcript must survive a decoder failure.  A
+                # no-op provider keeps the normal reconstruction/translation
+                # flow intact without attempting to load local OCR models for
+                # an empty crop list.
+                if cloud_cues and not recognition_crops:
+                    class _CloudCuePassthrough:
+                        recognition_batch_size = 1
+
+                        def load(self) -> None:
+                            return None
+
+                        def unload(self) -> None:
+                            return None
+
+                        def recognize(self, crops, pts_list, language="zh", **_kwargs):
+                            return []
+
+                    passthrough = _CloudCuePassthrough()
+                    ocr_provider = passthrough
+                    fallback_provider = passthrough
+                    allow_fallback = False
                 # RapidOCR batches detected text crops internally. Apply the
                 # validated profile value before loading the ONNX sessions.
                 batch_size = max(
                     1,
-                    min(32, int(getattr(pipeline_settings.ocr, "recognition_batch_size", 6))),
+                    min(64, int(getattr(pipeline_settings.ocr, "recognition_batch_size", 6))),
                 )
+                if primary.startswith("ppocrv5") and getattr(pipeline_settings.ocr, "hardware_tuning_mode", "auto") == "auto":
+                    try:
+                        from subtitle_localizer.service.hardware_tuner import HardwareAutoTuner
+                        batch_size = HardwareAutoTuner().profile().optimal_batch_size
+                    except Exception as tuner_error:
+                        logging.getLogger(__name__).debug("Hardware auto-tuning unavailable: %s", tuner_error)
                 for provider in (ocr_provider, fallback_provider):
                     if hasattr(provider, "recognition_batch_size"):
                         provider.recognition_batch_size = batch_size
@@ -341,8 +522,8 @@ class BackgroundWorker:
                         extra_kwargs["enable_early_exit"] = getattr(pipeline_settings.ocr, "enable_early_exit", True)
                     try:
                         observations = ocr_provider.recognize(
-                            crops=crops,
-                            pts_list=pts_list,
+                            crops=recognition_crops,
+                            pts_list=recognition_pts,
                             language=manifest.source_language,
                             **extra_kwargs,
                         )
@@ -360,8 +541,8 @@ class BackgroundWorker:
                         ocr_provider = fallback_provider
                         ocr_provider.load()
                         observations = ocr_provider.recognize(
-                            crops=crops,
-                            pts_list=pts_list,
+                            crops=recognition_crops,
+                            pts_list=recognition_pts,
                             language=manifest.source_language,
                             **extra_kwargs,
                         )
@@ -480,7 +661,14 @@ class BackgroundWorker:
                 if not self.is_cancelled(project_id):
                     self.repo.save_stage_run(project_id, stage3)
 
-                cues = self.reconstructor.build_cues(observations)
+                local_cues = self.reconstructor.build_cues(observations)
+                # A hybrid cloud transcript is authoritative when local OCR
+                # yields no usable observations (for example decoder failure).
+                # Never replace valid cloud cues with an empty reconstruction.
+                if local_cues:
+                    cues = local_cues
+                elif not cues and cloud_cues:
+                    cues = cloud_cues
 
                 if self.is_cancelled(project_id):
                     raise InterruptedError("Tiến trình đã bị người dùng dừng / hủy.")

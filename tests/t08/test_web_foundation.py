@@ -324,6 +324,29 @@ class WebFoundationTest(unittest.TestCase):
         # 4. GlobalSettingsView đồng bộ initialTab khi prop thay đổi
         settings_content = settings_file.read_text(encoding="utf-8")
         self.assertIn("initialTab && initialTab !== activeTab", settings_content)
+    def test_admin_lan_mvp_static_contract(self) -> None:
+        api_types = (REPOSITORY_ROOT / "web" / "src" / "types" / "api.ts").read_text(encoding="utf-8")
+        client = (REPOSITORY_ROOT / "web" / "src" / "api" / "client.ts").read_text(encoding="utf-8")
+        admin_dir = REPOSITORY_ROOT / "web" / "src" / "components" / "admin"
+        view = (admin_dir / "AdminLanView.tsx").read_text(encoding="utf-8")
+        hook = (admin_dir / "useLanOverview.ts").read_text(encoding="utf-8")
+
+        for contract in ("LanWorker", "LanJob", "LanDownload", "LanOverview"):
+            self.assertIn(f"export interface {contract}", api_types)
+        self.assertIn("export class StudioApiError", client)
+        self.assertIn("getLanOverview(): Promise<LanOverview>", client)
+        self.assertNotIn("listWorkers(): Promise<any[]>", client)
+
+        for component in ("WorkersPanel.tsx", "JobsPanel.tsx", "DownloadsPanel.tsx", "LanUi.tsx"):
+            self.assertTrue((admin_dir / component).exists())
+        self.assertIn("inFlight", hook)
+        self.assertIn("requestId", hook)
+        self.assertIn("LAN_EVENTS", hook)
+        self.assertIn("window.setInterval", hook)
+        self.assertIn("aria-live", view)
+        self.assertIn("ConfirmDialog", view)
+        self.assertIn("lan.stale", view)
+        self.assertIn("focus-visible", (admin_dir / "LanUi.tsx").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

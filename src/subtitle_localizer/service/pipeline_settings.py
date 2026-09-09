@@ -40,8 +40,11 @@ class ExtractionSettings(BaseModel):
     method: str = "ocr"
 
     # 1. Cấu hình OCR (Thị giác):
-    engine: str = "rapidocr"  # "rapidocr" | "paddle"
-    primary_backend: str = "rapidocr"  # "rapidocr" | "paddle" | "auto"
+    # RapidOCR remains the safe default because it includes DBNet detection;
+    # PP-OCRv5 is recognition-only and is enabled explicitly after detector
+    # boxes are available.
+    engine: str = "rapidocr"  # "rapidocr" | "ppocrv5" | "paddle"
+    primary_backend: str = "rapidocr"  # "rapidocr" | "ppocrv5" | "paddle" | "auto"
     fallback_backend: str = "rapidocr"
     # Number of detected text crops processed per recognizer call. RapidOCR
     # supports this batching internally; it does not batch video frames.
@@ -60,6 +63,21 @@ class ExtractionSettings(BaseModel):
     # Mặc định tắt để tránh nhân số lượt detector/recognizer trên mọi frame.
     include_advanced_preprocessing: bool = False
     edge_gating_threshold: float = 0.0  # Lọc bỏ frame không có nét chữ (Laplacian/Sobel energy)
+
+    # Breakthrough OCR opt-in controls.  Defaults preserve legacy behaviour.
+    ppocr_model_tier: str = "mobile"
+    enable_nvdec_hwaccel: bool = False
+    nvdec_device_id: int = 0
+    enable_anti_noise_funnel: bool = False
+    anti_noise_ar_min: float = 0.88
+    anti_noise_h_max: int = 130
+    anti_noise_swt_cov_max: float = 0.40
+    anti_noise_lum_min: int = 135
+    enable_stroke_dhash_cache: bool = False
+    stroke_dhash_threshold: int = 4
+    dbnet_limit_side_len: int = 960
+    dbnet_limit_type: str = "max"
+    hardware_tuning_mode: str = "auto"
 
 
     # 3. Cấu hình VLM Multimodal AI:

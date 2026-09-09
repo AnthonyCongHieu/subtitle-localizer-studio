@@ -79,6 +79,41 @@ class LanCoordinatorTests(unittest.TestCase):
         self.assertEqual(retried.worker_id, "new")
         self.assertEqual(retried.status, "queued")
 
+    def test_claim_lease_fencing_heartbeat_and_expiry(self) -> None:
+        coordinator = LanCoordinator(lease_seconds=1)
+        coordinator.register_worker({"worker_id": "leased", "capabilities": {"ocr": True}})
+        job = coordinator.create_job({"project_id": "p", "worker_id": "leased", "idempotency_key": "lease", "max_attempts": 2})
+        claimed = coordinator.claim_next_job("leased")
+        self.assertEqual(claimed.attempt, 1)
+        self.assertTrue(claimed.lease_id)
+        original_expiry = claimed.lease_expires_at
+        with self.assertRaises(ValueError):
+            coordinator.update_job(job.job_id, {"status": "completed", "lease_id": "stale"})
+        coordinator.heartbeat("leased", {"job_id": job.job_id, "lease_id": claimed.lease_id})
+        self.assertGreaterEqual(coordinator.get_job(job.job_id).lease_expires_at, original_expiry)
+        coordinator.get_job(job.job_id).lease_expires_at = 0
+        expired = coordinator.reap_expired_jobs()
+        self.assertEqual(expired[0].status, "queued")
+        self.assertIsNone(coordinator.list_workers()[0]["active_job_id"])
+
+    def test_scheduler_filters_capability_before_queue_depth(self) -> None:
+        coordinator = LanCoordinator()
+        coordinator.register_worker({"worker_id": "free-wrong", "capabilities": {"translation": True}})
+        coordinator.register_worker({"worker_id": "busy-right", "capabilities": {"ocr": True}})
+        coordinator.heartbeat("busy-right", {"queue_depth": 5})
+        job = coordinator.create_job({"project_id": "p", "job_type": "ocr", "idempotency_key": "capability"})
+        self.assertEqual(job.worker_id, "busy-right")
+
+    def test_terminal_update_clears_active_worker_and_preserves_legacy_updates(self) -> None:
+        coordinator = LanCoordinator()
+        coordinator.register_worker({"worker_id": "legacy"})
+        job = coordinator.create_job({"project_id": "p", "worker_id": "legacy", "idempotency_key": "legacy-update"})
+        coordinator.claim_next_job("legacy")
+        completed = coordinator.update_job(job.job_id, {"status": "completed", "result": {"ok": True}, "artifacts": [{"path": "out.srt"}]})
+        self.assertIsNone(completed.lease_id)
+        self.assertIsNotNone(completed.finished_at)
+        self.assertIsNone(coordinator.list_workers()[0]["active_job_id"])
+
     def test_cancel_clears_worker_active_job(self) -> None:
         coordinator = LanCoordinator()
         coordinator.register_worker({"worker_id": "w"})
@@ -181,6 +216,18 @@ class LanCoordinatorTests(unittest.TestCase):
 
 
 class LanApiTests(unittest.TestCase):
+    def test_cidr_allowlist_and_overview_endpoint(self) -> None:
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"SL_LAN_ALLOWED_IPS": "0.0.0.0/0,::/0"}):
+            db = Database(Path(tmp) / "cidr.db")
+            repo = ProjectRepository(db)
+            client = TestClient(create_app(database=db, repo=repo, auth_token="secret", output_root=Path(tmp) / "out"))
+            response = client.get("/api/v1/admin/overview", headers={"Authorization": "Bearer secret"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["protocol_version"], 2)
+            self.assertIn("counts", response.json())
+            db.close()
+
     def test_optional_lan_ip_whitelist_denies_non_allowed_client(self) -> None:
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"SL_LAN_ALLOWED_IPS": "192.0.2.10"}):

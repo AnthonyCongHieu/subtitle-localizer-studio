@@ -1,4 +1,24 @@
-import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1 } from '../types/api';
+import {
+  LanDownload,
+  LanJob,
+  LanOverview,
+  LanWorker,
+  ProjectManifestV1,
+  RegionTrackV1,
+  SubtitleCueV1,
+} from '../types/api';
+
+export class StudioApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code?: string,
+    public readonly detail?: unknown,
+  ) {
+    super(message);
+    this.name = 'StudioApiError';
+  }
+}
 
 // Resolve the API from the page origin so a browser on another LAN machine
 // talks to the host that served the UI (localhost must only be the dev fallback).
@@ -27,6 +47,22 @@ export class StudioApiClient {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${this.token}`,
     };
+  }
+
+  private async adminRequest<T>(path: string, init?: RequestInit, fallback = 'Yêu cầu quản trị LAN thất bại'): Promise<T> {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${path}`, { ...init, headers: { ...this.headers(), ...init?.headers } });
+    } catch (error) {
+      throw new StudioApiError('Không thể kết nối máy chủ điều phối LAN', 0, 'network_error', error);
+    }
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null) as { detail?: unknown; code?: string } | null;
+      const detail = typeof payload?.detail === 'string' ? payload.detail : fallback;
+      throw new StudioApiError(detail, res.status, payload?.code, payload?.detail);
+    }
+    if (res.status === 204) return undefined as T;
+    return res.json() as Promise<T>;
   }
 
   async healthCheck(): Promise<boolean> {
@@ -1113,50 +1149,54 @@ export class StudioApiClient {
     return res.json();
   }
 
-  async listWorkers(): Promise<any[]> {
-    const res = await fetch(`${API_BASE}/admin/workers`, { headers: this.headers() });
-    if (!res.ok) throw new Error('Không thể tải danh sách worker');
-    return res.json();
+  async listWorkers(): Promise<LanWorker[]> {
+    return this.adminRequest<LanWorker[]>('/admin/workers', undefined, 'Không thể tải danh sách worker');
   }
 
-  async listAdminJobs(status?: string): Promise<any[]> {
+  async listAdminJobs(status?: string): Promise<LanJob[]> {
     const query = status ? `?status=${encodeURIComponent(status)}` : '';
-    const res = await fetch(`${API_BASE}/admin/jobs${query}`, { headers: this.headers() });
-    if (!res.ok) throw new Error('Không thể tải hàng đợi LAN');
-    return res.json();
+    return this.adminRequest<LanJob[]>(`/admin/jobs${query}`, undefined, 'Không thể tải hàng đợi LAN');
   }
 
-  async listDownloadApprovals(status?: string): Promise<any[]> {
+  async listDownloadApprovals(status?: string): Promise<LanDownload[]> {
     const query = status ? `?status=${encodeURIComponent(status)}` : '';
-    const res = await fetch(`${API_BASE}/admin/downloads${query}`, { headers: this.headers() });
-    if (!res.ok) throw new Error('Không thể tải danh sách yêu cầu duyệt');
-    return res.json();
+    return this.adminRequest<LanDownload[]>(`/admin/downloads${query}`, undefined, 'Không thể tải danh sách yêu cầu duyệt');
   }
 
-  async decideDownload(requestId: string, approved: boolean): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/downloads/${encodeURIComponent(requestId)}/decision`, {
-      method: 'POST', headers: this.headers(), body: JSON.stringify({ approved }),
-    });
-    if (!res.ok) throw new Error('Không thể cập nhật quyết định tải');
-    return res.json();
+  async getLanOverview(): Promise<LanOverview> {
+    const [workers, jobs, downloads] = await Promise.all([
+      this.listWorkers(), this.listAdminJobs(), this.listDownloadApprovals(),
+    ]);
+    return {
+      workers, jobs, downloads,
+      worker_count: workers.length,
+      online_worker_count: workers.filter(worker => worker.is_online && worker.status !== 'disabled').length,
+      running_job_count: jobs.filter(job => job.status === 'running').length,
+      queue_depth: workers.reduce((total, worker) => total + Number(worker.queue_depth || 0), 0),
+      failed_job_count: jobs.filter(job => job.status === 'failed').length,
+      pending_download_count: downloads.filter(item => ['requested', 'preview_ready'].includes(item.status || '')).length,
+      fetched_at: Date.now(),
+    };
   }
 
-  async setWorkerStatus(workerId: string, status: 'online' | 'draining' | 'disabled'): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/workers/${encodeURIComponent(workerId)}/status?status=${status}`, { method: 'POST', headers: this.headers() });
-    if (!res.ok) throw new Error('Không thể cập nhật trạng thái worker');
-    return res.json();
+  async decideDownload(requestId: string, approved: boolean): Promise<LanDownload> {
+    return this.adminRequest<LanDownload>(`/admin/downloads/${encodeURIComponent(requestId)}/decision`, {
+      method: 'POST', body: JSON.stringify({ approved }),
+    }, 'Không thể cập nhật quyết định tải');
   }
 
-  async cancelAdminJob(jobId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', headers: this.headers() });
-    if (!res.ok) throw new Error('Không thể hủy job');
-    return res.json();
+  async setWorkerStatus(workerId: string, status: 'online' | 'draining' | 'disabled'): Promise<LanWorker> {
+    return this.adminRequest<LanWorker>(`/admin/workers/${encodeURIComponent(workerId)}/status?status=${status}`, {
+      method: 'POST',
+    }, 'Không thể cập nhật trạng thái worker');
   }
 
-  async retryAdminJob(jobId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', headers: this.headers() });
-    if (!res.ok) throw new Error('Không thể retry job');
-    return res.json();
+  async cancelAdminJob(jobId: string): Promise<LanJob> {
+    return this.adminRequest<LanJob>(`/admin/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }, 'Không thể hủy job');
+  }
+
+  async retryAdminJob(jobId: string): Promise<LanJob> {
+    return this.adminRequest<LanJob>(`/admin/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' }, 'Không thể retry job');
   }
 }
 
@@ -1532,12 +1572,25 @@ export interface VideoSearchResponse {
 
 export type ExtractionMethod = 'ocr' | 'asr_whisper' | 'vlm_gemini' | 'demux_stream';
 
+/** OCR backends understood by the pipeline settings API.
+ *
+ * `rapidocr` remains the safe detector-backed default.  PP-OCRv5 currently
+ * supplies recognition models and is selected after text boxes have been
+ * produced by the detector bridge.  The `auto` value is accepted by the
+ * backend for hardware-aware selection; legacy callers can still pass an
+ * arbitrary string through the optional fields below.
+ */
+export type OcrBackend = 'rapidocr' | 'ppocrv5' | 'paddle' | 'auto';
+export type PpOcrModelTier = 'mobile' | 'server';
+export type OcrPerformanceProfile = 'fast' | 'full_speed_quality' | 'maximum_recall';
+export type HardwareTuningMode = 'auto' | 'manual';
+
 export interface ExtractionSettings {
   // Phân chia 2 Master Mode:
   // - "local": Chạy hoàn toàn cục bộ trên máy, tận dụng GPU RTX 3050 & 16 CPU cores (0đ, 100% offline)
   // - "api": Chạy qua đám mây Cloud AI (Google Gemini, ByteDance CapCut, hoặc Groq Whisper)
   mode?: 'local' | 'api';
-  local_engine?: 'rapidocr' | 'whisper' | 'demux' | 'hybrid' | 'pure_ocr';
+  local_engine?: 'rapidocr' | 'whisper' | 'demux' | 'hybrid' | 'pure_ocr' | 'ppocrv5';
   api_provider?: 'gemini' | 'capcut' | 'groq';
   api_fusion_mode?: 'hybrid_ocr' | 'api_only';
   /** @deprecated removed from production; ignored by backend */
@@ -1561,12 +1614,41 @@ export interface ExtractionSettings {
   method?: ExtractionMethod;
 
   // 1. OCR (Thị giác khung hình)
-  engine: 'rapidocr' | 'paddle';
+  /** Primary OCR engine.  PP-OCRv5 is an opt-in recognizer tier. */
+  engine: OcrBackend | 'ppocrv5-mobile' | 'ppocrv5-server';
+  /** Detector/recognizer selection used by the worker bridge. */
+  primary_backend?: OcrBackend | string;
+  fallback_backend?: OcrBackend | string;
+  ppocr_model_tier?: PpOcrModelTier;
+  /** Number of text crops sent to the recognizer in one ONNX call. */
+  recognition_batch_size?: number;
+
+  // Hardware decode and adaptive execution
+  enable_nvdec_hwaccel?: boolean;
+  nvdec_device_id?: number;
+  hardware_tuning_mode?: HardwareTuningMode | string;
+
+  // DBNet detector tuning (used before PP-OCRv5 recognition)
+  dbnet_limit_side_len?: number;
+  dbnet_limit_type?: 'max' | 'min' | string;
+
+  // Five-stage anti-false-positive funnel
+  enable_anti_noise_funnel?: boolean;
+  anti_noise_ar_min?: number;
+  anti_noise_h_max?: number;
+  anti_noise_swt_cov_max?: number;
+  anti_noise_lum_min?: number;
+  enable_stroke_dhash_cache?: boolean;
+  stroke_dhash_threshold?: number;
+
   default_source_lang?: 'zh' | 'en' | 'vi' | 'auto';
   sample_fps: number;
   diff_threshold: number;
   enable_gap_rescue: boolean;
+  gap_rescue_max_frames?: number;
   enable_roi_tightening: boolean;
+  performance_profile?: OcrPerformanceProfile | string;
+  include_advanced_preprocessing?: boolean;
 
 
   // 3. VLM Multimodal AI (Gemini Video)

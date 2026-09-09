@@ -36,6 +36,34 @@ def propose_default_roi(width: int, height: int, is_portrait: bool = False) -> R
     )
 
 
+def propose_default_rois(width: int, height: int) -> List[RegionTrackV1]:
+    """Return a small set of subtitle bands for videos with moving placement.
+
+    The primary bottom ROI remains first for backwards compatibility; two
+    additional upper/centre bands cover captions that are composited away from
+    the bottom edge.  Coordinates are normalized and therefore independent of
+    the source resolution.
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError("Video dimensions must be positive")
+    is_portrait = height > width
+    if is_portrait:
+        bands = ((0.62, 0.34), (0.38, 0.20), (0.08, 0.20))
+        x, w = 0.05, 0.90
+    else:
+        bands = ((0.78, 0.18), (0.38, 0.18), (0.06, 0.18))
+        x, w = 0.08, 0.84
+    rois: List[RegionTrackV1] = []
+    for y, h in bands:
+        rois.append(
+            RegionTrackV1(
+                region_id=f"roi-{uuid.uuid4().hex[:8]}",
+                x=round(x, 4), y=round(y, 4), width=round(w, 4), height=round(h, 4),
+            )
+        )
+    return rois
+
+
 def compute_tight_roi_from_observations(
     observations: List[Any],
     base_roi: RegionTrackV1,

@@ -4,6 +4,7 @@ from typing import Dict, Optional
 
 from subtitle_localizer.ocr.base import OcrProvider
 from subtitle_localizer.ocr.paddle import PaddleOcrAdapter
+from subtitle_localizer.ocr.ppocrv5 import PPOCRv5Provider
 from subtitle_localizer.ocr.rapid import RapidOcrProvider
 
 
@@ -13,6 +14,9 @@ class OcrRegistry:
     def __init__(self) -> None:
         self._providers: Dict[str, OcrProvider] = {}
         # Đăng ký sẵn rapidocr và paddle adapters thực tế
+        self.register("ppocrv5", PPOCRv5Provider(model_tier="mobile"))
+        self.register("ppocrv5-mobile", PPOCRv5Provider(model_tier="mobile"))
+        self.register("ppocrv5-server", PPOCRv5Provider(model_tier="server"))
         self.register("rapidocr", RapidOcrProvider())
         self.register("paddle-zh", PaddleOcrAdapter(model_version="v5-mobile", language="ch"))
         self.register("paddle-ja", PaddleOcrAdapter(model_version="v5-mobile", language="japan"))

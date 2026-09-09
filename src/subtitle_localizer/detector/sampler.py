@@ -6,6 +6,58 @@ import math
 import numpy as np
 
 
+def detect_scene_cut(
+    previous_hist: Optional[np.ndarray],
+    frame: Any,
+    threshold: float = 0.65,
+) -> Tuple[bool, np.ndarray]:
+    """Compare a frame histogram with the previous one.
+
+    Returns ``(is_cut, current_hist)`` so callers can keep the returned
+    histogram between frames.  Correlation is robust to small luminance noise;
+    a low score indicates a hard scene transition.
+    """
+    import cv2
+
+    if frame is None or getattr(frame, "size", 0) == 0:
+        current = np.zeros((32, 1), dtype=np.float32)
+        return False, current
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if getattr(frame, "ndim", 0) == 3 else frame
+    current = cv2.calcHist([gray], [0], None, [32], [0, 256])
+    cv2.normalize(current, current)
+    if previous_hist is None or getattr(previous_hist, "size", 0) == 0:
+        return False, current
+    prev = np.asarray(previous_hist, dtype=np.float32)
+    score = float(cv2.compareHist(prev.reshape(-1, 1), current, cv2.HISTCMP_CORREL))
+    return score < float(threshold), current
+
+
+def merge_voice_intervals(
+    intervals: List[Tuple[float, float]],
+    padding: float = 0.4,
+    merge_gap: float = 0.8,
+) -> List[Tuple[float, float]]:
+    """Pad and merge overlapping/nearby voice activity intervals."""
+    if not intervals:
+        return []
+    if padding < 0 or merge_gap < 0:
+        raise ValueError("padding and merge_gap must be non-negative")
+    expanded = []
+    for start, end in intervals:
+        if end < start:
+            start, end = end, start
+        expanded.append((max(0.0, float(start) - padding), float(end) + padding))
+    expanded.sort(key=lambda item: item[0])
+    merged: List[Tuple[float, float]] = [expanded[0]]
+    for start, end in expanded[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end + merge_gap:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 class AdaptiveFrameSampler:
     """Bộ lấy mẫu frame thích ứng nhằm tối ưu hiệu năng OCR từ file video thật."""
 
@@ -146,3 +198,61 @@ class AdaptiveFrameSampler:
 
         cap.release()
         return crops, pts_list
+
+    def stream_voice_windows(
+        self,
+        video_path: str | Path,
+        voice_windows: List[Tuple[float, float]],
+        roi_norm: Optional[Tuple[float, float, float, float]] = None,
+        roi_norms: Optional[List[Tuple[float, float, float, float]]] = None,
+        sample_fps: Optional[float] = None,
+    ):
+        """Yield ``(crop, pts)`` only for frames inside VAD voice windows.
+
+        The iterator is intentionally CPU/OpenCV based and fails closed when
+        the input cannot be opened; callers can substitute the NVDEC decoder
+        without changing this contract.
+        """
+        import cv2
+
+        windows = sorted(
+            (max(0.0, float(start)), max(0.0, float(end)))
+            for start, end in voice_windows
+            if float(end) >= float(start)
+        )
+        if not windows:
+            return
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            cap.release()
+            return
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+        step = max(1, int(round(fps / max(0.1, sample_fps or self.sample_fps))))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        rois = [r for r in (roi_norms or ([roi_norm] if roi_norm else [])) if r and len(r) == 4]
+        frame_idx = 0
+        window_idx = 0
+        try:
+            while window_idx < len(windows):
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    break
+                pts = frame_idx / fps
+                while window_idx < len(windows) and pts > windows[window_idx][1]:
+                    window_idx += 1
+                if window_idx >= len(windows):
+                    break
+                start, end = windows[window_idx]
+                if start <= pts <= end and frame_idx % step == 0:
+                    if rois and width > 0 and height > 0:
+                        for rx, ry, rw, rh in rois:
+                            x1, y1 = max(0, int(rx * width)), max(0, int(ry * height))
+                            x2, y2 = min(width, int((rx + rw) * width)), min(height, int((ry + rh) * height))
+                            if x2 > x1 and y2 > y1:
+                                yield frame[y1:y2, x1:x2], round(pts, 3)
+                    else:
+                        yield frame, round(pts, 3)
+                frame_idx += 1
+        finally:
+            cap.release()

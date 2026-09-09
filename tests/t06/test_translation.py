@@ -91,6 +91,33 @@ class TranslationRuntimeTest(unittest.TestCase):
         self.assertTrue(settings.auto_fallback)
         self.assertEqual(settings.provider, "local")
 
+    def test_registry_respects_gemini_setting(self) -> None:
+        from subtitle_localizer.service.pipeline_settings import GlobalPipelineSettings, TranslationSettings, set_global_pipeline_settings
+        from subtitle_localizer.translation.real import RealTranslationProvider
+        try:
+            settings = GlobalPipelineSettings(translation=TranslationSettings(provider="gemini"))
+            set_global_pipeline_settings(settings)
+            provider = TranslationRegistry().get_provider_for_pair("zh", "vi")
+            self.assertIsInstance(provider, RealTranslationProvider)
+        finally:
+            set_global_pipeline_settings(GlobalPipelineSettings())
+
+    def test_real_provider_does_not_force_local_in_pytest(self) -> None:
+        from unittest.mock import patch
+        import os
+        from subtitle_localizer.service.pipeline_settings import GlobalPipelineSettings, TranslationSettings, set_global_pipeline_settings
+        provider = __import__("subtitle_localizer.translation.real", fromlist=["RealTranslationProvider"]).RealTranslationProvider()
+        cues = [SubtitleCueV1(cue_id="c1", start_pts=0, end_pts=1, source_text="你好")]
+        settings = GlobalPipelineSettings(translation=TranslationSettings(provider="gemini", auto_fallback=False))
+        try:
+            set_global_pipeline_settings(settings)
+            with patch.dict(os.environ, {"TEST_WITH_GEMINI": "1"}), patch.object(provider, "_translate_with_gemini", return_value=True) as gem, patch.object(provider, "_translate_with_local_qwen", return_value=False) as local:
+                provider.translate_cues(cues)
+            gem.assert_called_once()
+            local.assert_not_called()
+        finally:
+            set_global_pipeline_settings(GlobalPipelineSettings())
+
     def test_extraction_and_pipeline_settings_defaults_api_priority(self) -> None:
         from subtitle_localizer.service.pipeline_settings import ExtractionSettings, TranslationSettings, GlobalPipelineSettings
         ext = ExtractionSettings()

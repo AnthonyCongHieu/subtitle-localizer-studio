@@ -17,6 +17,10 @@ dist/
 /cache/
 *.sqlite3
 *.db
+*.onnx
+benchmarks/models/
+benchmarks/crops/
+.claude/
 benchmarks/golden/clips/
 benchmarks/golden/ground_truth/private/
 benchmarks/results/

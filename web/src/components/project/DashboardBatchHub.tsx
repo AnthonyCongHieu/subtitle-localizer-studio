@@ -4205,6 +4205,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                                   ) : (
                                     <>
                                       <option value="rapidocr">RapidOCR ONNX (Khuyên dùng)</option>
+                                      <option value="ppocrv5">PP-OCRv5 Mobile (GPU)</option>
                                       <option value="paddle">PaddleOCR</option>
                                     </>
                                   )}

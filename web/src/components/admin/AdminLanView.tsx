@@ -1,66 +1,48 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Activity, BriefcaseBusiness, RefreshCw, Server, Wifi, PauseCircle, Ban, PlayCircle } from 'lucide-react';
-import { apiClient } from '../../api/client';
-import { wsClient, WsConnectionStatus } from '../../api/websocket';
+import React, { useState } from 'react';
+import { Activity, BriefcaseBusiness, Clock3, RefreshCw, Server, Wifi } from 'lucide-react';
+import { LanDownload, LanJob, LanWorker } from '../../types/api';
+import { DownloadsPanel } from './DownloadsPanel';
+import { JobsPanel } from './JobsPanel';
+import { ConfirmDialog, focusRing, InitialState } from './LanUi';
+import { useLanOverview } from './useLanOverview';
+import { WorkersPanel } from './WorkersPanel';
+
+type Confirmation = { title: string; detail: string; label: string; run: () => void; destructive?: boolean } | null;
 
 export const AdminLanView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const [workers, setWorkers] = useState<any[]>([]);
-  const [jobs, setJobs] = useState<any[]>([]);
-  const [downloads, setDownloads] = useState<any[]>([]);
-  const [expandedJob, setExpandedJob] = useState<string | null>(null);
-  const [jobFilter, setJobFilter] = useState('');
-  const [jobStatus, setJobStatus] = useState('all');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [connection, setConnection] = useState<WsConnectionStatus>(wsClient.getStatus());
-  const refresh = useCallback(async () => {
-    setLoading(true); setError(null);
-    try { const [w, j, d] = await Promise.all([apiClient.listWorkers(), apiClient.listAdminJobs(), apiClient.listDownloadApprovals()]); setWorkers(w); setJobs(j); setDownloads(d); }
-    catch (e: any) { setError(e?.message || 'Không thể tải trạng thái LAN'); }
-    finally { setLoading(false); }
-  }, []);
-  useEffect(() => {
-    refresh();
-    const timer = window.setInterval(refresh, 10000);
-    wsClient.connect();
-    const unsubscribeStatus = wsClient.onStatusChange(setConnection);
-    const unsubscribe = wsClient.onEvent(() => { refresh(); });
-    return () => { window.clearInterval(timer); unsubscribe(); unsubscribeStatus(); };
-  }, [refresh]);
-  const decide = async (requestId: string, approved: boolean) => {
-    try { await apiClient.decideDownload(requestId, approved); await refresh(); }
-    catch (e: any) { setError(e?.message || 'Không thể cập nhật quyết định tải'); }
+  const lan = useLanOverview();
+  const [confirmation, setConfirmation] = useState<Confirmation>(null);
+  if (!lan.overview) return <main className="min-h-screen bg-slate-950 p-4 text-slate-100 md:p-6"><div className="mx-auto max-w-7xl"><InitialState error={lan.loading ? null : lan.error} onRetry={lan.refresh} /></div></main>;
+  const { overview } = lan;
+  const askWorkerStatus = (worker: LanWorker, status: 'online' | 'draining' | 'disabled') => {
+    if (status !== 'disabled') { void lan.setWorkerStatus(worker.worker_id, status); return; }
+    setConfirmation({ title: 'Vô hiệu hóa worker?', detail: `Worker ${worker.worker_id} sẽ không nhận job hoặc download mới cho tới khi được bật lại.`, label: 'Vô hiệu hóa', run: () => void lan.setWorkerStatus(worker.worker_id, status) });
   };
-  const setWorkerStatus = async (workerId: string, status: 'draining' | 'online' | 'disabled') => {
-    try { await apiClient.setWorkerStatus(workerId, status); await refresh(); }
-    catch (e: any) { setError(e?.message || 'Không thể cập nhật worker'); }
+  const askCancel = (job: LanJob) => setConfirmation({ title: 'Hủy job đang xử lý?', detail: `Job ${job.job_id} sẽ chuyển sang cancelled. Bạn có thể retry sau.`, label: 'Hủy job', run: () => void lan.cancelJob(job.job_id) });
+  const askDecision = (item: LanDownload, approved: boolean) => {
+    if (approved) { void lan.decide(item.request_id, true); return; }
+    setConfirmation({ title: 'Từ chối yêu cầu tải?', detail: `${item.title || item.source || item.request_id} sẽ không được worker tải.`, label: 'Từ chối tải', run: () => void lan.decide(item.request_id, false) });
   };
-  const cancelJob = async (jobId: string) => {
-    try { await apiClient.cancelAdminJob(jobId); await refresh(); }
-    catch (e: any) { setError(e?.message || 'Không thể hủy job'); }
-  };
-  const retryJob = async (jobId: string) => {
-    try { await apiClient.retryAdminJob(jobId); await refresh(); }
-    catch (e: any) { setError(e?.message || 'Không thể retry job'); }
-  };
-  const visibleJobs = jobs.filter(j => {
-    const needle = jobFilter.trim().toLowerCase();
-    const matchesText = !needle || [j.job_id, j.project_id, j.worker_id].some(v => String(v || '').toLowerCase().includes(needle));
-    return matchesText && (jobStatus === 'all' || j.status === jobStatus);
-  });
-  const onlineWorkers = workers.filter(w => w.is_online && w.status !== 'disabled');
-  const queueDepth = workers.reduce((sum, w) => sum + Number(w.queue_depth || 0), 0);
-  const failedJobs = jobs.filter(j => j.status === 'failed').length;
-  const statusTone = (s: string) => ({ online: 'text-emerald-300 bg-emerald-950/50 border-emerald-800/60', draining: 'text-amber-300 bg-amber-950/50 border-amber-800/60', disabled: 'text-rose-300 bg-rose-950/50 border-rose-800/60' }[s] || 'text-slate-400 bg-slate-800/50 border-slate-700');
-  return <div className="h-screen bg-slate-950 text-slate-100 p-4 md:p-6 overflow-auto">
-    <div className="max-w-7xl mx-auto space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs uppercase tracking-widest text-indigo-400">Admin LAN · Control plane</p><h1 className="text-2xl font-bold">Điều phối Worker & Job</h1><p className="text-xs text-slate-400 mt-1">Truy cập: <span className="text-cyan-300">{typeof window !== 'undefined' ? window.location.origin + '/admin.html' : 'LAN host'}</span> · WebSocket: <span className={connection === 'connected' ? 'text-emerald-400' : 'text-amber-400'}>{connection}</span></p></div><div className="flex gap-2"><button onClick={refresh} disabled={loading} className="px-3 py-2 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50"><RefreshCw className={`w-4 h-4 inline mr-2 ${loading ? 'animate-spin' : ''}`}/>Đồng bộ</button><button onClick={onBack} className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Về Dashboard</button></div></header>
-      {error && <div className="p-3 rounded border border-rose-800 bg-rose-950/40 text-rose-300">{error}</div>}
-      <section className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3"><div className="p-4 rounded-xl bg-slate-900 border border-slate-800"><Server className="text-cyan-400"/><p className="text-2xl font-bold mt-2">{workers.length}</p><p className="text-slate-400 text-sm">Worker đã đăng ký</p></div><div className="p-4 rounded-xl bg-slate-900 border border-slate-800"><Wifi className="text-emerald-400"/><p className="text-2xl font-bold mt-2">{onlineWorkers.length}<span className="text-sm text-slate-500"> / {workers.length}</span></p><p className="text-slate-400 text-sm">Đang sẵn sàng</p></div><div className="p-4 rounded-xl bg-slate-900 border border-slate-800"><BriefcaseBusiness className="text-amber-400"/><p className="text-2xl font-bold mt-2">{jobs.filter(j => j.status === 'running').length}</p><p className="text-slate-400 text-sm">Job đang chạy</p></div><div className="p-4 rounded-xl bg-slate-900 border border-slate-800"><Activity className="text-violet-400"/><p className="text-2xl font-bold mt-2">{queueDepth}</p><p className="text-slate-400 text-sm">Item trong queue {failedJobs > 0 && <span className="text-rose-400">· {failedJobs} lỗi</span>}</p></div></section>
-      <section className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden"><div className="p-4 border-b border-slate-800 flex items-center"><h2 className="font-semibold">Workers</h2><span className="ml-auto text-xs text-slate-500">Heartbeat tự làm mới mỗi 10 giây</span></div><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="text-slate-400 bg-slate-950/60"><tr><th className="p-3 text-left">Worker</th><th className="p-3 text-left">GPU / VRAM</th><th className="p-3 text-left">Trạng thái</th><th className="p-3 text-left">Job</th><th className="p-3 text-left">Queue</th><th className="p-3 text-left">Heartbeat</th><th className="p-3 text-left">Điều khiển</th></tr></thead><tbody>{workers.map(w => <tr key={w.worker_id} className="border-t border-slate-800 hover:bg-slate-800/40"><td className="p-3 font-medium">{w.worker_id}<div className="text-xs text-slate-500">{w.hostname || w.ip_address || '—'}</div>{w.last_error && <div className="text-xs text-rose-300 truncate max-w-48" title={w.last_error}>Lỗi: {w.last_error}</div>}</td><td className="p-3">{w.gpu_name || 'CPU'}<div className="text-xs text-slate-500">{w.vram_mb ? `${w.vram_mb} MB` : ''}</div></td><td className="p-3"><span className={`inline-flex items-center px-2 py-1 rounded-full border text-xs ${statusTone(w.status || (w.is_online ? 'online' : 'offline'))}`}>{w.is_online ? (w.status === 'draining' ? 'Draining' : 'Online') : 'Offline'}</span></td><td className="p-3 font-mono text-xs">{w.active_job_id || '—'}</td><td className="p-3 font-semibold">{w.queue_depth ?? 0}</td><td className="p-3 text-slate-400">{w.last_seen ? new Date(w.last_seen * 1000).toLocaleTimeString() : '—'}</td><td className="p-3"><div className="flex gap-1.5">{w.status === 'disabled' ? <button title="Bật worker" onClick={() => setWorkerStatus(w.worker_id, 'online')} className="px-2 py-1 rounded bg-emerald-800 hover:bg-emerald-700 text-xs"><PlayCircle className="w-3 h-3 inline mr-1"/>Bật</button> : <><button title="Drain worker" onClick={() => setWorkerStatus(w.worker_id, w.status === 'draining' ? 'online' : 'draining')} className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs">{w.status === 'draining' ? <><PlayCircle className="w-3 h-3 inline mr-1"/>Nhận job</> : <><PauseCircle className="w-3 h-3 inline mr-1"/>Drain</>}</button><button title="Vô hiệu hóa worker" onClick={() => setWorkerStatus(w.worker_id, 'disabled')} className="px-2 py-1 rounded bg-rose-950 hover:bg-rose-900 text-xs text-rose-300"><Ban className="w-3 h-3 inline"/></button></>}</div></td></tr>)}{!workers.length && <tr><td colSpan={7} className="p-6 text-center text-slate-500">Chưa có worker đăng ký</td></tr>}</tbody></table></div></section>
-      <section className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden"><div className="p-4 border-b border-slate-800 flex flex-wrap gap-2 items-center"><h2 className="font-semibold mr-auto">Jobs</h2><input aria-label="Tìm job" value={jobFilter} onChange={e => setJobFilter(e.target.value)} placeholder="Tìm job / project / worker" className="px-3 py-2 rounded bg-slate-950 border border-slate-700 text-sm"/><select aria-label="Lọc trạng thái" value={jobStatus} onChange={e => setJobStatus(e.target.value)} className="px-3 py-2 rounded bg-slate-950 border border-slate-700 text-sm"><option value="all">Tất cả trạng thái</option><option value="queued">queued</option><option value="running">running</option><option value="completed">completed</option><option value="failed">failed</option><option value="cancelled">cancelled</option></select></div><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="text-slate-400"><tr><th className="p-3 text-left">Job</th><th className="p-3 text-left">Project</th><th className="p-3 text-left">Worker</th><th className="p-3 text-left">Trạng thái</th><th className="p-3 text-left">Tiến độ</th><th className="p-3 text-left">Điều khiển</th></tr></thead><tbody>{visibleJobs.map(j => <React.Fragment key={j.job_id}><tr className="border-t border-slate-800"><td className="p-3 font-mono text-xs"><button className="text-indigo-300 hover:underline" onClick={() => setExpandedJob(expandedJob === j.job_id ? null : j.job_id)}>{j.job_id}</button></td><td className="p-3">{j.project_id}</td><td className="p-3">{j.worker_id}</td><td className="p-3">{j.status}</td><td className="p-3">{Math.round((j.progress || 0) * 100)}%</td><td className="p-3">{['queued', 'running'].includes(j.status) ? <button onClick={() => cancelJob(j.job_id)} className="px-2 py-1 rounded bg-rose-800 hover:bg-rose-700 text-xs">Hủy</button> : ['failed', 'cancelled'].includes(j.status) ? <button onClick={() => retryJob(j.job_id)} className="px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-xs">Retry</button> : <span className="text-slate-500">—</span>}</td></tr>{expandedJob === j.job_id && <tr className="bg-slate-950"><td colSpan={6} className="p-3 text-xs"><div className="text-slate-400 mb-1">Metrics / stage</div><pre className="whitespace-pre-wrap text-slate-300">{JSON.stringify(j.metrics || {}, null, 2)}</pre>{j.error && <div className="text-rose-300 mt-2">Lỗi: {j.error}</div>}</td></tr>}</React.Fragment>)}{!visibleJobs.length && <tr><td colSpan={6} className="p-6 text-center text-slate-500">Không có job phù hợp</td></tr>}</tbody></table></div></section>
-      <section className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden"><h2 className="p-4 font-semibold border-b border-slate-800">Duyệt tải video</h2><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="text-slate-400"><tr><th className="p-3 text-left">Video</th><th className="p-3 text-left">Worker</th><th className="p-3 text-left">Thời lượng</th><th className="p-3 text-left">Trạng thái</th><th className="p-3 text-left">Quyết định</th></tr></thead><tbody>{downloads.map(d => <tr key={d.request_id} className="border-t border-slate-800"><td className="p-3"><div>{d.title || d.source}</div><div className="text-xs text-slate-500 max-w-xl truncate">{d.source}</div></td><td className="p-3">{d.worker_id}</td><td className="p-3">{d.duration_seconds ? `${Math.round(d.duration_seconds)} giây` : '—'}</td><td className="p-3">{d.status}</td><td className="p-3">{d.status === 'preview_ready' ? <div className="flex gap-2"><button onClick={() => decide(d.request_id, true)} className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500">Duyệt tải</button><button onClick={() => decide(d.request_id, false)} className="px-3 py-1 rounded bg-rose-700 hover:bg-rose-600">Từ chối</button></div> : <span className="text-slate-500">Đã xử lý</span>}</td></tr>)}{!downloads.length && <tr><td colSpan={5} className="p-6 text-center text-slate-500">Chưa có yêu cầu chờ duyệt</td></tr>}</tbody></table></div></section>
-      {loading && <p className="text-xs text-slate-500">Đang đồng bộ...</p>}
+  const connectionLabel = lan.connection === 'connected' ? 'Realtime đã kết nối' : lan.connection === 'reconnecting' ? 'Đang kết nối lại' : lan.connection === 'connecting' ? 'Đang kết nối' : 'Realtime mất kết nối';
+  const ageSeconds = Math.round((lan.ageMs || 0) / 1000);
+  const stats = [
+    { label: 'Worker đã đăng ký', value: overview.worker_count, icon: Server, tone: 'text-cyan-400' },
+    { label: 'Đang sẵn sàng', value: `${overview.online_worker_count} / ${overview.worker_count}`, icon: Wifi, tone: 'text-emerald-400' },
+    { label: 'Job đang chạy', value: overview.running_job_count, icon: BriefcaseBusiness, tone: 'text-amber-400' },
+    { label: 'Item trong queue', value: overview.queue_depth, icon: Activity, tone: 'text-violet-400' },
+  ];
+  return <main className="min-h-screen overflow-auto bg-slate-950 p-4 text-slate-100 md:p-6">
+    <div className="mx-auto max-w-7xl space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs uppercase tracking-widest text-indigo-400">Admin LAN · Control plane</p><h1 className="text-2xl font-bold">Điều phối Worker & Job</h1><div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400"><span className={lan.connection === 'connected' ? 'text-emerald-400' : 'text-amber-400'}>{connectionLabel}</span><span aria-hidden="true">·</span><span className={lan.stale ? 'text-amber-300' : ''}><Clock3 className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />Cập nhật {ageSeconds < 2 ? 'vừa xong' : `${ageSeconds} giây trước`}{lan.stale ? ' · dữ liệu cũ' : ''}</span><span aria-hidden="true">·</span><span>Polling dự phòng 10 giây</span></div></div><div className="flex gap-2"><button onClick={lan.refresh} disabled={lan.refreshing} className={`rounded-lg bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700 disabled:opacity-50 ${focusRing}`}><RefreshCw className={`mr-2 inline h-4 w-4 ${lan.refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />{lan.refreshing ? 'Đang đồng bộ…' : 'Đồng bộ'}</button><button onClick={onBack} className={`rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium hover:bg-indigo-500 ${focusRing}`}>Về Dashboard</button></div></header>
+      <div className="sr-only" aria-live="polite" aria-atomic="true">{lan.notice?.message}</div>
+      {lan.notice && <div role={lan.notice.tone === 'error' ? 'alert' : 'status'} className={`rounded-lg border p-3 text-sm ${lan.notice.tone === 'error' ? 'border-rose-800 bg-rose-950/40 text-rose-300' : 'border-emerald-800 bg-emerald-950/30 text-emerald-300'}`}>{lan.notice.message}</div>}
+      {lan.error && !lan.notice && <div role="alert" className="rounded-lg border border-rose-800 bg-rose-950/40 p-3 text-sm text-rose-300">Lần đồng bộ gần nhất thất bại: {lan.error}. Đang giữ dữ liệu trước đó và sẽ thử lại.</div>}
+      <section aria-label="Tổng quan LAN" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{stats.map(({ label, value, icon: Icon, tone }) => <article key={label} className="rounded-xl border border-slate-800 bg-slate-900 p-4"><Icon className={`h-5 w-5 ${tone}`} aria-hidden="true" /><p className="mt-2 text-2xl font-bold">{value}</p><p className="text-sm text-slate-400">{label}</p></article>)}</section>
+      {(overview.failed_job_count > 0 || overview.pending_download_count > 0) && <p className="text-sm text-slate-400">Cần chú ý: <span className="text-rose-300">{overview.failed_job_count} job lỗi</span> · <span className="text-amber-300">{overview.pending_download_count} yêu cầu tải chờ duyệt</span></p>}
+      <WorkersPanel workers={overview.workers} isPending={lan.isPending} onStatus={askWorkerStatus} />
+      <JobsPanel jobs={overview.jobs} isPending={lan.isPending} onCancel={askCancel} onRetry={job => void lan.retryJob(job.job_id)} />
+      <DownloadsPanel downloads={overview.downloads} isPending={lan.isPending} onDecision={askDecision} />
     </div>
-  </div>;
+    {confirmation && <ConfirmDialog title={confirmation.title} detail={confirmation.detail} confirmLabel={confirmation.label} destructive={confirmation.destructive} onClose={() => setConfirmation(null)} onConfirm={() => { confirmation.run(); setConfirmation(null); }} />}
+  </main>;
 };

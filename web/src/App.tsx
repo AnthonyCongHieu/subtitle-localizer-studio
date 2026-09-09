@@ -912,17 +912,29 @@ export const App: React.FC = () => {
     apiClient.getStages(proj.project_id).then((stages) => {
       if (stages && stages.length > 0) {
         const sorted = [...stages].sort((a, b) => Number(a.start_time || 0) - Number(b.start_time || 0));
+        const pipelineStage = sorted.slice().reverse().find((s: any) => s.stage_name === 'pipeline');
+        const isPipelineDone = pipelineStage && ['completed', 'failed', 'cancelled'].includes(pipelineStage.status);
+        const runningStage = sorted.slice().reverse().find((s: any) => s.status === 'running');
         const latest = sorted[sorted.length - 1];
-        if (latest && latest.status === 'running') {
+
+        if ((latest && latest.status === 'running') || (runningStage && !isPipelineDone)) {
           setIsScanning(true);
-          const label = latest.metrics?.label || `Đang chạy: ${latest.stage_name}`;
+          const active = runningStage || latest;
+          const label = active.metrics?.label || `Đang chạy: ${active.stage_name}`;
           setStatusMessage(label);
           appLogger.info(`Đã khôi phục tiến trình đang quét: ${label}`, 'Quét phụ đề');
-        } else if (latest && latest.status === 'failed') {
-          const errMsg = latest.errors?.[0] || 'Tiến trình quét thất bại';
-          setStatusMessage(`Lỗi đợt trước: ${errMsg}`);
-          appLogger.warn(`Lỗi đợt quét trước: ${errMsg}`, 'Quét phụ đề');
+        } else {
+          setIsScanning(false);
+          appLogger.dismiss(`scan-${proj.project_id}`);
+          if (!isPipelineDone && latest?.status === 'failed') {
+            const errMsg = latest.errors?.[0] || 'Tiến trình quét thất bại';
+            setStatusMessage(`Lỗi đợt trước: ${errMsg}`);
+            appLogger.warn(`Lỗi đợt quét trước: ${errMsg}`, 'Quét phụ đề');
+          }
         }
+      } else {
+        setIsScanning(false);
+        appLogger.dismiss(`scan-${proj.project_id}`);
       }
     }).catch((err) => {
       console.warn('Lỗi kiểm tra stage khi nạp dự án:', err);
@@ -1161,30 +1173,44 @@ export const App: React.FC = () => {
           const sorted = [...stages].sort((a, b) => Number(a.start_time || 0) - Number(b.start_time || 0));
           const latest = sorted[sorted.length - 1];
 
-          if (latest?.metrics?.label) {
-            setStatusMessage(latest.metrics.label);
+          // Tìm các stage chủ chốt
+          const pipelineStage = sorted.slice().reverse().find((s: any) => s.stage_name === 'pipeline');
+          const runningStage = sorted.slice().reverse().find((s: any) => s.status === 'running');
+          const failedStage = sorted.slice().reverse().find((s: any) => s.status === 'failed');
+          const cancelledStage = sorted.slice().reverse().find((s: any) => s.status === 'cancelled');
+
+          // Luôn hiển thị trạng thái của stage đang chạy (hoặc stage mới nhất)
+          const activeStage = runningStage || latest;
+          if (activeStage?.metrics?.label) {
+            setStatusMessage(activeStage.metrics.label);
           }
-          const hasRunningStage = stages.some((s: any) => s.status === 'running');
-          if (!hasRunningStage || ['completed', 'failed', 'cancelled'].includes(latest?.status)) {
+
+          const scanKey = `scan-${activeProject.project_id}`;
+          if (runningStage) {
+            appLogger.updateTask(scanKey, {
+              message: activeStage?.metrics?.label || 'Đang thực thi tiến trình...',
+              progress: Math.round((activeStage?.progress || 0) * 100),
+            });
+          }
+
+          // Kiểm tra xem pipeline đã thực sự hoàn tất / lỗi / hủy chưa
+          // Không bao giờ ngắt polling khi các stage trung gian (như cloud_extraction) hoàn thành
+          const isPipelineTerminal = pipelineStage && ['completed', 'failed', 'cancelled'].includes(pipelineStage.status);
+          const hasError = failedStage !== undefined || pipelineStage?.status === 'failed';
+          const hasCancel = cancelledStage !== undefined || pipelineStage?.status === 'cancelled';
+
+          if (isPipelineTerminal || hasError || hasCancel) {
             setIsScanning(false);
-            const scanKey = `scan-${activeProject.project_id}`;
-            if (latest.stage_name === 'pipeline' && latest.status === 'completed') {
-              setStatusMessage(latest.metrics?.label || 'Đã hoàn tất quét và dịch phụ đề!');
-              appLogger.finishTask(scanKey, 'Đã hoàn tất quét và dịch phụ đề!', 'success');
-            } else if (latest.stage_name === 'dubbing' && latest.status === 'completed') {
-              setStatusMessage(latest.metrics?.label || 'Đã hoàn tất lồng tiếng video!');
-              appLogger.finishTask(`dubbing-${activeProject.project_id}`, 'Đã hoàn tất lồng tiếng video!', 'success');
-              loadProjects();
-            } else if (latest.stage_name === 'translation' && latest.status === 'completed') {
-              setStatusMessage(latest.metrics?.label || 'Đã hoàn tất dịch thuật AI!');
-              appLogger.finishTask(`translate-${activeProject.project_id}`, 'Đã hoàn tất dịch thuật AI!', 'success');
-              loadProjects();
-            } else if (latest.status === 'failed') {
-              const errMsg = latest.errors?.[0] || 'Tác vụ thất bại';
+            if (pipelineStage && pipelineStage.status === 'completed') {
+              const successMsg = pipelineStage.metrics?.label || 'Đã hoàn tất quét phụ đề!';
+              setStatusMessage(successMsg);
+              appLogger.finishTask(scanKey, successMsg, 'success');
+            } else if (hasError) {
+              const targetFail = failedStage || pipelineStage;
+              const errMsg = targetFail?.errors?.[0] || targetFail?.metrics?.error || 'Tác vụ thất bại';
               setStatusMessage(`Thất bại: ${errMsg}`);
               appLogger.finishTask(scanKey, `Lỗi: ${errMsg}`, 'error');
-            } else if (latest.status === 'cancelled') {
-              // Chỉ hiện toast nếu chưa có handleStopScan phát trước đó (tránh trùng lặp)
+            } else if (hasCancel) {
               if (!cancelRequestedRef.current) {
                 setStatusMessage('Đã dừng tiến trình theo yêu cầu');
                 appLogger.finishTask(scanKey, 'Đã dừng tiến trình theo yêu cầu', 'warn');
@@ -1192,10 +1218,10 @@ export const App: React.FC = () => {
                 appLogger.dismiss(scanKey);
               }
             }
-            loadCues(activeProject.project_id);
+            await loadCues(activeProject.project_id);
+            const updated = await apiClient.getProject(activeProject.project_id);
+            if (updated) setActiveProject(updated);
           }
-        } else {
-          setIsScanning(false);
         }
       } catch (err) {
         pollingFailuresRef.current += 1;

@@ -283,6 +283,14 @@ class ServiceAndWorkerTest(unittest.TestCase):
             self.assertEqual(res_sync.status_code, 200)
             self.assertEqual(res_sync.json()["status"], "success")
 
+            # Test sync call with ocr_only=True
+            res_ocr_only = client.post(
+                "/api/v1/projects/run-proj-1/pipeline/run",
+                json={"sync": True, "ocr_only": True},
+                headers=headers,
+            )
+            self.assertEqual(res_ocr_only.status_code, 200)
+
         # Test stages endpoint
         res_stages = client.get("/api/v1/projects/run-proj-1/stages", headers=headers)
         self.assertEqual(res_stages.status_code, 200)
@@ -587,6 +595,60 @@ class ServiceAndWorkerTest(unittest.TestCase):
         reveal_data = reveal_res.json()
         self.assertTrue(reveal_data["success"])
         self.assertIn("path", reveal_data)
+
+    def test_worker_ocr_only_skips_translation_and_preserves_cues(self) -> None:
+        video_path = Path(self.temp_dir.name) / "test-ocr-only-preservation.mp4"
+        video_path.write_bytes(b"dummy-mp4")
+        pid = "proj-ocr-preservation"
+        self.repo.save_project(
+            ProjectManifestV1(
+                project_id=pid,
+                title="Preservation Test",
+                source_video_path=str(video_path),
+                video_fingerprint="fp_preservation",
+                source_language="zh",
+                target_language="vi",
+            )
+        )
+
+        worker = BackgroundWorker(self.repo)
+        mock_cues = [
+            SubtitleCueV1(cue_id="c1", start_pts=1.0, end_pts=2.5, source_text="你好世界"),
+            SubtitleCueV1(cue_id="c2", start_pts=3.0, end_pts=4.5, source_text="这是测试"),
+        ]
+
+        from unittest.mock import MagicMock
+        # 1. Khi ocr_only=True: Translation provider không được gọi, cues vẫn được lưu
+        with patch("subtitle_localizer.cloud.capcut_bridge.CapCutBridgeExtractor.extract_cues", return_value=mock_cues), \
+             patch.object(worker.boundary_refiner, "refine_cues", side_effect=lambda **kw: kw["cues"]), \
+             patch.object(worker.translation_registry, "get_provider_for_pair") as mock_trans:
+            success = worker.run_pipeline_synchronous(pid, ocr_only=True)
+            self.assertTrue(success)
+            mock_trans.assert_not_called()
+            saved_cues = self.repo.get_cues(pid)
+            self.assertEqual(len(saved_cues), 2)
+            self.assertEqual(saved_cues[0].source_text, "你好世界")
+
+        # 2. Khi ocr_only=False và translation lỗi: worker trả về False, stage pipeline failed, nhưng cues OCR trong DB vẫn được bảo toàn
+        mock_translator = MagicMock()
+        mock_translator.translate_cues.side_effect = RuntimeError("Translation quota exceeded")
+        with patch("subtitle_localizer.cloud.capcut_bridge.CapCutBridgeExtractor.extract_cues", return_value=mock_cues), \
+             patch.object(worker.boundary_refiner, "refine_cues", side_effect=lambda **kw: kw["cues"]), \
+             patch.object(worker.translation_registry, "get_provider_for_pair", return_value=mock_translator):
+            success = worker.run_pipeline_synchronous(pid, ocr_only=False)
+            self.assertFalse(success)
+
+            # Kiểm tra: Dù translation fail, cues OCR trong DB không hề bị mất
+            persisted_cues = self.repo.get_cues(pid)
+            self.assertEqual(len(persisted_cues), 2)
+            self.assertEqual(persisted_cues[0].source_text, "你好世界")
+
+            # Kiểm tra stage runs ghi nhận lỗi translation rõ ràng
+            stages = self.repo.get_stage_runs(pid)
+            pipeline_stage = next((s for s in reversed(stages) if s.stage_name == "pipeline"), None)
+            self.assertIsNotNone(pipeline_stage)
+            self.assertEqual(pipeline_stage.status, "failed")
+            self.assertIn("Translation quota exceeded", pipeline_stage.errors[0])
 
 
 if __name__ == "__main__":

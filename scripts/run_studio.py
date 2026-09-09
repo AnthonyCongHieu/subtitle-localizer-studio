@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib
 import json
+import logging
 import os
 import shutil
 import signal
@@ -14,6 +16,13 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+
+class WorkerPollingFilter(logging.Filter):
+    """Lọc bỏ các log polling định kỳ của worker LAN và health check để terminal không bị tràn chữ."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(skip in msg for skip in ("/admin/workers/", "/api/v1/health"))
 
 # Fix Windows console UTF-8 output
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -507,12 +516,21 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
     health_thread = threading.Thread(target=_health_and_browser_worker, daemon=True)
     health_thread.start()
     _start_local_worker()
+    from uvicorn.config import LOGGING_CONFIG
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    log_config["filters"] = {
+        "worker_polling_filter": {
+            "()": WorkerPollingFilter,
+        }
+    }
+    log_config["handlers"]["access"]["filters"] = ["worker_polling_filter"]
+
     if dev_mode:
         npm_cmd = shutil.which("npm.cmd") or shutil.which("npm")
         if not npm_cmd:
             print("[!] Không tìm thấy npm để chạy chế độ Dev, chuyển về chế độ Production tiêu chuẩn...")
             try:
-                uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+                uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", log_config=log_config)
             finally:
                 _stop_local_worker()
                 discovery.stop()
@@ -538,7 +556,7 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
 
         signal.signal(signal.SIGINT, _cleanup)
         try:
-            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", log_config=log_config)
         finally:
             try:
                 vite_proc.terminate()
@@ -549,7 +567,7 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
     else:
         # Chế độ tiêu chuẩn: 1 CMD duy nhất, phục vụ trực tiếp cả UI lẫn Backend API
         try:
-            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", log_config=log_config)
         finally:
             _stop_local_worker()
             discovery.stop()
