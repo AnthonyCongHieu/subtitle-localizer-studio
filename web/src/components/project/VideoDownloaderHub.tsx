@@ -1093,26 +1093,26 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
       {/* ========================================================================= */}
       {/* 1. HEADER ĐỈNH TRANG (ĐỒNG BỘ 100% VỚI STUDIO & DASHBOARD)               */}
       {/* ========================================================================= */}
-      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between z-40 text-xs select-none shadow-md">
+      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-3 sm:px-4 flex items-center justify-between z-40 text-xs select-none shadow-md gap-2 overflow-x-auto no-scrollbar">
         {/* Trái: Quay lại Dashboard + Studio + Brand Hub */}
-        <div className="flex items-center gap-3 min-w-0 max-w-[calc(50%-140px)] overflow-hidden">
+        <div className="flex items-center gap-3 min-w-0 shrink-0">
           <button
             onClick={onSwitchToDashboard}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0 whitespace-nowrap"
             title="Quay lại Dashboard"
           >
-            <ChevronLeft className="w-3.5 h-3.5 text-indigo-400" />
-            <LayoutDashboard className="w-3.5 h-3.5" />
+            <ChevronLeft className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+            <LayoutDashboard className="w-3.5 h-3.5 shrink-0" />
             <span>Dashboard</span>
           </button>
 
           {onSwitchToStudio && (
             <button
               onClick={onSwitchToStudio}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0 whitespace-nowrap"
               title="Vào Studio"
             >
-              <Film className="w-3.5 h-3.5 text-indigo-400" />
+              <Film className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
               <span>Studio</span>
             </button>
           )}
@@ -1120,68 +1120,69 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
           <div className="h-4 w-px bg-slate-800 hidden sm:block shrink-0" />
 
           <div className="flex items-center gap-2 shrink-0">
-            <div className="p-1.5 bg-gradient-to-br from-emerald-600 to-teal-700 rounded-lg text-white shadow">
-              <Globe className="w-3.5 h-3.5" />
+            <div className="p-1.5 bg-gradient-to-br from-emerald-600 to-teal-700 rounded-lg text-white shadow shrink-0">
+              <Globe className="w-3.5 h-3.5 shrink-0" />
             </div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xs font-bold text-white tracking-wide uppercase hidden lg:inline">
+            <div className="flex items-center gap-2 shrink-0">
+              <h1 className="text-xs font-bold text-white tracking-wide uppercase hidden lg:inline shrink-0 whitespace-nowrap">
                 Tải Video Đa Nền Tảng
               </h1>
-              <span className="px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-500/40 text-[9px] font-bold text-emerald-400 font-mono">
+              <span className="px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-500/40 text-[9px] font-bold text-emerald-400 font-mono shrink-0">
                 PRO
               </span>
             </div>
           </div>
-        </div>
+          <div className="h-4 w-px bg-slate-800 hidden md:block shrink-0" />
 
-        {/* Ở Giữa: Cụm Nút Chuyển Màn Hình Phụ Cố Định Tâm Màn Hình Tuyệt Đối */}
-        <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1.5 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm z-20 pointer-events-auto">
-          <button
-            onClick={() => setActiveTab('direct')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer ${
-              activeTab !== 'queue' && activeTab !== 'settings'
-                ? 'text-emerald-300 bg-emerald-950/80 border border-emerald-700/60 shadow-sm font-semibold'
-                : 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40'
-            }`}
-            title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Tải Video</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('queue')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer ${
-              activeTab === 'queue'
-                ? 'text-indigo-200 bg-indigo-950/80 border border-indigo-700/60 shadow-sm font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800'
-            }`}
-            title="Hàng đợi tải phim tự động"
-          >
-            <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Hàng Đợi</span>
-          </button>
-          <button
-            onClick={() => {
-              if (onOpenSettings) {
-                onOpenSettings();
-              } else {
-                setActiveTab('settings');
-              }
-            }}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer ${
-              activeTab === 'settings'
-                ? 'text-indigo-200 bg-indigo-950/80 border border-indigo-700/60 shadow-sm font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800'
-            }`}
-            title="Thiết lập toàn cục hệ thống"
-          >
-            <Settings className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Thiết Lập</span>
-          </button>
+          {/* Cụm Nút Chuyển Màn Hình Chuẩn Hóa Liền Kề Bên Trái */}
+          <div className="hidden md:flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm shrink-0">
+            <button
+              onClick={() => setActiveTab('direct')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 whitespace-nowrap ${
+                activeTab !== 'queue' && activeTab !== 'settings'
+                  ? 'text-emerald-300 bg-emerald-950/80 border border-emerald-700/60 shadow-sm font-semibold'
+                  : 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40'
+              }`}
+              title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
+            >
+              <Download className="w-3.5 h-3.5 shrink-0" />
+              <span>Tải Video</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('queue')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 whitespace-nowrap ${
+                activeTab === 'queue'
+                  ? 'text-indigo-200 bg-indigo-950/80 border border-indigo-700/60 shadow-sm font-semibold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Hàng đợi tải phim tự động"
+            >
+              <ListPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span>Hàng Đợi</span>
+            </button>
+            <button
+              onClick={() => {
+                if (onOpenSettings) {
+                  onOpenSettings();
+                } else {
+                  setActiveTab('settings');
+                }
+              }}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 whitespace-nowrap ${
+                activeTab === 'settings'
+                  ? 'text-indigo-200 bg-indigo-950/80 border border-indigo-700/60 shadow-sm font-semibold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Thiết lập toàn cục hệ thống"
+            >
+              <Settings className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span>Thiết Lập</span>
+            </button>
+          </div>
         </div>
 
         {/* Phải: Nút Gạt Mạng (IP Trực Tiếp ⮂ Proxy) + Trạng thái Hàng đợi + Server + Nhật Ký */}
-        <div className="flex items-center gap-2.5 min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
+        <div className="flex items-center gap-2.5 min-w-0 shrink-0 justify-end ml-auto">
           {/* NÚT GẠT CHUYỂN ĐỔI: IP TRỰC TIẾP ⮂ DÙNG PROXY */}
           <div className="flex items-center p-0.5 bg-slate-950 border border-slate-800 rounded-xl text-xs select-none shadow-inner">
             <button

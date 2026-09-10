@@ -846,79 +846,80 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
   return (
     <div className="flex-1 w-full h-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
       {/* 1. Header Bar Chuyên Nghiệp (Đồng bộ 100% Studio) */}
-      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between z-40 text-xs select-none shadow-md">
+      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-3 sm:px-4 flex items-center justify-between z-40 text-xs select-none shadow-md gap-2 overflow-x-auto no-scrollbar">
         {/* Cụm Trái: Nút Quay Lại Dashboard & Logo */}
-        <div className="flex items-center gap-3 min-w-0 max-w-[calc(50%-140px)] overflow-hidden">
+        <div className="flex items-center gap-3 min-w-0 shrink-0">
           <button
             onClick={onSwitchToDashboard}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0 whitespace-nowrap"
             title="Quay lại Màn hình Dashboard Batch"
           >
-            <ChevronLeft className="w-3.5 h-3.5 text-indigo-400" />
-            <LayoutDashboard className="w-3.5 h-3.5" />
+            <ChevronLeft className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+            <LayoutDashboard className="w-3.5 h-3.5 shrink-0" />
             <span>Dashboard</span>
           </button>
 
           {onSwitchToStudio && (
             <button
               onClick={onSwitchToStudio}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer shrink-0 whitespace-nowrap"
               title="Chuyển sang Studio biên tập"
             >
-              <Layers className="w-3.5 h-3.5 text-indigo-400" />
+              <Layers className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
               <span>Studio</span>
             </button>
           )}
 
           <div className="h-4 w-px bg-slate-800 hidden sm:block shrink-0" />
 
-          <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider shrink-0">
-            <div className="p-1 bg-indigo-600 rounded text-white shadow">
+          <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider shrink-0 whitespace-nowrap">
+            <div className="p-1 bg-indigo-600 rounded text-white shadow shrink-0">
               <Sliders className="w-3.5 h-3.5" />
             </div>
             <span className="hidden lg:inline">Thiết Lập Hệ Thống</span>
           </div>
 
-          <span className="hidden xl:flex px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-600/40 text-emerald-300 text-[10px] font-semibold items-center gap-1 shrink-0">
-            <Zap className="w-3 h-3 text-emerald-400" />
+          <span className="hidden xl:flex px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-600/40 text-emerald-300 text-[10px] font-semibold items-center gap-1 shrink-0 whitespace-nowrap">
+            <Zap className="w-3 h-3 text-emerald-400 shrink-0" />
             <span>Cấu Hình Toàn Cục</span>
           </span>
-        </div>
+          <div className="h-4 w-px bg-slate-800 hidden md:block shrink-0" />
 
-        {/* Ở Giữa: Cụm Nút Chuyển Màn Hình Phụ Cố Định Tâm Màn Hình Tuyệt Đối */}
-        <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1.5 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm z-20 pointer-events-auto">
-          {onOpenDownloader && (
+          {/* Cụm Nút Chuyển Màn Hình Chuẩn Hóa Liền Kề Bên Trái */}
+          <div className="hidden md:flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm shrink-0">
+            {onOpenDownloader && (
+              <button
+                onClick={() => onOpenDownloader('direct')}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer shrink-0 whitespace-nowrap"
+                title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
+              >
+                <Download className="w-3.5 h-3.5 shrink-0" />
+                <span>Tải Video</span>
+              </button>
+            )}
+            {onOpenQueue && (
+              <button
+                onClick={onOpenQueue}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 whitespace-nowrap"
+                title="Hàng đợi tải phim tự động"
+              >
+                <ListPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span>Hàng Đợi</span>
+              </button>
+            )}
             <button
-              onClick={() => onOpenDownloader('direct')}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer"
-              title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
+              onClick={() => setActiveTab('ocr')}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-indigo-300 bg-indigo-950/80 border border-indigo-700/60 shadow-sm transition cursor-pointer shrink-0 whitespace-nowrap"
+              title="Thiết lập toàn cục hệ thống"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>Tải Video</span>
+              <Settings className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span>Thiết Lập</span>
             </button>
-          )}
-          {onOpenQueue && (
-            <button
-              onClick={onOpenQueue}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-              title="Hàng đợi tải phim tự động"
-            >
-              <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Hàng Đợi</span>
-            </button>
-          )}
-          <button
-            onClick={() => setActiveTab('ocr')}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-indigo-300 bg-indigo-950/80 border border-indigo-700/60 shadow-sm transition cursor-pointer"
-            title="Thiết lập toàn cục hệ thống"
-          >
-            <Settings className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Thiết Lập</span>
-          </button>
+          </div>
         </div>
 
         {/* Cụm Phải: Nút Lưu & Quản Lý Keys */}
-        <div className="flex items-center gap-2 min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
+        <div className="flex items-center gap-2 min-w-0 shrink-0 justify-end ml-auto">
           <button
             onClick={() => {
               if (onOpenKeyPool) {
@@ -927,10 +928,10 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                 setActiveTab('translation');
               }
             }}
-            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 text-amber-300 font-semibold text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 text-amber-300 font-semibold text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm shrink-0 whitespace-nowrap"
             title="Quản lý Gemini Key Pool"
           >
-            <Key className="w-3.5 h-3.5 text-amber-400" />
+            <Key className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span className="hidden sm:inline">
               Keys Pool ({geminiPoolStatus ? `${geminiPoolStatus.active_keys}/${geminiPoolStatus.total_keys}` : '...'})
             </span>
@@ -939,10 +940,10 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
           <button
             onClick={handleSaveSettings}
             disabled={isSavingSettings}
-            className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition disabled:opacity-50 cursor-pointer"
+            className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition disabled:opacity-50 cursor-pointer shrink-0 whitespace-nowrap"
             title="Lưu cấu hình toàn cục vào hệ thống"
           >
-            <Save className="w-3.5 h-3.5" />
+            <Save className="w-3.5 h-3.5 shrink-0" />
             <span>{isSavingSettings ? 'Đang lưu...' : 'Lưu Cấu Hình'}</span>
           </button>
         </div>

@@ -1603,6 +1603,7 @@ export const App: React.FC = () => {
               setDownloaderTab('queue');
               setViewMode('downloader');
             }}
+            onOpenAdmin={() => setViewMode('admin')}
             onOpenSettings={() => {
               setSettingsTab('ocr');
               setViewMode('settings');

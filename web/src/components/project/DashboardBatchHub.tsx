@@ -1833,11 +1833,11 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   return (
     <div className="flex-1 w-full h-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
       {/* 1. Header Đỉnh Chuẩn Mẫu (Header Bar - Đồng bộ 100% với Studio) */}
-      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between z-40 text-xs select-none shadow-md">
+      <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-3 sm:px-4 flex items-center justify-between z-40 text-xs select-none shadow-md gap-2 overflow-x-auto no-scrollbar">
         {/* Trái: Logo & Các Tab Điều Hướng */}
-        <div className="flex items-center gap-3 min-w-0 max-w-[calc(50%-140px)] overflow-hidden">
-          <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider shrink-0">
-            <div className="p-1 bg-indigo-600 rounded text-white shadow">
+        <div className="flex items-center gap-3 min-w-0 shrink-0">
+          <div className="flex items-center gap-2 text-white font-bold text-xs uppercase tracking-wider shrink-0 whitespace-nowrap">
+            <div className="p-1 bg-indigo-600 rounded text-white shadow shrink-0">
               <Film className="w-3.5 h-3.5" />
             </div>
             <span className="hidden sm:inline">Subtitle Localizer Studio</span>
@@ -1846,62 +1846,63 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
           <div className="flex items-center gap-1.5 text-xs shrink-0">
             <button
               onClick={onNewProject}
-              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow-sm transition flex items-center gap-1.5 active:scale-95 cursor-pointer"
+              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow-sm transition flex items-center gap-1.5 active:scale-95 cursor-pointer shrink-0 whitespace-nowrap"
               title="Tạo dự án mới"
             >
-              <FolderPlus className="w-3.5 h-3.5 text-white" />
+              <FolderPlus className="w-3.5 h-3.5 text-white shrink-0" />
               <span>Tạo Dự Án</span>
             </button>
+          </div>
 
+          <div className="h-4 w-px bg-slate-800 hidden md:block shrink-0" />
+
+          {/* Cụm Nút Chuyển Màn Hình Chuẩn Hóa Liền Kề Bên Trái */}
+          <div className="hidden md:flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm shrink-0">
+            {onOpenDownloader && (
+              <button
+                onClick={() => onOpenDownloader('direct')}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer shrink-0 whitespace-nowrap"
+                title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
+              >
+                <Download className="w-3.5 h-3.5 shrink-0" />
+                <span>Tải Video</span>
+              </button>
+            )}
+            {onOpenQueue && (
+              <button
+                onClick={onOpenQueue}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 whitespace-nowrap"
+                title="Hàng đợi tải phim tự động"
+              >
+                <ListPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span>Hàng Đợi</span>
+              </button>
+            )}
+            {onOpenAdmin && (
+              <button onClick={onOpenAdmin} className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-cyan-300 hover:text-white hover:bg-cyan-950/40 transition cursor-pointer shrink-0 whitespace-nowrap" title="Quản lý worker và job LAN">
+                <Activity className="w-3.5 h-3.5 shrink-0" /><span>Admin LAN</span>
+              </button>
+            )}
+            <button
+              onClick={() => {
+                if (onOpenSettingsTab) {
+                  onOpenSettingsTab('ocr');
+                } else {
+                  onOpenPresetManager();
+                }
+              }}
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 whitespace-nowrap"
+              title="Thiết lập toàn cục hệ thống"
+            >
+              <Settings className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span>Thiết Lập</span>
+            </button>
           </div>
         </div>
 
-        {/* Ở Giữa: Cụm Nút Chuyển Màn Hình Phụ Cố Định Tâm Màn Hình Tuyệt Đối */}
-        <div className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1.5 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm z-20 pointer-events-auto">
-          {onOpenDownloader && (
-            <button
-              onClick={() => onOpenDownloader('direct')}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer"
-              title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Tải Video</span>
-            </button>
-          )}
-          {onOpenQueue && (
-            <button
-              onClick={onOpenQueue}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-              title="Hàng đợi tải phim tự động"
-            >
-              <ListPlus className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Hàng Đợi</span>
-            </button>
-          )}
-          {onOpenAdmin && (
-            <button onClick={onOpenAdmin} className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-cyan-300 hover:text-white hover:bg-cyan-950/40 transition cursor-pointer" title="Quản lý worker và job LAN">
-              <Activity className="w-3.5 h-3.5" /><span>Admin LAN</span>
-            </button>
-          )}
-          <button
-            onClick={() => {
-              if (onOpenSettingsTab) {
-                onOpenSettingsTab('ocr');
-              } else {
-                onOpenPresetManager();
-              }
-            }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-            title="Thiết lập toàn cục hệ thống"
-          >
-            <Settings className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Thiết Lập</span>
-          </button>
-        </div>
-
         {/* Phải: Ngôn ngữ, Keys Pool, Nhật Ký, Trạng thái Engine & Nút Vào Studio */}
-        <div className="flex items-center gap-2 text-xs min-w-0 max-w-[calc(50%-140px)] justify-end ml-auto">
-          <div className="flex items-center gap-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 text-[10px] font-mono">
+        <div className="flex items-center gap-2 text-xs min-w-0 shrink-0 justify-end ml-auto">
+          <div className="hidden xl:flex items-center gap-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 text-[10px] font-mono shrink-0 whitespace-nowrap">
             <span className="text-cyan-400 font-bold">VI</span>
             <span className="text-slate-600">|</span>
             <span className="text-slate-400">ZH</span>
@@ -1912,15 +1913,15 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               setShowGeminiPoolModal(true);
               fetchGeminiPoolStatus();
             }}
-            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 text-amber-300 font-semibold text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 text-amber-300 font-semibold text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm shrink-0 whitespace-nowrap"
             title="Quản lý danh sách API keys và xem trạng thái xoay tua"
           >
-            <Key className="w-3.5 h-3.5 text-amber-400" />
+            <Key className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>
               Pool: {geminiPoolStatus ? `${geminiPoolStatus.active_keys}/${geminiPoolStatus.total_keys}` : '...'} Keys
             </span>
             {geminiPoolStatus && geminiPoolStatus.cooldown_keys > 0 && (
-              <span className="px-1 py-0.2 rounded bg-rose-900/80 text-rose-300 text-[9px] font-mono">
+              <span className="px-1 py-0.2 rounded bg-rose-900/80 text-rose-300 text-[9px] font-mono shrink-0">
                 {geminiPoolStatus.cooldown_keys} nghỉ
               </span>
             )}
@@ -1928,20 +1929,20 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
 
           <button
             onClick={() => appLogger.toggle()}
-            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 text-slate-300 hover:text-white font-medium text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 text-slate-300 hover:text-white font-medium text-[11px] flex items-center gap-1.5 transition cursor-pointer shadow-sm shrink-0 whitespace-nowrap"
             title="Nhật ký hoạt động hệ thống"
           >
-            <Activity className="w-3.5 h-3.5 text-cyan-400" />
+            <Activity className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <span className="hidden sm:inline">Nhật ký</span>
             {loggerCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold">
+              <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold shrink-0">
                 {loggerCount}
               </span>
             )}
           </button>
 
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-[11px] text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-[11px] text-emerald-400 shrink-0 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
             <span className="font-semibold">Engine Sẵn Sàng</span>
           </div>
 
@@ -1950,7 +1951,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               if (projects.length > 0) onSelectProject(projects[0]);
             }}
             disabled={projects.length === 0}
-            className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold rounded-lg text-xs transition shadow-md shadow-indigo-600/30 disabled:opacity-40 cursor-pointer"
+            className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold rounded-lg text-xs transition shadow-md shadow-indigo-600/30 disabled:opacity-40 cursor-pointer shrink-0 whitespace-nowrap"
           >
             Vào Studio
           </button>

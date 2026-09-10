@@ -181,25 +181,25 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
   return (
     <div className="flex-1 w-full h-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
       {/* 1. Header Đỉnh Trang Hàng Đợi */}
-      <header className="h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-4 flex items-center justify-between z-40 shadow-md">
-        <div className="flex items-center gap-3">
+      <header className="h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-3 sm:px-4 flex items-center justify-between z-40 shadow-md gap-2 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-3 min-w-0 shrink-0">
           <button
             onClick={onSwitchToDashboard}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold shadow transition active:scale-95 border border-slate-700"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold shadow transition active:scale-95 border border-slate-700 shrink-0 whitespace-nowrap"
             title="Về Dashboard"
           >
-            <ArrowLeft className="w-4 h-4 text-indigo-400" />
+            <ArrowLeft className="w-4 h-4 text-indigo-400 shrink-0" />
             <span>Về Dashboard</span>
           </button>
 
-          <div className="h-5 w-px bg-slate-800" />
+          <div className="h-5 w-px bg-slate-800 hidden sm:block shrink-0" />
 
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-indigo-600/30 border border-indigo-500/40 rounded-lg text-indigo-300">
-              <Layers className="w-4 h-4" />
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="p-1.5 bg-indigo-600/30 border border-indigo-500/40 rounded-lg text-indigo-300 shrink-0">
+              <Layers className="w-4 h-4 shrink-0" />
             </div>
-            <div>
-              <h1 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <div className="shrink-0">
+              <h1 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
                 <span>Hàng Đợi Tải Phim</span>
                 <span className="px-2 py-0.2 rounded-full bg-indigo-950 border border-indigo-600/50 text-indigo-300 text-[10px] font-semibold">
                   Queue
@@ -210,17 +210,17 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
         </div>
 
         {/* Phím điều khiển Hàng Đợi Toàn Cục */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0 shrink-0 justify-end ml-auto">
           {actionMessage && (
-            <span className="text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2.5 py-1 rounded-lg animate-in fade-in flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2.5 py-1 rounded-lg animate-in fade-in flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span>{actionMessage}</span>
             </span>
           )}
 
           <button
             onClick={handleTogglePauseResume}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow transition active:scale-95 border ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow transition active:scale-95 border shrink-0 whitespace-nowrap ${
               isQueuePaused
                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500'
                 : 'bg-amber-950/80 hover:bg-amber-900 border-amber-700 text-amber-200'
@@ -229,12 +229,12 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
           >
             {isQueuePaused ? (
               <>
-                <Play className="w-3.5 h-3.5 fill-current" />
+                <Play className="w-3.5 h-3.5 fill-current shrink-0" />
                 <span>Tiếp tục</span>
               </>
             ) : (
               <>
-                <Pause className="w-3.5 h-3.5 fill-current" />
+                <Pause className="w-3.5 h-3.5 fill-current shrink-0" />
                 <span>Tạm dừng</span>
               </>
             )}
@@ -243,16 +243,16 @@ export const DownloadQueueHub: React.FC<DownloadQueueHubProps> = ({
           <button
             onClick={() => fetchQueue(false)}
             disabled={isLoading}
-            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition"
+            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition shrink-0"
             title="Làm mới trạng thái hàng đợi"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-indigo-400' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isLoading ? 'animate-spin text-indigo-400' : ''}`} />
           </button>
 
           {/* Nút Nhật ký đồng bộ */}
           <button
             onClick={() => appLogger.toggle()}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer shadow-sm active:scale-95"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer shadow-sm active:scale-95 shrink-0 whitespace-nowrap"
             title="Nhật ký hoạt động hệ thống"
           >
             <Activity className="w-3.5 h-3.5 text-cyan-400" />
