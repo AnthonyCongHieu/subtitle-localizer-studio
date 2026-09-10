@@ -56,7 +56,6 @@ import {
   Flame,
   Activity,
   ShieldCheck,
-  Settings,
 } from 'lucide-react';
 import { appLogger, useAppLoggerCount } from '../common/GlobalActivityLogger';
 
@@ -75,7 +74,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
   onSwitchToStudio,
   onRefreshProjects,
   onBatchProjectsCreated,
-  onOpenSettings,
+  onOpenSettings: _onOpenSettings,
   initialTab = 'search',
   onTabChange,
 }) => {
@@ -1132,102 +1131,55 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
               </span>
             </div>
           </div>
-          <div className="h-4 w-px bg-slate-800 hidden md:block shrink-0" />
-
-          {/* Cụm Nút Chuyển Màn Hình Chuẩn Hóa Liền Kề Bên Trái */}
-          <div className="hidden md:flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm shrink-0">
-            <button
-              onClick={() => setActiveTab('direct')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 whitespace-nowrap ${
-                activeTab !== 'queue' && activeTab !== 'settings'
-                  ? 'text-emerald-300 bg-emerald-950/80 border border-emerald-700/60 shadow-sm font-semibold'
-                  : 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40'
-              }`}
-              title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
-            >
-              <Download className="w-3.5 h-3.5 shrink-0" />
-              <span>Tải Video</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('queue')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 whitespace-nowrap ${
-                activeTab === 'queue'
-                  ? 'text-indigo-200 bg-indigo-950/80 border border-indigo-700/60 shadow-sm font-semibold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-              title="Hàng đợi tải phim tự động"
-            >
-              <ListPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span>Hàng Đợi</span>
-            </button>
-            <button
-              onClick={() => {
-                if (onOpenSettings) {
-                  onOpenSettings();
-                } else {
-                  setActiveTab('settings');
-                }
-              }}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 whitespace-nowrap ${
-                activeTab === 'settings'
-                  ? 'text-indigo-200 bg-indigo-950/80 border border-indigo-700/60 shadow-sm font-semibold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-              title="Thiết lập toàn cục hệ thống"
-            >
-              <Settings className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span>Thiết Lập</span>
-            </button>
-          </div>
         </div>
 
-        {/* Phải: Nút Gạt Mạng (IP Trực Tiếp ⮂ Proxy) + Trạng thái Hàng đợi + Server + Nhật Ký */}
-        <div className="flex items-center gap-2.5 min-w-0 shrink-0 justify-end ml-auto">
+        {/* Phải: Nút Gạt Mạng (IP Trực Tiếp ⮂ Proxy) + Server + Nhật Ký */}
+        <div className="flex items-center gap-2 min-w-0 shrink-0 justify-end ml-auto">
           {/* NÚT GẠT CHUYỂN ĐỔI: IP TRỰC TIẾP ⮂ DÙNG PROXY */}
-          <div className="flex items-center p-0.5 bg-slate-950 border border-slate-800 rounded-xl text-xs select-none shadow-inner">
+          <div className="flex items-center p-0.5 bg-slate-950 border border-slate-800 rounded-xl text-xs select-none shadow-inner shrink-0">
             <button
               type="button"
               onClick={() => handleToggleNetworkMode('direct')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-semibold transition ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold transition text-xs shrink-0 whitespace-nowrap ${
                 networkMode === 'direct'
                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
-              title="Gạt sang đây để tải trực tiếp bằng mạng nhà (Tối đa tốc độ, không qua proxy, 0% RAM)"
+              title="Gạt sang đây để tải trực tiếp bằng mạng nhà (Tối đa tốc độ, không qua proxy)"
             >
-              <Zap className={`w-3.5 h-3.5 ${networkMode === 'direct' ? 'text-amber-400 animate-pulse' : 'text-slate-500'}`} />
+              <Zap className={`w-3.5 h-3.5 shrink-0 ${networkMode === 'direct' ? 'text-amber-400 animate-pulse' : 'text-slate-500'}`} />
               <span>⚡ IP Trực Tiếp</span>
             </button>
 
             <button
               type="button"
               onClick={() => handleToggleNetworkMode('proxy')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-semibold transition ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold transition text-xs shrink-0 whitespace-nowrap ${
                 networkMode === 'proxy'
                   ? 'bg-indigo-600 text-white border border-indigo-500 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
               title="Gạt sang đây để bật proxy ẩn danh và vượt tường lửa (Auto-Xray / Custom Proxy)"
             >
-              <Shield className={`w-3.5 h-3.5 ${networkMode === 'proxy' ? 'text-indigo-200' : 'text-slate-500'}`} />
+              <Shield className={`w-3.5 h-3.5 shrink-0 ${networkMode === 'proxy' ? 'text-indigo-200' : 'text-slate-500'}`} />
               <span>🌐 Dùng Proxy</span>
             </button>
           </div>
 
-          {/* Proxy / Auto-Xray Network Status Badge */}
+          {/* Proxy / Auto-Xray Network Status Badge (Chỉ hiện trên màn hình lớn để tránh tràn) */}
           {networkMode === 'direct' ? (
             <div
               onClick={() => setActiveTab('settings')}
-              className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] cursor-pointer transition select-none bg-amber-950/40 border-amber-500/40 text-amber-300 hover:bg-amber-900/50"
+              className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] cursor-pointer transition select-none bg-amber-950/40 border-amber-500/40 text-amber-300 hover:bg-amber-900/50 shrink-0 whitespace-nowrap"
               title="Đang dùng IP mạng nhà trực tiếp (Direct Connection) - Tối đa tốc độ, không qua proxy"
             >
-              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span>Mạng: <strong className="text-amber-200">IP Trực Tiếp</strong></span>
             </div>
           ) : (
             <div
               onClick={() => setActiveTab('settings')}
-              className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] cursor-pointer transition select-none ${
+              className={`hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] cursor-pointer transition select-none shrink-0 whitespace-nowrap ${
                 autoXrayEnabled
                   ? xrayStatus?.running
                     ? 'bg-emerald-950/70 border-emerald-500/60 text-emerald-300 hover:bg-emerald-900/60'
@@ -1238,19 +1190,9 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                   ? 'bg-rose-950/70 border-rose-600/60 text-rose-300 hover:bg-rose-900/60'
                   : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
-              title={
-                autoXrayEnabled
-                  ? xrayStatus?.running
-                    ? `Auto-Xray đang kích hoạt (${xrayStatus.active_node?.name || 'Fast Node'} - ${xrayStatus.active_node?.latency_ms ?? '?'}ms)`
-                    : `Auto-Xray ở chế độ Chờ (${xrayStatus?.quality_nodes_count || 0} node chất lượng sẵn sàng - Tự kích hoạt khi tải)`
-                  : proxyStatus?.is_alive
-                  ? `Proxy ${proxyStatus.proxy_url} đang hoạt động tốt (${proxyStatus.latency_ms ?? '?'} ms)`
-                  : proxyUrl.trim()
-                  ? `Proxy ${proxyUrl} đang offline. Chế độ Nghiêm Ngặt (Zero-Leak) sẽ chặn kết nối để bảo vệ tuyệt đối IP thật.`
-                  : 'Đang kết nối tải trực tiếp bằng IP máy (Direct IP)'
-              }
+              title="Trạng thái kết nối Proxy"
             >
-              <Zap className={`w-3.5 h-3.5 ${
+              <Zap className={`w-3.5 h-3.5 shrink-0 ${
                 autoXrayEnabled
                   ? xrayStatus?.running ? 'text-emerald-400 animate-pulse' : 'text-indigo-400'
                   : proxyStatus?.is_alive ? 'text-emerald-400' : proxyUrl.trim() ? 'text-rose-400' : 'text-slate-500'
@@ -1258,33 +1200,25 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
               <span>
                 {autoXrayEnabled ? (
                   xrayStatus?.running ? (
-                    <>Auto-Xray: <strong className="text-emerald-300">{xrayStatus.active_node?.name?.slice(0, 15) || 'Active'} ({xrayStatus.active_node?.latency_ms ?? '?'}ms)</strong></>
+                    <>Auto-Xray: <strong className="text-emerald-300">{xrayStatus.active_node?.name?.slice(0, 12) || 'Active'} ({xrayStatus.active_node?.latency_ms ?? '?'}ms)</strong></>
                   ) : (
-                    <>Auto-Xray: <strong className="text-indigo-300">Standby ({xrayStatus?.quality_nodes_count || 0} node)</strong></>
+                    <>Auto-Xray: <strong className="text-indigo-300">Standby</strong></>
                   )
                 ) : isLoadingProxyStatus ? (
                   'Đang kiểm tra...'
                 ) : proxyStatus?.is_alive ? (
                   <>Proxy: <strong className="text-emerald-300">Online</strong></>
-                ) : proxyUrl.trim() ? (
-                  <>Proxy: <strong className="text-rose-300">Offline (Kill-Switch)</strong></>
                 ) : (
-                  <>Mạng: <strong className="text-slate-300">Direct IP</strong></>
+                  <>Proxy: <strong className="text-rose-300">Offline</strong></>
                 )}
               </span>
             </div>
           )}
 
-          {/* Concurrency badge */}
-          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-slate-300">
-            <Zap className="w-3.5 h-3.5 text-amber-400" />
-            <span>Đa luồng: <strong>{concurrency}x</strong></span>
-          </div>
-
           {/* Queue Count */}
           <button
             onClick={() => setActiveTab('queue')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-medium transition active:scale-95 ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-medium transition active:scale-95 shrink-0 whitespace-nowrap ${
               activeTaskId
                 ? 'bg-emerald-950/80 border-emerald-600 text-emerald-300 animate-pulse'
                 : queueTasks.length > 0
@@ -1292,7 +1226,7 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
                 : 'bg-slate-950 border-slate-800 text-slate-400'
             }`}
           >
-            <ListPlus className="w-3.5 h-3.5" />
+            <ListPlus className="w-3.5 h-3.5 shrink-0" />
             <span>
               Hàng đợi: <strong>{queueTasks.length}</strong>
             </span>
@@ -1301,21 +1235,21 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
           {/* Nút Nhật ký đồng bộ */}
           <button
             onClick={() => appLogger.toggle()}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer shadow-sm active:scale-95"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer shadow-sm active:scale-95 shrink-0 whitespace-nowrap"
             title="Nhật ký hoạt động hệ thống"
           >
-            <Activity className="w-3.5 h-3.5 text-cyan-400" />
+            <Activity className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <span className="hidden sm:inline">Nhật ký</span>
             {loggerCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold">
+              <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] text-cyan-300 border border-slate-700 font-mono font-bold shrink-0">
                 {loggerCount}
               </span>
             )}
           </button>
 
           {/* Server live indicator */}
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-emerald-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-slate-950 border border-slate-800 rounded-lg text-[11px] text-emerald-400 shrink-0 whitespace-nowrap">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
             <span className="font-semibold">Engine Sẵn Sàng</span>
           </div>
         </div>

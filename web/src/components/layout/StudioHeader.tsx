@@ -5,15 +5,12 @@ import {
   XCircle,
   Play,
   Loader2,
-  Download,
-  ListPlus,
-  Activity,
-  Settings,
   ChevronLeft,
   AlertTriangle,
   Sparkles,
   Mic,
   Check,
+  Download,
 } from 'lucide-react';
 import { ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
 import { PresetProfile } from '../../types/presets';
@@ -28,9 +25,9 @@ interface StudioHeaderProps {
   dramaTitle?: string | null;
   presets?: PresetProfile[];
   activePresetId?: string;
-  onSelectPreset?: (preset: PresetProfile) => void;
+  onSelectPreset?: ((presetId: string) => void) | ((preset: PresetProfile) => void);
   statusMessage?: string | null;
-  backendOnline: boolean | null;
+  backendOnline?: boolean | null;
   wsConnected: boolean;
   wsStatus?: 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
@@ -45,10 +42,6 @@ interface StudioHeaderProps {
   isTranslating?: boolean;
   onDubAll?: () => void;
   isDubbing?: boolean;
-  onOpenDownloader: () => void;
-  onOpenQueue: () => void;
-  onOpenAdmin?: () => void;
-  onOpenSettings: () => void;
   onExportVideo?: () => void;
   cuesCount?: number;
   cues?: SubtitleCueV1[];
@@ -81,10 +74,6 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
   isTranslating = false,
   onDubAll,
   isDubbing = false,
-  onOpenDownloader,
-  onOpenQueue,
-  onOpenAdmin,
-  onOpenSettings,
   onExportVideo,
   cuesCount = 0,
   cues = [],
@@ -142,45 +131,6 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
           <span className="font-bold text-[10px] tracking-wide uppercase">Studio</span>
         </div>
 
-        <div className="h-4 w-px bg-slate-800 hidden md:block shrink-0" />
-
-        {/* Cụm Nút Chuyển Màn Hình Chuẩn Hóa Liền Kề Bên Trái */}
-        <div className="hidden md:flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm shrink-0">
-          <button
-            onClick={onOpenDownloader}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer shrink-0 whitespace-nowrap"
-            title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
-          >
-            <Download className="w-3.5 h-3.5 shrink-0" />
-            <span>Tải Video</span>
-          </button>
-          <button
-            onClick={onOpenQueue}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 whitespace-nowrap"
-            title="Hàng đợi tải phim tự động"
-          >
-            <ListPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-            <span>Hàng Đợi</span>
-          </button>
-          {onOpenAdmin && (
-            <button
-              onClick={onOpenAdmin}
-              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-cyan-300 hover:text-white hover:bg-cyan-950/40 transition cursor-pointer shrink-0 whitespace-nowrap"
-              title="Quản lý worker và job LAN"
-            >
-              <Activity className="w-3.5 h-3.5 shrink-0" />
-              <span>Admin LAN</span>
-            </button>
-          )}
-          <button
-            onClick={onOpenSettings}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 whitespace-nowrap"
-            title="Thiết lập toàn cục hệ thống"
-          >
-            <Settings className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-            <span>Thiết Lập</span>
-          </button>
-        </div>
       </div>
 
       {/* Bên Phải: Trạng thái Server + Nhật ký + Nút Hành Động Chính */}

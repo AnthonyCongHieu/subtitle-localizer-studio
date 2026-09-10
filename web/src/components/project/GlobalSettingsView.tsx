@@ -5,6 +5,7 @@ import {
   HardwareInfoResponse,
   TestTranslationResult,
   GeminiPoolStatus,
+  DeviceStatusInfo,
   /** @deprecated retired provider; kept for migration-only hidden markup */
   GroqPoolStatus,
 } from '../../api/client';
@@ -46,10 +47,19 @@ import {
   Flame,
   Wand2,
   Square,
-  ListPlus,
-  Settings,
+  Smartphone,
+  Wifi,
+  AlertCircle,
+  Video,
 } from 'lucide-react';
 import { detectVoiceProvider } from '../../constants/voiceCatalog';
+import { VoiceCatalogPicker } from '../common/VoiceCatalogPicker';
+import {
+  loadBatchExportConfig,
+  saveBatchExportConfig,
+  reconcileBatchConfigWithBackend,
+  BatchExportConfig,
+} from '../../utils/batchSettingsStorage';
 const DEFAULT_TTS_CATALOG: Record<string, Array<{
   voice_id: string;
   display_name: string;
@@ -119,10 +129,8 @@ interface GlobalSettingsViewProps {
   onSwitchToDashboard: () => void;
   onSwitchToStudio?: () => void;
   onOpenKeyPool?: () => void;
-  onOpenDownloader?: (tab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings') => void;
-  onOpenQueue?: () => void;
-  initialTab?: 'ocr' | 'translation' | 'dubbing' | 'render';
-  onTabChange?: (tab: 'ocr' | 'translation' | 'dubbing' | 'render') => void;
+  initialTab?: 'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch';
+  onTabChange?: (tab: 'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch') => void;
 }
 
 /** OCR tuning fields introduced by the PP-OCRv5/NVDEC pipeline.
@@ -152,12 +160,10 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
   onSwitchToDashboard,
   onSwitchToStudio,
   onOpenKeyPool,
-  onOpenDownloader,
-  onOpenQueue,
   initialTab = 'ocr',
   onTabChange,
 }) => {
-  const [activeTab, setActiveTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch'>(initialTab);
 
   useEffect(() => {
     if (initialTab && initialTab !== activeTab) {
@@ -399,11 +405,348 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     }
   };
 
+  // =========================================================================
+  // 5. Cấu hình Thiết Bị Giả Lập & Mạng Proxy State
+  // =========================================================================
+  const [deviceInfo, setDeviceInfo] = useState<DeviceStatusInfo | null>(null);
+  const [isLoadingDevice, setIsLoadingDevice] = useState(false);
+  const [isRotatingDevice, setIsRotatingDevice] = useState(false);
+  const [deviceRotateMessage, setDeviceRotateMessage] = useState<string | null>(null);
+  const [copiedDeviceId, setCopiedDeviceId] = useState(false);
+  const [copiedInstallId, setCopiedInstallId] = useState(false);
+  const [showCustomDeviceInput, setShowCustomDeviceInput] = useState(false);
+  const [customDeviceId, setCustomDeviceId] = useState('');
+  const [customInstallId, setCustomInstallId] = useState('');
+  const [isSavingCustomDevice, setIsSavingCustomDevice] = useState(false);
+
+  const [isProxyEnabled, setIsProxyEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('sls_proxy_enabled');
+    return saved !== null ? saved === 'true' : Boolean(localStorage.getItem('sls_proxy_url'));
+  });
+  const [rotationInterval, setRotationInterval] = useState<number>(() => {
+    const saved = localStorage.getItem('sls_rotation_interval');
+    return saved !== null ? parseInt(saved) : 1;
+  });
+  const [rateLimitDelay, setRateLimitDelay] = useState<number>(() => {
+    const saved = localStorage.getItem('sls_rate_limit_delay');
+    return saved ? parseFloat(saved) : 2.0;
+  });
+  const [proxyUrl, setProxyUrl] = useState(() => localStorage.getItem('sls_proxy_url') || '');
+  const [proxyTestResult, setProxyTestResult] = useState<{
+    ok: boolean;
+    ip?: string;
+    direct_ip?: string;
+    is_masked?: boolean;
+    latency_ms?: number;
+    error?: string;
+  } | null>(null);
+  const [isTestingProxy, setIsTestingProxy] = useState(false);
+  const [proxySaveSuccess, setProxySaveSuccess] = useState(false);
+
+  // =========================================================================
+  // 6. Cấu Hình Xuất Hàng Loạt (Batch Export Config) State & Handlers
+  // =========================================================================
+  const [batchTargetLang, setBatchTargetLang] = useState<string>(() => loadBatchExportConfig().batchTargetLang);
+  const [batchDuckingVolume, setBatchDuckingVolume] = useState<number>(() => loadBatchExportConfig().batchDuckingVolume);
+  const [batchDubbingEnabled, setBatchDubbingEnabled] = useState<boolean>(() => loadBatchExportConfig().batchDubbingEnabled);
+  const [batchDubbingMode, setBatchDubbingMode] = useState<'single' | 'gender_multi'>(() => loadBatchExportConfig().batchDubbingMode);
+  const [batchDubbingVoice, setBatchDubbingVoice] = useState<string>(() => loadBatchExportConfig().batchDubbingVoice);
+  const [batchDubbingVoiceMale, setBatchDubbingVoiceMale] = useState<string>(() => loadBatchExportConfig().batchDubbingVoiceMale || 'vi-VN-NamMinhNeural');
+  const [batchDubbingVoiceFemale, setBatchDubbingVoiceFemale] = useState<string>(() => loadBatchExportConfig().batchDubbingVoiceFemale || 'vi-VN-HoaiMyNeural');
+  const [batchDubbingSpeed, setBatchDubbingSpeed] = useState<number>(() => loadBatchExportConfig().batchDubbingSpeed ?? 1.0);
+  const [batchExportFormat, setBatchExportFormat] = useState<'mp4' | 'mkv'>(() => loadBatchExportConfig().batchExportFormat);
+  const [batchExportResolution, setBatchExportResolution] = useState<'original' | '1080p' | '720p' | '2k'>(() => loadBatchExportConfig().batchExportResolution);
+  const [batchExportAspectRatio, setBatchExportAspectRatio] = useState<'original' | '9:16' | '16:9'>(() => loadBatchExportConfig().batchExportAspectRatio);
+  const [batchStages, setBatchStages] = useState<{
+    ocr: boolean;
+    translate: boolean;
+    dubbing: boolean;
+    export: boolean;
+  }>(() => loadBatchExportConfig().batchStages);
+  const [activeBatchPresetId, setActiveBatchPresetId] = useState<string>(() => loadBatchExportConfig().activeBatchPresetId || '');
+  const [isBatchTestingVoice, setIsBatchTestingVoice] = useState(false);
+  const [currentTestingBatchVoice, setCurrentTestingBatchVoice] = useState<string | null>(null);
+  const [batchVoiceTestMsg, setBatchVoiceTestMsg] = useState<string | null>(null);
+
+  // Đồng bộ cấu hình Batch khi settings từ server hoặc external event thay đổi
+  useEffect(() => {
+    if (settings.batch) {
+      const reconciled = reconcileBatchConfigWithBackend(loadBatchExportConfig(), settings);
+      setBatchTargetLang(reconciled.batchTargetLang);
+      setBatchDuckingVolume(reconciled.batchDuckingVolume);
+      setBatchDubbingEnabled(reconciled.batchDubbingEnabled);
+      setBatchDubbingMode(reconciled.batchDubbingMode);
+      setBatchDubbingVoice(reconciled.batchDubbingVoice);
+      if (reconciled.batchDubbingVoiceMale) setBatchDubbingVoiceMale(reconciled.batchDubbingVoiceMale);
+      if (reconciled.batchDubbingVoiceFemale) setBatchDubbingVoiceFemale(reconciled.batchDubbingVoiceFemale);
+      if (reconciled.batchDubbingSpeed !== undefined) setBatchDubbingSpeed(reconciled.batchDubbingSpeed);
+      setBatchExportFormat(reconciled.batchExportFormat);
+      setBatchExportResolution(reconciled.batchExportResolution);
+      setBatchExportAspectRatio(reconciled.batchExportAspectRatio);
+      setBatchStages(reconciled.batchStages);
+      if (reconciled.activeBatchPresetId) setActiveBatchPresetId(reconciled.activeBatchPresetId);
+    }
+  }, [settings.batch]);
+
+  // Hàm lưu cấu hình Batch vào cả localStorage và settings.batch
+  const handleUpdateBatchConfig = (patch: Partial<BatchExportConfig>) => {
+    const updated: BatchExportConfig = {
+      batchTargetLang: patch.batchTargetLang !== undefined ? patch.batchTargetLang : batchTargetLang,
+      batchDuckingVolume: patch.batchDuckingVolume !== undefined ? patch.batchDuckingVolume : batchDuckingVolume,
+      batchDubbingEnabled: patch.batchDubbingEnabled !== undefined ? patch.batchDubbingEnabled : batchDubbingEnabled,
+      batchDubbingMode: patch.batchDubbingMode !== undefined ? patch.batchDubbingMode : batchDubbingMode,
+      batchDubbingVoice: patch.batchDubbingVoice !== undefined ? patch.batchDubbingVoice : batchDubbingVoice,
+      batchDubbingVoiceMale: patch.batchDubbingVoiceMale !== undefined ? patch.batchDubbingVoiceMale : batchDubbingVoiceMale,
+      batchDubbingVoiceFemale: patch.batchDubbingVoiceFemale !== undefined ? patch.batchDubbingVoiceFemale : batchDubbingVoiceFemale,
+      batchDubbingSpeed: patch.batchDubbingSpeed !== undefined ? patch.batchDubbingSpeed : batchDubbingSpeed,
+      batchExportFormat: patch.batchExportFormat !== undefined ? patch.batchExportFormat : batchExportFormat,
+      batchExportResolution: patch.batchExportResolution !== undefined ? patch.batchExportResolution : batchExportResolution,
+      batchExportAspectRatio: patch.batchExportAspectRatio !== undefined ? patch.batchExportAspectRatio : batchExportAspectRatio,
+      batchStages: patch.batchStages !== undefined ? patch.batchStages : batchStages,
+      activeBatchPresetId: patch.activeBatchPresetId !== undefined ? patch.activeBatchPresetId : activeBatchPresetId,
+    };
+
+    if (patch.batchTargetLang !== undefined) setBatchTargetLang(patch.batchTargetLang);
+    if (patch.batchDuckingVolume !== undefined) setBatchDuckingVolume(patch.batchDuckingVolume);
+    if (patch.batchDubbingEnabled !== undefined) setBatchDubbingEnabled(patch.batchDubbingEnabled);
+    if (patch.batchDubbingMode !== undefined) setBatchDubbingMode(patch.batchDubbingMode);
+    if (patch.batchDubbingVoice !== undefined) setBatchDubbingVoice(patch.batchDubbingVoice);
+    if (patch.batchDubbingVoiceMale !== undefined) setBatchDubbingVoiceMale(patch.batchDubbingVoiceMale);
+    if (patch.batchDubbingVoiceFemale !== undefined) setBatchDubbingVoiceFemale(patch.batchDubbingVoiceFemale);
+    if (patch.batchDubbingSpeed !== undefined) setBatchDubbingSpeed(patch.batchDubbingSpeed);
+    if (patch.batchExportFormat !== undefined) setBatchExportFormat(patch.batchExportFormat);
+    if (patch.batchExportResolution !== undefined) setBatchExportResolution(patch.batchExportResolution);
+    if (patch.batchExportAspectRatio !== undefined) setBatchExportAspectRatio(patch.batchExportAspectRatio);
+    if (patch.batchStages !== undefined) setBatchStages(patch.batchStages);
+    if (patch.activeBatchPresetId !== undefined) setActiveBatchPresetId(patch.activeBatchPresetId);
+
+    saveBatchExportConfig(updated);
+
+    // Cập nhật settings state để trigger debounced auto-save xuống backend
+    setSettings((prev) => ({
+      ...prev,
+      translation: {
+        ...prev.translation,
+        target_language: (['zh', 'en', 'vi', 'none'].includes(updated.batchTargetLang) ? updated.batchTargetLang : prev.translation.target_language) as any,
+      },
+      dubbing: {
+        ...prev.dubbing,
+        enabled: updated.batchDubbingEnabled,
+        ducking_volume: updated.batchDuckingVolume / 100,
+        voice: updated.batchDubbingVoice || prev.dubbing.voice,
+        voice_male: updated.batchDubbingVoiceMale || prev.dubbing.voice_male,
+        voice_female: updated.batchDubbingVoiceFemale || prev.dubbing.voice_female,
+        speed: updated.batchDubbingSpeed,
+        mode: updated.batchDubbingMode === 'gender_multi' ? 'multi' : 'single',
+      },
+      batch: {
+        target_lang: updated.batchTargetLang,
+        ducking_volume: updated.batchDuckingVolume,
+        dubbing_enabled: updated.batchDubbingEnabled,
+        dubbing_mode: updated.batchDubbingMode,
+        dubbing_voice: updated.batchDubbingVoice,
+        dubbing_voice_male: updated.batchDubbingVoiceMale,
+        dubbing_voice_female: updated.batchDubbingVoiceFemale,
+        dubbing_speed: updated.batchDubbingSpeed,
+        export_format: updated.batchExportFormat,
+        export_resolution: updated.batchExportResolution,
+        export_aspect_ratio: updated.batchExportAspectRatio,
+        stage_ocr: updated.batchStages.ocr,
+        stage_translate: updated.batchStages.translate,
+        stage_dubbing: updated.batchStages.dubbing,
+        stage_export: updated.batchStages.export,
+        active_preset_id: updated.activeBatchPresetId,
+      },
+    }));
+  };
+
+  const handleTestBatchVoice = async (targetVoice: string) => {
+    if (isBatchTestingVoice && currentTestingBatchVoice === targetVoice) {
+      stopCurrentAudio();
+      setIsBatchTestingVoice(false);
+      setCurrentTestingBatchVoice(null);
+      setBatchVoiceTestMsg(null);
+      return;
+    }
+
+    stopCurrentAudio();
+    setIsBatchTestingVoice(true);
+    setCurrentTestingBatchVoice(targetVoice);
+    setBatchVoiceTestMsg(`Đang tạo âm thanh mẫu (${targetVoice})...`);
+
+    try {
+      const prov = detectVoiceProvider(targetVoice);
+      const rateStr = batchDubbingSpeed === 1.0 ? '+0%' : (batchDubbingSpeed > 1 ? `+${Math.round((batchDubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - batchDubbingSpeed) * 100)}%`);
+      const blob = await apiClient.testDubbing({
+        text: 'Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio.',
+        voice: targetVoice,
+        provider: prov,
+        rate: rateStr,
+      });
+
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      activeAudioRef.current = audio;
+
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+          setIsBatchTestingVoice(false);
+          setCurrentTestingBatchVoice(null);
+          setBatchVoiceTestMsg(null);
+        }
+      };
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        if (activeAudioRef.current === audio) {
+          activeAudioRef.current = null;
+          setIsBatchTestingVoice(false);
+          setCurrentTestingBatchVoice(null);
+          setBatchVoiceTestMsg('Lỗi phát âm thanh');
+        }
+      };
+
+      await audio.play();
+      setBatchVoiceTestMsg(`▶ Đang phát giọng đọc mẫu (${targetVoice})...`);
+    } catch (err: any) {
+      setBatchVoiceTestMsg(`Chưa thể phát giọng đọc thử: ${err?.message || 'Lỗi kết nối'}`);
+      setIsBatchTestingVoice(false);
+      setCurrentTestingBatchVoice(null);
+    }
+  };
+  const [proxyHistory, setProxyHistory] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('sls_proxy_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const saveToProxyHistory = (url: string) => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    setProxyHistory((prev) => {
+      const next = [trimmed, ...prev.filter((p) => p !== trimmed)].slice(0, 4);
+      localStorage.setItem('sls_proxy_history', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const loadDeviceInfo = () => {
+    setIsLoadingDevice(true);
+    apiClient
+      .getDeviceStatus()
+      .then((info) => {
+        setDeviceInfo(info);
+        setCustomDeviceId(info.device_id || '');
+        setCustomInstallId(info.install_id || '');
+      })
+      .catch((err) => console.warn('Could not load device info:', err))
+      .finally(() => setIsLoadingDevice(false));
+  };
+
+  const handleRotateDeviceNow = async () => {
+    setIsRotatingDevice(true);
+    setDeviceRotateMessage(null);
+    try {
+      const res = await apiClient.rotateDevice(proxyUrl.trim() || undefined);
+      setDeviceInfo(res);
+      setCustomDeviceId(res.device_id);
+      setCustomInstallId(res.install_id);
+      setDeviceRotateMessage(`Đã cấp thiết bị mới thành công: Device ID ${res.device_id}`);
+      appLogger.success(`Đã cấp thiết bị mới thành công: Device ID ${res.device_id}`, 'Thiết bị');
+      setTimeout(() => setDeviceRotateMessage(null), 5000);
+    } catch (err: any) {
+      appLogger.error(`Không thể cấp thiết bị mới: ${err?.message}`, 'Thiết bị');
+    } finally {
+      setIsRotatingDevice(false);
+    }
+  };
+
+  const handleSaveCustomDevice = async () => {
+    if (!customDeviceId.trim() || !customInstallId.trim()) {
+      alert('Vui lòng nhập đầy đủ Device ID và Install ID');
+      return;
+    }
+    setIsSavingCustomDevice(true);
+    try {
+      const res = await apiClient.saveCustomDevice(customDeviceId.trim(), customInstallId.trim());
+      setDeviceInfo(res);
+      setShowCustomDeviceInput(false);
+      setDeviceRotateMessage('Đã cập nhật định danh thiết bị tùy chỉnh thành công!');
+      appLogger.success('Đã cập nhật định danh thiết bị tùy chỉnh', 'Thiết bị');
+      setTimeout(() => setDeviceRotateMessage(null), 4000);
+    } catch (err: any) {
+      appLogger.error(`Lỗi cập nhật thiết bị: ${err?.message}`, 'Thiết bị');
+    } finally {
+      setIsSavingCustomDevice(false);
+    }
+  };
+
+  const handleTestProxyConnection = async () => {
+    const trimmed = proxyUrl.trim();
+    if (!trimmed) {
+      setProxyTestResult({ ok: false, error: 'Vui lòng nhập URL Proxy để kiểm tra' });
+      return;
+    }
+    setIsTestingProxy(true);
+    setProxyTestResult(null);
+    try {
+      const res = await apiClient.testProxy(trimmed);
+      setProxyTestResult(res);
+      if (res.ok) {
+        saveToProxyHistory(trimmed);
+        appLogger.success(`Kiểm tra Proxy thành công: IP ${res.ip} (${res.latency_ms}ms)`, 'Mạng Proxy');
+      } else {
+        appLogger.error(`Kiểm tra Proxy thất bại: ${res.error}`, 'Mạng Proxy');
+      }
+    } catch (err: any) {
+      setProxyTestResult({
+        ok: false,
+        error: err?.message || 'Không thể kết nối đến Proxy',
+      });
+      appLogger.error(`Lỗi kiểm tra proxy: ${err?.message}`, 'Mạng Proxy');
+    } finally {
+      setIsTestingProxy(false);
+    }
+  };
+
+  const handleSaveProxyAndDeviceConfig = () => {
+    const trimmed = proxyUrl.trim();
+    localStorage.setItem('sls_proxy_url', trimmed);
+    localStorage.setItem('sls_proxy_enabled', String(isProxyEnabled));
+    localStorage.setItem('sls_rate_limit_delay', String(rateLimitDelay));
+    localStorage.setItem('sls_rotation_interval', String(rotationInterval));
+    localStorage.setItem('sls_rotate_device', String(rotationInterval > 0));
+    if (trimmed) {
+      saveToProxyHistory(trimmed);
+    }
+    setProxySaveSuccess(true);
+    appLogger.success('Đã lưu cấu hình thiết bị & proxy!', 'Hệ thống');
+    setTimeout(() => {
+      setProxySaveSuccess(false);
+    }, 2500);
+  };
+
+  const copyToClipboard = (text: string, type: 'device' | 'install') => {
+    navigator.clipboard.writeText(text);
+    if (type === 'device') {
+      setCopiedDeviceId(true);
+      setTimeout(() => setCopiedDeviceId(false), 2000);
+    } else {
+      setCopiedInstallId(true);
+      setTimeout(() => setCopiedInstallId(false), 2000);
+    }
+  };
 
   useEffect(() => {
     loadPipelineSettings();
     loadHardwareInfo();
     loadGeminiPool();
+    loadDeviceInfo();
     // Groq/Whisper retired: no network/API call.
   }, []);
 
@@ -883,39 +1226,6 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
             <Zap className="w-3 h-3 text-emerald-400 shrink-0" />
             <span>Cấu Hình Toàn Cục</span>
           </span>
-          <div className="h-4 w-px bg-slate-800 hidden md:block shrink-0" />
-
-          {/* Cụm Nút Chuyển Màn Hình Chuẩn Hóa Liền Kề Bên Trái */}
-          <div className="hidden md:flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm shrink-0">
-            {onOpenDownloader && (
-              <button
-                onClick={() => onOpenDownloader('direct')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer shrink-0 whitespace-nowrap"
-                title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
-              >
-                <Download className="w-3.5 h-3.5 shrink-0" />
-                <span>Tải Video</span>
-              </button>
-            )}
-            {onOpenQueue && (
-              <button
-                onClick={onOpenQueue}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 whitespace-nowrap"
-                title="Hàng đợi tải phim tự động"
-              >
-                <ListPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                <span>Hàng Đợi</span>
-              </button>
-            )}
-            <button
-              onClick={() => setActiveTab('ocr')}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium text-indigo-300 bg-indigo-950/80 border border-indigo-700/60 shadow-sm transition cursor-pointer shrink-0 whitespace-nowrap"
-              title="Thiết lập toàn cục hệ thống"
-            >
-              <Settings className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span>Thiết Lập</span>
-            </button>
-          </div>
         </div>
 
         {/* Cụm Phải: Nút Lưu & Quản Lý Keys */}
@@ -1043,6 +1353,40 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
               <div className="text-left">
                 <div>4. Render & Presets</div>
                 <div className="text-[10px] font-normal text-slate-500">GPU NVENC / Chuẩn mẫu</div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('device')}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition cursor-pointer ${
+                activeTab === 'device'
+                  ? 'bg-emerald-600/25 text-emerald-300 border border-emerald-500/50 shadow-md ring-1 ring-emerald-500/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <div className={`p-1.5 rounded-lg ${activeTab === 'device' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                <Smartphone className="w-4 h-4" />
+              </div>
+              <div className="text-left">
+                <div>5. Thiết Bị & Proxy</div>
+                <div className="text-[10px] font-normal text-slate-500">Android ID / HTTP Proxy</div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('batch')}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition cursor-pointer ${
+                activeTab === 'batch'
+                  ? 'bg-cyan-600/25 text-cyan-300 border border-cyan-500/50 shadow-md ring-1 ring-cyan-500/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <div className={`p-1.5 rounded-lg ${activeTab === 'batch' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                <Sliders className="w-4 h-4" />
+              </div>
+              <div className="text-left">
+                <div>6. Xuất Hàng Loạt</div>
+                <div className="text-[10px] font-normal text-slate-500">Ngôn ngữ, Dubbing, Công đoạn</div>
               </div>
             </button>
           </div>
@@ -4092,6 +4436,745 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ================= TAB 5: THIẾT BỊ & MẠNG PROXY ================= */}
+          {activeTab === 'device' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              <div className="border-b border-slate-800 pb-3">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Smartphone className="w-5 h-5 text-emerald-400" />
+                  <span>5. Cấu Hình Thiết Bị Giả Lập & Mạng Proxy</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Định danh thiết bị Android giả lập (ByteDance SNSSDK / Hồng Quả) và cấu hình máy chủ Proxy để vượt rào cản địa lý và chống chặn IP.
+                </p>
+              </div>
+
+              {/* Thông báo xoay tua thiết bị */}
+              {deviceRotateMessage && (
+                <div className="p-3 bg-emerald-950/80 border border-emerald-700/60 rounded-xl text-xs text-emerald-300 flex items-center justify-between shadow animate-in fade-in">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>{deviceRotateMessage}</span>
+                  </div>
+                  <button onClick={() => setDeviceRotateMessage(null)} className="text-emerald-400 hover:text-white font-bold">✕</button>
+                </div>
+              )}
+
+              {/* CARD 1: ĐỊNH DANH THIẾT BỊ ANDROID HIỆN TẠI */}
+              <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-4 shadow-sm">
+                <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400">
+                      <Smartphone className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">Định Danh Thiết Bị Đang Dùng</h4>
+                      <p className="text-[11px] text-slate-400">Hồ sơ thiết bị gửi kèm các API request</p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 text-[11px] font-semibold flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    {deviceInfo?.status === 'ready' ? 'Sẵn sàng gửi request' : 'Đang khởi tạo'}
+                  </span>
+                </div>
+
+                {/* Chi tiết thiết bị */}
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between text-slate-400 pb-2 border-b border-slate-800/80">
+                    <span>Thiết bị giả lập:</span>
+                    <span className="text-slate-100 font-semibold">
+                      {deviceInfo?.device_brand || 'Xiaomi'} {deviceInfo?.device_model || 'MI 12'} (Kernel v32.9.0)
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-slate-400 pb-2 border-b border-slate-800/80">
+                    <span>Máy chủ cấp phát:</span>
+                    <span className="text-emerald-300 font-mono text-[11px]">
+                      {deviceInfo?.server_source || 'https://log.snssdk.com (ByteDance SNSSDK)'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Device ID:</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-cyan-300 font-bold bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                          {deviceInfo?.device_id || 'Đang tải...'}
+                        </span>
+                        {deviceInfo?.device_id && (
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(deviceInfo.device_id, 'device')}
+                            className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                            title="Sao chép Device ID"
+                          >
+                            {copiedDeviceId ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Install ID:</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-cyan-300 font-bold bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                          {deviceInfo?.install_id || 'Đang tải...'}
+                        </span>
+                        {deviceInfo?.install_id && (
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(deviceInfo.install_id, 'install')}
+                            className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                            title="Sao chép Install ID"
+                          >
+                            {copiedInstallId ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Các nút hành động thiết bị */}
+                <div className="flex items-center gap-2 flex-wrap pt-1">
+                  <button
+                    type="button"
+                    onClick={handleRotateDeviceNow}
+                    disabled={isRotatingDevice}
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-sm transition disabled:opacity-50 cursor-pointer active:scale-95"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 text-indigo-400 ${isRotatingDevice ? 'animate-spin' : ''}`} />
+                    <span>{isRotatingDevice ? 'Đang cấp mới...' : 'Cấp Mới Thiết Bị (Rotate)'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomDeviceInput(!showCustomDeviceInput)}
+                    className="px-3.5 py-2 bg-slate-800/80 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{showCustomDeviceInput ? 'Hủy Điền Thủ Công' : 'Điền Thủ Công'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={loadDeviceInfo}
+                    disabled={isLoadingDevice}
+                    className="p-2 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-white border border-slate-700 rounded-xl transition cursor-pointer"
+                    title="Tải lại trạng thái thiết bị"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDevice ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+
+                {/* Khung điền thủ công */}
+                {showCustomDeviceInput && (
+                  <div className="p-3.5 rounded-xl bg-slate-950 border border-amber-600/40 space-y-3 animate-in fade-in">
+                    <div className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                      <Edit2 className="w-3.5 h-3.5" />
+                      <span>Nhập thông số thiết bị thủ công</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">Custom Device ID:</label>
+                        <input
+                          type="text"
+                          value={customDeviceId}
+                          onChange={(e) => setCustomDeviceId(e.target.value)}
+                          placeholder="Ví dụ: 123456789012345"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">Custom Install ID:</label>
+                        <input
+                          type="text"
+                          value={customInstallId}
+                          onChange={(e) => setCustomInstallId(e.target.value)}
+                          placeholder="Ví dụ: 987654321098765"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={handleSaveCustomDevice}
+                        disabled={isSavingCustomDevice}
+                        className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-lg transition cursor-pointer shadow"
+                      >
+                        {isSavingCustomDevice ? 'Đang lưu...' : 'Lưu Định Danh'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* CARD 2: CẤU HÌNH PROXY & CHỐNG CHẶN */}
+              <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-4 shadow-sm">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-cyan-500/10 border border-cyan-500/20 rounded-lg text-cyan-400">
+                      <Wifi className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">Máy Chủ Proxy (Định Tuyến Mạng)</h4>
+                      <p className="text-[11px] text-slate-400">Hỗ trợ HTTP, HTTPS, SOCKS5</p>
+                    </div>
+                  </div>
+
+                  {/* Toggle Bật/Tắt Proxy */}
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <span className="text-xs font-semibold text-slate-300">
+                      {isProxyEnabled ? 'Đang bật' : 'Đang tắt'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={isProxyEnabled}
+                      onChange={(e) => setIsProxyEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600 relative" />
+                  </label>
+                </div>
+
+                <div className="space-y-3">
+                  {/* Ô nhập URL Proxy */}
+                  <div>
+                    <label className="text-xs text-slate-300 font-semibold block mb-1.5">
+                      Địa chỉ Proxy:
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={proxyUrl}
+                        onChange={(e) => {
+                          setProxyUrl(e.target.value);
+                          setProxyTestResult(null);
+                        }}
+                        placeholder="http://user:pass@ip:port hoặc socks5://ip:port"
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500 transition"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleTestProxyConnection}
+                        disabled={isTestingProxy || !proxyUrl.trim()}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-cyan-300 hover:text-cyan-200 border border-slate-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition disabled:opacity-40 cursor-pointer shrink-0"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isTestingProxy ? 'animate-spin' : ''}`} />
+                        <span>{isTestingProxy ? 'Đang test...' : 'Kiểm Tra'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preset và Lịch sử */}
+                  <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                    <span className="text-slate-500">Mẫu:</span>
+                    {[
+                      { label: 'HTTP Cục Bộ', val: 'http://127.0.0.1:7890' },
+                      { label: 'SOCKS5 Cục Bộ', val: 'socks5://127.0.0.1:10808' },
+                    ].map((ps) => (
+                      <button
+                        key={ps.label}
+                        type="button"
+                        onClick={() => {
+                          setProxyUrl(ps.val);
+                          setIsProxyEnabled(true);
+                          setProxyTestResult(null);
+                        }}
+                        className="px-2 py-0.5 rounded bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 border border-slate-800 transition font-mono text-[10px]"
+                      >
+                        {ps.label}
+                      </button>
+                    ))}
+                    {proxyHistory.length > 0 && (
+                      <>
+                        <span className="text-slate-600 pl-1">• Gần đây:</span>
+                        {proxyHistory.map((hist) => (
+                          <button
+                            key={hist}
+                            type="button"
+                            onClick={() => {
+                              setProxyUrl(hist);
+                              setIsProxyEnabled(true);
+                              setProxyTestResult(null);
+                            }}
+                            className="px-2 py-0.5 rounded bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-300 border border-cyan-800/40 transition font-mono text-[10px] truncate max-w-[150px]"
+                            title={hist}
+                          >
+                            {hist}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+
+                  {/* Kết quả kiểm tra proxy */}
+                  {proxyTestResult && (
+                    <div
+                      className={`p-3.5 rounded-xl border text-xs space-y-1.5 ${
+                        proxyTestResult.ok
+                          ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300'
+                          : 'bg-rose-950/40 border-rose-800/60 text-rose-300'
+                      }`}
+                    >
+                      {proxyTestResult.ok ? (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-400">IP thật của máy:</span>
+                            <span className="font-mono text-slate-300">{proxyTestResult.direct_ip || '115.76.50.129'}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-emerald-300 font-semibold">IP xuất ngoại qua Proxy:</span>
+                            <span className="font-mono text-emerald-200 font-bold text-sm">{proxyTestResult.ip}</span>
+                          </div>
+                          <div className="flex items-center justify-between pt-1.5 border-t border-emerald-800/40 text-[11px]">
+                            <span>Độ trễ Ping: <strong className="text-cyan-300">{proxyTestResult.latency_ms}ms</strong></span>
+                            <span className="text-emerald-400 font-bold">
+                              {proxyTestResult.is_masked ? '✓ Đã ẩn danh (Khác IP gốc)' : '⚠ Trùng IP gốc máy'}
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                          <span>{proxyTestResult.error}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Giãn cách & Tự động đổi thiết bị */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800">
+                    <div>
+                      <label className="text-xs text-slate-300 font-semibold flex items-center justify-between mb-1">
+                        <span>Giãn cách giữa các lượt tải:</span>
+                        <span className="text-cyan-400 font-mono font-bold">{rateLimitDelay}s</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="10.0"
+                        step="0.5"
+                        value={rateLimitDelay}
+                        onChange={(e) => setRateLimitDelay(parseFloat(e.target.value))}
+                        className="w-full accent-cyan-500 cursor-pointer"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-0.5">Tránh bị máy chủ giới hạn tần suất (Rate-limit 429)</p>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-slate-300 font-semibold block mb-1">
+                        Chu kỳ tự đổi thiết bị:
+                      </label>
+                      <select
+                        value={rotationInterval}
+                        onChange={(e) => setRotationInterval(parseInt(e.target.value))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 font-semibold focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value={1}>Mỗi 1 video / request (Khuyên dùng)</option>
+                        <option value={3}>Mỗi 3 video</option>
+                        <option value={5}>Mỗi 5 video</option>
+                        <option value={10}>Mỗi 10 video</option>
+                        <option value={0}>Không tự động đổi (Thủ công)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Nút lưu cấu hình proxy & thiết bị */}
+                <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                  <div>
+                    {proxySaveSuccess && (
+                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4" />
+                        Đã lưu cấu hình thiết bị & proxy!
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSaveProxyAndDeviceConfig}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Lưu Cấu Hình Mạng & Thiết Bị</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ================= TAB 6: CẤU HÌNH XUẤT HÀNG LOẠT ================= */}
+          {activeTab === 'batch' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              <div className="border-b border-slate-800 pb-3">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Sliders className="w-5 h-5 text-cyan-400" />
+                  <span>6. Cấu Hình Xử Lý & Xuất Hàng Loạt (Batch Export Pipeline)</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Thiết lập chuẩn hóa áp dụng đồng loạt cho tất cả các tập phim trong danh mục: ngôn ngữ dịch, độ nén nhạc nền gốc, lồng tiếng AI và định dạng xuất thành phẩm.
+                </p>
+              </div>
+
+              {/* CARD 1: CÔNG ĐOẠN XỬ LÝ & CHUẨN MẪU (PRESET) */}
+              <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-indigo-400">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">1. Công Đoạn Thực Hiện & Chuẩn Áp Dụng</h4>
+                      <p className="text-[11px] text-slate-400">Chọn các bước tự động chạy tuần tự khi nhấn Xử lý hàng loạt</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  <label className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-cyan-500/50 cursor-pointer transition">
+                    <input
+                      type="checkbox"
+                      checked={batchStages.ocr}
+                      onChange={(e) => handleUpdateBatchConfig({ batchStages: { ...batchStages, ocr: e.target.checked } })}
+                      className="w-4 h-4 rounded accent-cyan-500 cursor-pointer"
+                    />
+                    <div>
+                      <div className="text-xs font-bold text-slate-200">1. Quét OCR</div>
+                      <div className="text-[10px] text-slate-500">Trích xuất phụ đề gốc</div>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 cursor-pointer transition">
+                    <input
+                      type="checkbox"
+                      checked={batchStages.translate}
+                      onChange={(e) => handleUpdateBatchConfig({ batchStages: { ...batchStages, translate: e.target.checked } })}
+                      className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
+                    />
+                    <div>
+                      <div className="text-xs font-bold text-slate-200">2. Dịch Thuật AI</div>
+                      <div className="text-[10px] text-slate-500">Chuyển ngữ sang đích</div>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/50 cursor-pointer transition">
+                    <input
+                      type="checkbox"
+                      checked={batchStages.dubbing}
+                      onChange={(e) => handleUpdateBatchConfig({ batchStages: { ...batchStages, dubbing: e.target.checked } })}
+                      className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
+                    />
+                    <div>
+                      <div className="text-xs font-bold text-slate-200">3. Lồng Tiếng AI</div>
+                      <div className="text-[10px] text-slate-500">Tạo audio thuyết minh</div>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-purple-500/50 cursor-pointer transition">
+                    <input
+                      type="checkbox"
+                      checked={batchStages.export}
+                      onChange={(e) => handleUpdateBatchConfig({ batchStages: { ...batchStages, export: e.target.checked } })}
+                      className="w-4 h-4 rounded accent-purple-500 cursor-pointer"
+                    />
+                    <div>
+                      <div className="text-xs font-bold text-slate-200">4. Render Xuất</div>
+                      <div className="text-[10px] text-slate-500">Mã hóa MP4 / MKV</div>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex-1 min-w-[200px]">
+                    <label className="text-xs font-semibold text-slate-300 block mb-1">
+                      Chuẩn Cấu Hình Áp Dụng (Preset Profile):
+                    </label>
+                    <select
+                      value={activeBatchPresetId || ''}
+                      onChange={(e) => handleUpdateBatchConfig({ activeBatchPresetId: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500 transition cursor-pointer"
+                    >
+                      <option value="">-- Mặc định hệ thống --</option>
+                      {presets.map((p) => (
+                        <option key={p.id} value={p.id} className="bg-slate-900 text-slate-200">
+                          {p.name} ({p.aspect_ratio || '16:9'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Preset xác định vùng che sub (ROI), tỉ lệ khung hình và kiểu làm mờ.
+                  </div>
+                </div>
+              </div>
+
+              {/* CARD 2: NGÔN NGỮ VÀ ÂM LƯỢNG GỐC */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* 2.1 Ngôn ngữ dịch */}
+                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                  <div className="flex items-center gap-2 text-cyan-400">
+                    <Languages className="w-4 h-4" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">Ngôn Ngữ Dịch Thuật</h4>
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">Chọn ngôn ngữ đích cần dịch sang:</label>
+                    <select
+                      value={batchTargetLang}
+                      onChange={(e) => handleUpdateBatchConfig({ batchTargetLang: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 text-xs focus:outline-none focus:border-cyan-500 cursor-pointer"
+                    >
+                      <option value="vi">Tiếng Việt (vi) - Phổ biến</option>
+                      <option value="en">Tiếng Anh (en)</option>
+                      <option value="zh">Tiếng Trung (zh)</option>
+                      <option value="none">Giữ nguyên phụ đề gốc (Không dịch)</option>
+                    </select>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Sử dụng mô hình AI đã cấu hình trong Tab 2 (Gemini / Local LLM) để dịch ngữ cảnh chuẩn điện ảnh.
+                  </p>
+                </div>
+
+                {/* 2.2 Giảm âm lượng video gốc */}
+                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-amber-400">
+                      <Volume2 className="w-4 h-4" />
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">Giảm Âm Lượng Gốc (Ducking)</h4>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-amber-400 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded">
+                      {batchDuckingVolume}%
+                    </span>
+                  </div>
+                  <div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={batchDuckingVolume}
+                      onChange={(e) => handleUpdateBatchConfig({ batchDuckingVolume: Number(e.target.value) })}
+                      className="w-full h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-1">
+                      <span>0% (Tắt hoàn toàn tiếng gốc)</span>
+                      <span>25% (Khuyên dùng)</span>
+                      <span>100% (Giữ nguyên âm lượng gốc)</span>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Tự động hạ âm lượng video gốc khi có giọng đọc AI để lời thoại rõ ràng, không bị lẫn tiếng nhân vật gốc.
+                  </p>
+                </div>
+              </div>
+
+              {/* CARD 3: CẤU HÌNH LỒNG TIẾNG AI (TTS) */}
+              <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400">
+                      <Mic className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">Lồng Tiếng AI Toàn Cục</h4>
+                      <p className="text-[11px] text-slate-400">Tự động lồng tiếng cho toàn bộ các tập video được xuất</p>
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <span className="text-xs font-semibold text-slate-300">
+                      {batchDubbingEnabled ? 'Đang bật' : 'Đang tắt'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={batchDubbingEnabled}
+                      onChange={(e) => handleUpdateBatchConfig({ batchDubbingEnabled: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                  </label>
+                </div>
+
+                {batchDubbingEnabled && (
+                  <div className="space-y-4 pt-1">
+                    {/* Chế độ giọng đọc: Đơn giọng vs Nam / Nữ */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div
+                        onClick={() => handleUpdateBatchConfig({ batchDubbingMode: 'single' })}
+                        className={`p-3 rounded-xl border cursor-pointer transition flex items-center justify-between ${
+                          batchDubbingMode === 'single'
+                            ? 'bg-emerald-950/40 border-emerald-500/60 text-white'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-xs font-bold">Chế độ Đơn Giọng</div>
+                          <div className="text-[10px] text-slate-500">1 giọng đọc cố định cho toàn bộ video</div>
+                        </div>
+                        <input
+                          type="radio"
+                          name="batchDubbingMode"
+                          checked={batchDubbingMode === 'single'}
+                          onChange={() => handleUpdateBatchConfig({ batchDubbingMode: 'single' })}
+                          className="accent-emerald-500"
+                        />
+                      </div>
+
+                      <div
+                        onClick={() => handleUpdateBatchConfig({ batchDubbingMode: 'gender_multi' })}
+                        className={`p-3 rounded-xl border cursor-pointer transition flex items-center justify-between ${
+                          batchDubbingMode === 'gender_multi'
+                            ? 'bg-emerald-950/40 border-emerald-500/60 text-white'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-xs font-bold">Chế độ Đa Giọng Nam / Nữ</div>
+                          <div className="text-[10px] text-slate-500">Tự phân loại nhân vật Nam & Nữ theo kịch bản</div>
+                        </div>
+                        <input
+                          type="radio"
+                          name="batchDubbingMode"
+                          checked={batchDubbingMode === 'gender_multi'}
+                          onChange={() => handleUpdateBatchConfig({ batchDubbingMode: 'gender_multi' })}
+                          className="accent-emerald-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Chọn giọng đọc chi tiết */}
+                    <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+                      {batchDubbingMode === 'single' ? (
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-slate-300 block">
+                            Giọng đọc áp dụng:
+                          </label>
+                          <VoiceCatalogPicker
+                            selectedVoiceId={batchDubbingVoice}
+                            onChange={(v) => handleUpdateBatchConfig({ batchDubbingVoice: v })}
+                            onPreview={handleTestBatchVoice}
+                            previewingVoiceId={currentTestingBatchVoice || undefined}
+                          />
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-sky-300 block flex items-center gap-1.5">
+                              <span>♂ Giọng Nam Chính:</span>
+                            </label>
+                            <VoiceCatalogPicker
+                              selectedVoiceId={batchDubbingVoiceMale}
+                              onChange={(v) => handleUpdateBatchConfig({ batchDubbingVoiceMale: v })}
+                              gender="Nam"
+                              onPreview={handleTestBatchVoice}
+                              previewingVoiceId={currentTestingBatchVoice || undefined}
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-pink-300 block flex items-center gap-1.5">
+                              <span>♀ Giọng Nữ Chính:</span>
+                            </label>
+                            <VoiceCatalogPicker
+                              selectedVoiceId={batchDubbingVoiceFemale}
+                              onChange={(v) => handleUpdateBatchConfig({ batchDubbingVoiceFemale: v })}
+                              gender="Nữ"
+                              onPreview={handleTestBatchVoice}
+                              previewingVoiceId={currentTestingBatchVoice || undefined}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tốc độ đọc */}
+                      <div className="pt-3 border-t border-slate-800 flex items-center justify-between flex-wrap gap-4">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-semibold text-slate-300">Tốc độ đọc giọng AI:</span>
+                          <div className="flex items-center gap-2">
+                            {[0.85, 1.0, 1.15, 1.25, 1.35].map((spd) => (
+                              <button
+                                key={spd}
+                                type="button"
+                                onClick={() => handleUpdateBatchConfig({ batchDubbingSpeed: spd })}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition cursor-pointer ${
+                                  batchDubbingSpeed === spd
+                                    ? 'bg-amber-500 text-slate-950 shadow'
+                                    : 'bg-slate-900 border border-slate-800 text-slate-300 hover:text-white'
+                                }`}
+                              >
+                                {spd.toFixed(2)}x
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {batchVoiceTestMsg && (
+                          <div className="text-xs text-amber-300 animate-pulse font-medium">
+                            {batchVoiceTestMsg}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* CARD 4: ĐỊNH DẠNG & ĐỘ PHÂN GIẢI XUẤT */}
+              <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
+                <div className="flex items-center gap-2 text-purple-400 pb-2 border-b border-slate-800">
+                  <Video className="w-4 h-4" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-200">Định Dạng & Độ Phân Giải Khi Xuất Video</h4>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-1">Container Video:</label>
+                    <select
+                      value={batchExportFormat}
+                      onChange={(e) => handleUpdateBatchConfig({ batchExportFormat: e.target.value as any })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 text-xs focus:outline-none focus:border-purple-500 cursor-pointer"
+                    >
+                      <option value="mp4">MP4 (Khuyên dùng - Chuẩn tương thích cao)</option>
+                      <option value="mkv">MKV (Chứa đa luồng subtitle)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-1">Độ Phân Giải:</label>
+                    <select
+                      value={batchExportResolution}
+                      onChange={(e) => handleUpdateBatchConfig({ batchExportResolution: e.target.value as any })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 text-xs focus:outline-none focus:border-purple-500 cursor-pointer"
+                    >
+                      <option value="original">Gốc (100% giữ nguyên kích thước)</option>
+                      <option value="1080p">1080p Full HD (1920x1080 / 1080x1920)</option>
+                      <option value="720p">720p HD (1280x720 / 720x1280)</option>
+                      <option value="2k">2K QHD (2560x1440)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-1">Tỷ Lệ Khung Hình:</label>
+                    <select
+                      value={batchExportAspectRatio}
+                      onChange={(e) => handleUpdateBatchConfig({ batchExportAspectRatio: e.target.value as any })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 text-xs focus:outline-none focus:border-purple-500 cursor-pointer"
+                    >
+                      <option value="original">Gốc (Theo video đầu vào)</option>
+                      <option value="16:9">16:9 (Màn hình ngang - YouTube)</option>
+                      <option value="9:16">9:16 (Màn hình dọc - TikTok / Reels / Shorts)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="pt-2 text-[11px] text-slate-500">
+                  Quá trình render sẽ tự động tận dụng card đồ họa GPU NVIDIA (NVENC) để tăng tốc độ xuất video nhanh gấp 5-10 lần so với CPU.
                 </div>
               </div>
             </div>

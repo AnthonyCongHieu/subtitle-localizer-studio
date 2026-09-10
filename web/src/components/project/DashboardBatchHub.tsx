@@ -21,7 +21,6 @@ import {
   Mic,
   Rocket,
   ChevronLeft,
-  ChevronRight,
   Sparkles,
   FolderPlus,
   Key,
@@ -31,36 +30,25 @@ import {
   Search,
   Copy,
   Check,
-  Globe,
   Smartphone,
   Activity,
   Volume2,
   Video,
-  Sliders,
   ArrowUpDown,
   Scan,
   CheckCircle2,
   FolderOpen,
   Download,
-  ListPlus,
   Crosshair,
   SlidersHorizontal,
   RotateCcw,
   Save,
-  Loader2,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
 import { RoiOverlay } from '../roi/RoiOverlay';
 import { GlobalPipelineSettings } from '../../api/client';
 import {
-  VOICE_CATALOG,
   detectVoiceProvider,
-  VOICE_CATEGORIES,
-  VoiceCategory,
-  getVoiceDropdownGroups,
 } from '../../constants/voiceCatalog';
-import { VoiceCatalogPicker } from '../common/VoiceCatalogPicker';
 import {
   loadBatchExportConfig,
   saveBatchExportConfig,
@@ -597,13 +585,13 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   onSelectProject,
   onNewProject,
   onDeleteProject,
-  onOpenPresetManager,
-  onOpenSettingsTab,
+  onOpenPresetManager: _onOpenPresetManager,
+  onOpenSettingsTab: _onOpenSettingsTab,
   onRefreshProjects,
   onBatchProjectsCreated,
-  onOpenQueue,
-  onOpenDownloader,
-  onOpenAdmin,
+  onOpenQueue: _onOpenQueue,
+  onOpenDownloader: _onOpenDownloader,
+  onOpenAdmin: _onOpenAdmin,
   selectedDramaTitle: propSelectedDramaTitle,
   onSelectDramaTitle,
 }) => {
@@ -622,91 +610,10 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
   const [batchDubbingVoiceMale, setBatchDubbingVoiceMale] = useState<string>(() => loadBatchExportConfig().batchDubbingVoiceMale || 'vi-VN-NamMinhNeural');
   const [batchDubbingVoiceFemale, setBatchDubbingVoiceFemale] = useState<string>(() => loadBatchExportConfig().batchDubbingVoiceFemale || 'vi-VN-HoaiMyNeural');
   const [batchDubbingSpeed, setBatchDubbingSpeed] = useState<number>(() => loadBatchExportConfig().batchDubbingSpeed ?? 1.0);
-  const [isDubbingExpanded, setIsDubbingExpanded] = useState<boolean>(false);
-  const activeAudioInstanceRef = useRef<HTMLAudioElement | null>(null);
-  const [voiceCategoryFilter, setVoiceCategoryFilter] = useState<VoiceCategory>('all');
-  const [isTestingVoice, setIsTestingVoice] = useState<boolean>(false);
-  const [currentTestingVoice, setCurrentTestingVoice] = useState<string | null>(null);
-  const [testVoiceMsg, setTestVoiceMsg] = useState<string | null>(null);
   const [batchExportFormat, setBatchExportFormat] = useState<'mp4' | 'mkv'>(() => loadBatchExportConfig().batchExportFormat);
   const [batchExportResolution, setBatchExportResolution] = useState<'original' | '1080p' | '720p' | '2k'>(() => loadBatchExportConfig().batchExportResolution);
   const [batchExportAspectRatio, setBatchExportAspectRatio] = useState<'original' | '9:16' | '16:9'>(() => loadBatchExportConfig().batchExportAspectRatio);
   const [sortMode, setSortMode] = useState<'ep_asc' | 'ep_desc' | 'name_asc' | 'name_desc' | 'status' | 'duration'>(() => loadBatchExportConfig().sortMode || 'ep_asc');
-
-  // Dọn dẹp âm thanh mẫu khi unmount
-  useEffect(() => {
-    return () => {
-      if (activeAudioInstanceRef.current) {
-        activeAudioInstanceRef.current.pause();
-        activeAudioInstanceRef.current = null;
-      }
-    };
-  }, []);
-
-  const handleTestVoice = async (targetVoice: string) => {
-    // Nếu đang phát đúng giọng này, bấm lại sẽ dừng phát
-    if (isTestingVoice && currentTestingVoice === targetVoice) {
-      if (activeAudioInstanceRef.current) {
-        activeAudioInstanceRef.current.pause();
-        activeAudioInstanceRef.current = null;
-      }
-      setIsTestingVoice(false);
-      setCurrentTestingVoice(null);
-      setTestVoiceMsg(null);
-      return;
-    }
-
-    if (activeAudioInstanceRef.current) {
-      activeAudioInstanceRef.current.pause();
-      activeAudioInstanceRef.current = null;
-    }
-
-    setIsTestingVoice(true);
-    setCurrentTestingVoice(targetVoice);
-    setTestVoiceMsg(`Đang tạo âm thanh mẫu (${targetVoice})...`);
-
-    try {
-      const prov = detectVoiceProvider(targetVoice);
-      const rateStr = batchDubbingSpeed === 1.0 ? '+0%' : (batchDubbingSpeed > 1 ? `+${Math.round((batchDubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - batchDubbingSpeed) * 100)}%`);
-      const blob = await apiClient.testDubbing({
-        text: 'Xin chào, đây là giọng đọc thử nghiệm của Subtitle Localizer Studio.',
-        voice: targetVoice,
-        provider: prov,
-        rate: rateStr,
-      });
-
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      activeAudioInstanceRef.current = audio;
-
-      audio.onended = () => {
-        URL.revokeObjectURL(url);
-        if (activeAudioInstanceRef.current === audio) {
-          activeAudioInstanceRef.current = null;
-          setIsTestingVoice(false);
-          setCurrentTestingVoice(null);
-          setTestVoiceMsg(null);
-        }
-      };
-
-      audio.onerror = () => {
-        URL.revokeObjectURL(url);
-        if (activeAudioInstanceRef.current === audio) {
-          activeAudioInstanceRef.current = null;
-          setIsTestingVoice(false);
-          setCurrentTestingVoice(null);
-          setTestVoiceMsg('Lỗi phát âm thanh');
-        }
-      };
-
-      await audio.play();
-      setTestVoiceMsg(`▶ Đang phát giọng đọc mẫu (${targetVoice})...`);
-    } catch (err: any) {
-      setTestVoiceMsg(`Chưa thể phát giọng đọc thử: ${err?.message || 'Lỗi kết nối'}`);
-      setIsTestingVoice(false);
-      setCurrentTestingVoice(null);
-    }
-  };
 
   // Các công đoạn thực hiện hàng loạt (Batch Stages Selector)
   const [batchStages, setBatchStages] = useState<{
@@ -716,8 +623,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     export: boolean;
   }>(() => loadBatchExportConfig().batchStages);
 
-  // Trạng thái tự lưu cấu hình
-  const [batchAutoSaveStatus, setBatchAutoSaveStatus] = useState<'saved' | 'saving'>('saved');
   const isBatchInitialLoaded = useRef<boolean>(false);
   const lastSavedConfigJson = useRef<string>('');
   const isSyncingFromExternal = useRef<boolean>(false);
@@ -842,7 +747,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     }
 
     lastSavedConfigJson.current = currentConfigJson;
-    setBatchAutoSaveStatus('saving');
 
     // Debounce đồng bộ xuống backend pipeline settings (lưu vào pipeline_settings.json trên đĩa)
     const syncTimer = setTimeout(async () => {
@@ -899,8 +803,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
         }
       } catch (err) {
         console.warn('Lỗi đồng bộ cấu hình sang backend pipeline_settings:', err);
-      } finally {
-        setBatchAutoSaveStatus('saved');
       }
     }, 400);
 
@@ -1823,15 +1725,18 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     setQueueStatusMessage('Đã dừng hàng đợi xử lý.');
   };
 
-  const scannedCount = projects.filter((p) => (p.cues_count || 0) > 0).length;
-  const translatedCount = projects.filter((p) => (p.translated_count || 0) > 0).length;
-  const voiceCount = projects.filter((p) => p.has_voiceover).length;
-  const completedCount = isQueueRunning
-    ? queueItems.filter((i) => i.status === 'completed').length
-    : projects.filter((p) => p.has_export).length;
-
   return (
     <div className="flex-1 w-full h-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
+      {/* File Input Ẩn cho Nạp File Hàng Loạt */}
+      <input
+        ref={batchFileInputRef}
+        type="file"
+        accept="video/*"
+        multiple
+        className="hidden"
+        onChange={handleBatchFileSelect}
+      />
+
       {/* 1. Header Đỉnh Chuẩn Mẫu (Header Bar - Đồng bộ 100% với Studio) */}
       <header className="relative h-12 shrink-0 bg-slate-950 border-b border-slate-800/90 px-3 sm:px-4 flex items-center justify-between z-40 text-xs select-none shadow-md gap-2 overflow-x-auto no-scrollbar">
         {/* Trái: Logo & Các Tab Điều Hướng */}
@@ -1852,50 +1757,13 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               <FolderPlus className="w-3.5 h-3.5 text-white shrink-0" />
               <span>Tạo Dự Án</span>
             </button>
-          </div>
-
-          <div className="h-4 w-px bg-slate-800 hidden md:block shrink-0" />
-
-          {/* Cụm Nút Chuyển Màn Hình Chuẩn Hóa Liền Kề Bên Trái */}
-          <div className="hidden md:flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 shadow-sm shrink-0">
-            {onOpenDownloader && (
-              <button
-                onClick={() => onOpenDownloader('direct')}
-                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition cursor-pointer shrink-0 whitespace-nowrap"
-                title="Tải video từ mạng (Douyin, Kuaishou, YouTube)"
-              >
-                <Download className="w-3.5 h-3.5 shrink-0" />
-                <span>Tải Video</span>
-              </button>
-            )}
-            {onOpenQueue && (
-              <button
-                onClick={onOpenQueue}
-                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 whitespace-nowrap"
-                title="Hàng đợi tải phim tự động"
-              >
-                <ListPlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                <span>Hàng Đợi</span>
-              </button>
-            )}
-            {onOpenAdmin && (
-              <button onClick={onOpenAdmin} className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-cyan-300 hover:text-white hover:bg-cyan-950/40 transition cursor-pointer shrink-0 whitespace-nowrap" title="Quản lý worker và job LAN">
-                <Activity className="w-3.5 h-3.5 shrink-0" /><span>Admin LAN</span>
-              </button>
-            )}
             <button
-              onClick={() => {
-                if (onOpenSettingsTab) {
-                  onOpenSettingsTab('ocr');
-                } else {
-                  onOpenPresetManager();
-                }
-              }}
-              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 whitespace-nowrap"
-              title="Thiết lập toàn cục hệ thống"
+              onClick={handlePickMultipleLocalVideos}
+              className="px-2.5 py-1 rounded-lg bg-slate-850 hover:bg-slate-800 border border-slate-700/80 text-emerald-300 font-semibold shadow-sm transition flex items-center gap-1.5 active:scale-95 cursor-pointer shrink-0 whitespace-nowrap"
+              title="Chọn nhiều video từ máy tính (0s không cần upload)"
             >
-              <Settings className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span>Thiết Lập</span>
+              <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>Nạp Nhanh Video (0s)</span>
             </button>
           </div>
         </div>
@@ -2042,28 +1910,25 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                       Chọn video trực tiếp từ máy tính để bắt đầu biên tập ngay lập tức (nhanh 0 giây, không tốn thời gian upload).
                     </p>
                   </div>
-                  <div className="flex items-center gap-2.5 flex-wrap justify-center pt-2">
-                    <button
-                      onClick={onNewProject}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow transition cursor-pointer flex items-center gap-1.5 active:scale-95"
-                    >
-                      <FolderPlus className="w-3.5 h-3.5" />
-                      <span>+ Tạo dự án mới</span>
-                    </button>
-                    <button
-                      onClick={handlePickMultipleLocalVideos}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-indigo-300 hover:text-white text-xs font-bold rounded-xl shadow transition cursor-pointer flex items-center gap-1.5 active:scale-95"
-                    >
-                      <FolderOpen className="w-3.5 h-3.5" />
-                      <span>📂 Chọn nhiều video (0s)</span>
-                    </button>
-                    <button
-                      onClick={handlePickLocalFolder}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 hover:text-white text-xs font-bold rounded-xl shadow transition cursor-pointer flex items-center gap-1.5 active:scale-95"
-                    >
-                      <Folder className="w-3.5 h-3.5" />
-                      <span>📁 Chọn cả thư mục</span>
-                    </button>
+                  <div className="flex items-center gap-2.5 flex-wrap justify-center pt-2 relative">
+                    <div className="inline-flex rounded-xl shadow-md bg-indigo-600 p-0.5">
+                      <button
+                        onClick={handlePickMultipleLocalVideos}
+                        className="px-4 py-2 hover:bg-indigo-500 text-white text-xs font-bold rounded-l-lg transition cursor-pointer flex items-center gap-2 active:scale-95"
+                        title="Chọn video trực tiếp từ máy tính (nhanh 0 giây)"
+                      >
+                        <FolderOpen className="w-4 h-4 text-white" />
+                        <span>Thêm Video Từ Máy Tính (0s)</span>
+                      </button>
+                      <button
+                        onClick={handlePickLocalFolder}
+                        className="px-3 py-2 bg-indigo-700 hover:bg-indigo-600 border-l border-indigo-500/40 text-indigo-100 text-xs font-semibold rounded-r-lg transition cursor-pointer flex items-center gap-1.5"
+                        title="Chọn cả thư mục chứa nhiều tập video"
+                      >
+                        <Folder className="w-3.5 h-3.5" />
+                        <span>Thư Mục</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : filteredDramaEntries.length === 0 ? (
@@ -2071,15 +1936,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                   Không tìm thấy bộ phim nào khớp với từ khóa &quot;{searchQuery}&quot;
                 </div>
               ) : (
-                <div
-                  className={`grid gap-4 ${
-                    gridCols === 2
-                      ? 'grid-cols-1 md:grid-cols-2'
-                      : gridCols === 4
-                      ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4'
-                      : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
-                  }`}
-                >
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {filteredDramaEntries.map(([dTitle, dProjects]) => (
                     <DramaFolderCard
                       key={dTitle}
@@ -2203,6 +2060,36 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                       <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
                       <span>+ Thêm Tập (0s)</span>
                     </button>
+
+                    {/* Nút Bắt đầu xử lý hàng loạt đưa lên toolbar */}
+                    <button
+                      onClick={() => setShowBatchConfirmModal(true)}
+                      disabled={isQueueRunning || projects.length === 0}
+                      className="flex items-center gap-1.5 text-xs text-white bg-gradient-to-r from-indigo-600 via-cyan-600 to-emerald-600 hover:brightness-110 active:scale-95 px-3 py-1 rounded-lg font-bold shadow-md transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      title="Bắt đầu xử lý tự động theo quy trình hàng loạt đã cấu hình"
+                    >
+                      <Rocket className="w-3.5 h-3.5 text-white animate-bounce" />
+                      <span>Bắt Đầu Xử Lý ({selectedProjectIds.length > 0 ? selectedProjectIds.length : sortedProjects.length})</span>
+                    </button>
+
+                    {/* Nút Ghép video đưa lên toolbar */}
+                    <button
+                      onClick={async () => {
+                        const target = projects.find((p) => p.project_id === selectedDramaTitle) || projects[0];
+                        if (!target) return;
+                        try {
+                          await apiClient.mergeProjectExports(target.project_id);
+                          onRefreshProjects();
+                        } catch (err: any) {
+                          setQueueStatusMessage(err?.message || 'Không thể ghép video');
+                        }
+                      }}
+                      disabled={isQueueRunning || projects.length === 0}
+                      className="flex items-center gap-1 text-xs text-slate-200 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer font-semibold"
+                      title="Ghép các tập video đã xuất thành một video dài duy nhất"
+                    >
+                      <span>Ghép Video Đã Xuất</span>
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -2283,15 +2170,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                   </div>
                 </div>
               ) : (
-                <div
-                  className={`grid gap-3.5 ${
-                    gridCols === 2
-                      ? 'grid-cols-1 md:grid-cols-2'
-                      : gridCols === 4
-                      ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4'
-                      : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
-                  }`}
-                >
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
                   {sortedProjects.map((proj) => (
                     <BatchVideoCard
                       key={proj.project_id}
@@ -2312,636 +2191,6 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
               )}
             </>
           )}
-        </div>
-
-        {/* CỘT PHẢI: Sidebar "Cấu Hình Xuất Hàng Loạt" (Batch Global Setup) */}
-        <div className="w-72 sm:w-80 shrink-0 bg-slate-900 border-l border-slate-800 flex flex-col min-h-0 text-xs select-none">
-          {/* Header */}
-          <div className="h-10 bg-slate-950 border-b border-slate-800 flex items-center justify-between px-3">
-            <span className="text-xs font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-              Cấu Hình Xuất Hàng Loạt
-            </span>
-            <div className="flex items-center gap-1.5">
-              {batchAutoSaveStatus === 'saving' ? (
-                <span
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-700/50 text-cyan-300 font-mono flex items-center gap-1 animate-pulse"
-                  title="Đang tự động lưu cấu hình..."
-                >
-                  <RefreshCw className="w-2.5 h-2.5 text-cyan-400 animate-spin" />
-                  Đang lưu
-                </span>
-              ) : (
-                <span
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/50 text-emerald-300 font-mono flex items-center gap-1 transition-all"
-                  title="Tất cả thay đổi đều được tự động lưu vĩnh viễn"
-                >
-                  <Check className="w-2.5 h-2.5 text-emerald-400" />
-                  Đã tự lưu
-                </span>
-              )}
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-900/60 border border-indigo-700/50 text-indigo-300 font-mono">
-                Toàn cục
-              </span>
-            </div>
-          </div>
-
-          {/* Form Cấu Hình 5 Khối */}
-          <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3.5">
-            {/* 1. Ngôn ngữ dịch */}
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5">
-              <label className="text-slate-300 font-semibold flex items-center gap-1.5 text-xs">
-                <Languages className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Ngôn ngữ dịch:</span>
-              </label>
-              <select
-                value={batchTargetLang}
-                onChange={(e) => setBatchTargetLang(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-slate-200 text-xs focus:outline-none focus:border-cyan-500 transition"
-              >
-                <option value="vi" className="bg-slate-900 text-slate-200">Tiếng Việt (vi)</option>
-                <option value="en" className="bg-slate-900 text-slate-200">Tiếng Anh (en)</option>
-                <option value="zh" className="bg-slate-900 text-slate-200">Tiếng Trung (zh)</option>
-                <option value="none" className="bg-slate-900 text-slate-200">Giữ nguyên / Không dịch</option>
-              </select>
-            </div>
-
-            {/* 2. Giảm âm lượng video gốc */}
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-slate-300 font-semibold flex items-center gap-1.5 text-xs">
-                  <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Giảm âm lượng video gốc:</span>
-                </label>
-                <span className="text-xs font-mono font-bold text-amber-400 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded">
-                  {batchDuckingVolume}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value={batchDuckingVolume}
-                onChange={(e) => setBatchDuckingVolume(Number(e.target.value))}
-                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
-              />
-              <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                <span>0% (Tắt tiếng)</span>
-                <span>25% (Mặc định)</span>
-                <span>100% (Gốc)</span>
-              </div>
-            </div>
-
-            {/* 3. Lồng tiếng AI */}
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <label className="text-slate-300 font-semibold flex items-center gap-1.5 text-xs">
-                  <Mic className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Lồng tiếng AI:</span>
-                </label>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={batchDubbingEnabled}
-                    onChange={(e) => {
-                      const val = e.target.checked;
-                      setBatchDubbingEnabled(val);
-                      saveBatchExportConfig({
-                        batchTargetLang,
-                        batchDuckingVolume,
-                        batchDubbingEnabled: val,
-                        batchDubbingMode,
-                        batchDubbingVoice,
-                        batchDubbingVoiceMale,
-                        batchDubbingVoiceFemale,
-                        batchDubbingSpeed,
-                        batchExportFormat,
-                        batchExportResolution,
-                        batchExportAspectRatio,
-                        batchStages,
-                        activeBatchPresetId,
-                        sortMode,
-                        gridCols,
-                      });
-                    }}
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
-                </label>
-              </div>
-
-              {batchDubbingEnabled && (
-                <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
-                  {/* THANH TÓM TẮT THU GỌN (Mặc định hiển thị, ấn Mở rộng mới bung chi tiết) */}
-                  {!isDubbingExpanded ? (
-                    <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between gap-2 shadow-sm">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-[10px] font-semibold text-slate-400">
-                            {batchDubbingMode === 'gender_multi' ? 'Đa giọng:' : 'Đơn giọng:'}
-                          </span>
-                          {batchDubbingMode === 'gender_multi' ? (
-                            <span className="text-xs font-bold text-slate-200 truncate">
-                              ♂ {VOICE_CATALOG.find((v) => v.id === batchDubbingVoiceMale)?.name || batchDubbingVoiceMale} / ♀ {VOICE_CATALOG.find((v) => v.id === batchDubbingVoiceFemale)?.name || batchDubbingVoiceFemale}
-                            </span>
-                          ) : (
-                            <div className="flex items-center gap-1 min-w-0">
-                              <span className="text-xs font-bold text-amber-300 truncate">
-                                {VOICE_CATALOG.find((v) => v.id === batchDubbingVoice)?.name || batchDubbingVoice}
-                              </span>
-                              <span className="text-[9px] px-1 py-0.2 rounded font-bold bg-amber-500/20 text-amber-300">
-                                {detectVoiceProvider(batchDubbingVoice).toUpperCase()}
-                              </span>
-                            </div>
-                          )}
-                          <span className="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-slate-950 text-amber-400 border border-slate-800">
-                            {batchDubbingSpeed.toFixed(2)}x
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleTestVoice(batchDubbingMode === 'gender_multi' ? batchDubbingVoiceMale : batchDubbingVoice)}
-                          disabled={isTestingVoice}
-                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 border border-slate-800 transition cursor-pointer"
-                          title="Nghe thử giọng hiện tại"
-                        >
-                          {isTestingVoice && (currentTestingVoice === batchDubbingVoice || currentTestingVoice === batchDubbingVoiceMale) ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                          ) : (
-                            <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setIsDubbingExpanded(true)}
-                          className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-[11px] font-bold flex items-center gap-1 transition cursor-pointer active:scale-95"
-                          title="Mở rộng chi tiết kho giọng đọc và tốc độ"
-                        >
-                          <span>Mở rộng</span>
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    /* NỘI DUNG MỞ RỘNG ĐẦY ĐỦ */
-                    <div className="space-y-3 animate-in fade-in">
-                      {/* Tiêu đề thanh mở rộng & Nút Thu Gọn */}
-                      <div className="flex items-center justify-between pb-1.5 border-b border-slate-800/80">
-                        <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5">
-                          <Sliders className="w-3 h-3" />
-                          <span>Chi tiết cấu hình giọng đọc AI</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setIsDubbingExpanded(false)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer active:scale-95"
-                          title="Thu gọn lại"
-                        >
-                          <span>Thu gọn</span>
-                          <ChevronUp className="w-3 h-3" />
-                        </button>
-                      </div>
-
-
-                  {/* Chế độ phân vai */}
-                  <div className="space-y-1.5">
-                    <label className="text-slate-400 text-[10px] block font-medium">Chế độ phân vai:</label>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setBatchDubbingMode('single')}
-                        className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
-                          batchDubbingMode === 'single'
-                            ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
-                        }`}
-                      >
-                        Đơn giọng (1 người)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setBatchDubbingMode('gender_multi')}
-                        className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
-                          batchDubbingMode === 'gender_multi'
-                            ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
-                        }`}
-                      >
-                        Đa giọng (Nam / Nữ)
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Khi chọn Đơn Giọng: Thẻ Giọng Đọc & Bộ Lọc */}
-                  {batchDubbingMode === 'single' && (
-                    <div className="space-y-2 pt-1">
-                      {/* Bộ lọc loại giọng đọc */}
-                      <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[10px] select-none">
-                        {VOICE_CATEGORIES.map((cat) => (
-                          <button
-                            key={cat.id}
-                            type="button"
-                            onClick={() => setVoiceCategoryFilter(cat.id as any)}
-                            className={`px-2 py-1 rounded-full font-semibold shrink-0 transition cursor-pointer ${
-                              voiceCategoryFilter === cat.id
-                                ? 'bg-amber-500 text-slate-950 shadow-sm'
-                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-200'
-                            }`}
-                          >
-                            {cat.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Danh Sách Thẻ Giọng Đọc Trực Quan (Visual Voice Cards) */}
-                      <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
-                        {VOICE_CATALOG
-                          .filter((v) => voiceCategoryFilter === 'all' || v.provider === voiceCategoryFilter)
-                          .map((v) => {
-                            const isSelected = batchDubbingVoice === v.id;
-                            const isTestingThis = isTestingVoice && currentTestingVoice === v.id;
-                            return (
-                              <div
-                                key={v.id}
-                                onClick={() => {
-                                  setBatchDubbingVoice(v.id);
-                                  setTestVoiceMsg(null);
-                                }}
-                                className={`p-2 rounded-xl border transition flex items-center justify-between cursor-pointer active:scale-98 ${
-                                  isSelected
-                                    ? 'bg-amber-950/40 border-amber-500 shadow-md ring-1 ring-amber-500/40'
-                                    : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900/60'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2 min-w-0 flex-1">
-                                  <div
-                                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
-                                      v.gender === 'Nam' ? 'bg-sky-500/20 text-sky-300' : 'bg-rose-500/20 text-rose-300'
-                                    }`}
-                                  >
-                                    {v.gender === 'Nam' ? '♂' : '♀'}
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="font-semibold text-slate-100 text-xs truncate">{v.name}</span>
-                                      <span
-                                        className={`text-[9px] px-1 py-0.2 rounded font-bold ${
-                                          v.provider === 'capcut'
-                                            ? 'bg-amber-500/20 text-amber-300'
-                                            : v.provider === 'gemini'
-                                            ? 'bg-purple-500/20 text-purple-300'
-                                            : 'bg-sky-500/20 text-sky-300'
-                                        }`}
-                                      >
-                                        {v.provider === 'capcut' ? 'CapCut' : v.provider === 'gemini' ? 'Gemini' : 'Edge'}
-                                      </span>
-                                    </div>
-                                    <p className="text-[10px] text-slate-400 truncate">{v.style}</p>
-                                  </div>
-                                </div>
-
-                                {/* Nút nghe thử mẫu */}
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleTestVoice(v.id);
-                                  }}
-                                  disabled={isTestingThis}
-                                  className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-amber-300 transition cursor-pointer shrink-0 ml-1.5 active:scale-95"
-                                  title={`Nghe thử ${v.name}`}
-                                >
-                                  {isTestingThis ? (
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                                  ) : (
-                                    <Volume2 className="w-3.5 h-3.5" />
-                                  )}
-                                </button>
-                              </div>
-                            );
-                          })}
-                      </div>
-
-                      {/* Dropdown chọn nhanh chuẩn giao diện */}
-                      <div className="space-y-1 pt-1">
-                        <div className="flex items-center justify-between">
-                          <label className="text-slate-400 text-[10px] block font-medium">Hoặc chọn nhanh từ danh mục:</label>
-                          {detectVoiceProvider(batchDubbingVoice) === 'capcut' && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                              🎬 CapCut Cloud TTS
-                            </span>
-                          )}
-                          {detectVoiceProvider(batchDubbingVoice) === 'edge' && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
-                              ⚡ Microsoft Edge-TTS
-                            </span>
-                          )}
-                          {detectVoiceProvider(batchDubbingVoice) === 'gemini' && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                              🌟 Gemini AI TTS
-                            </span>
-                          )}
-                        </div>
-                        <div className="relative flex items-center">
-                          <select
-                            value={batchDubbingVoice}
-                            onChange={(e) => {
-                              setBatchDubbingVoice(e.target.value);
-                              setTestVoiceMsg(null);
-                            }}
-                            className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
-                          >
-                            {getVoiceDropdownGroups().map((group) => (
-                              <optgroup key={group.label} label={group.label}>
-                                {group.options.map((opt) => (
-                                  <option key={opt.id} value={opt.id}>
-                                    {opt.name}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            ))}
-                          </select>
-                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {batchDubbingMode === 'gender_multi' && (
-                    <div className="space-y-3 pt-1">
-                      <div className="space-y-1">
-                        <label className="text-slate-400 text-[10px] block font-medium">Giọng Nam (Phân vai thoại nam):</label>
-                        <VoiceCatalogPicker
-                          selectedVoiceId={batchDubbingVoiceMale}
-                          onChange={(voiceId) => {
-                            setBatchDubbingVoiceMale(voiceId);
-                            setTestVoiceMsg(null);
-                          }}
-                          gender="Nam"
-                          onPreview={(voiceId) => handleTestVoice(voiceId)}
-                          previewingVoiceId={isTestingVoice ? currentTestingVoice || undefined : undefined}
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-slate-400 text-[10px] block font-medium">Giọng Nữ (Phân vai thoại nữ):</label>
-                        <VoiceCatalogPicker
-                          selectedVoiceId={batchDubbingVoiceFemale}
-                          onChange={(voiceId) => {
-                            setBatchDubbingVoiceFemale(voiceId);
-                            setTestVoiceMsg(null);
-                          }}
-                          gender="Nữ"
-                          onPreview={(voiceId) => handleTestVoice(voiceId)}
-                          previewingVoiceId={isTestingVoice ? currentTestingVoice || undefined : undefined}
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleTestVoice(batchDubbingVoiceMale)}
-                          disabled={isTestingVoice}
-                          className="py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer text-[11px]"
-                        >
-                          <Volume2 className="w-3 h-3 text-cyan-400" />
-                          <span>Thử Giọng Nam</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleTestVoice(batchDubbingVoiceFemale)}
-                          disabled={isTestingVoice}
-                          className="py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg font-semibold flex items-center justify-center gap-1 transition active:scale-95 cursor-pointer text-[11px]"
-                        >
-                          <Volume2 className="w-3 h-3 text-rose-400" />
-                          <span>Thử Giọng Nữ</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Tốc Độ Đọc Giọng AI */}
-                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <label className="text-slate-300 font-medium">Tốc độ đọc giọng AI:</label>
-                      <span className="font-mono text-amber-400 font-bold bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 text-[10px]">
-                        {batchDubbingSpeed.toFixed(2)}x ({batchDubbingSpeed === 1.0 ? 'Chuẩn' : batchDubbingSpeed > 1 ? `+${Math.round((batchDubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - batchDubbingSpeed) * 100)}%`})
-                      </span>
-                    </div>
-
-                    {/* Preset Tốc Độ Nhanh */}
-                    <div className="grid grid-cols-4 gap-1">
-                      {[
-                        { val: 0.9, label: '0.9x' },
-                        { val: 1.0, label: '1.0x Chuẩn' },
-                        { val: 1.15, label: '1.15x Review' },
-                        { val: 1.3, label: '1.3x Nhanh' },
-                      ].map((preset) => (
-                        <button
-                          key={preset.val}
-                          type="button"
-                          onClick={() => setBatchDubbingSpeed(preset.val)}
-                          className={`py-1 rounded text-[10px] font-semibold transition cursor-pointer active:scale-95 ${
-                            Math.abs(batchDubbingSpeed - preset.val) < 0.01
-                              ? 'bg-amber-500 text-slate-950 shadow-sm'
-                              : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-300'
-                          }`}
-                        >
-                          {preset.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="2.0"
-                      step="0.05"
-                      value={batchDubbingSpeed}
-                      onChange={(e) => setBatchDubbingSpeed(parseFloat(e.target.value))}
-                      className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                    />
-                  </div>
-
-                  {/* Trạng thái nghe thử giọng đọc */}
-                  {testVoiceMsg && (
-                    <div className="p-1.5 bg-indigo-950/60 border border-indigo-800/60 rounded text-[10px] text-indigo-300 animate-pulse">
-                      {testVoiceMsg}
-                    </div>
-                  )}
-
-                      {/* Nút Thu Gọn ở chân cấu hình */}
-                      <button
-                        type="button"
-                        onClick={() => setIsDubbingExpanded(false)}
-                        className="w-full py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer active:scale-95 mt-1"
-                      >
-                        <ChevronUp className="w-3.5 h-3.5" />
-                        <span>Thu gọn cấu hình giọng</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* 4. Định dạng & Độ phân giải khi xuất */}
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
-              <label className="text-slate-300 font-semibold flex items-center gap-1.5 text-xs">
-                <Video className="w-3.5 h-3.5 text-purple-400" />
-                <span>Định dạng & Độ phân giải:</span>
-              </label>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <span className="text-[10px] text-slate-500 block mb-1">Container:</span>
-                  <select
-                    value={batchExportFormat}
-                    onChange={(e) => setBatchExportFormat(e.target.value as any)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-slate-200 text-xs focus:outline-none cursor-pointer"
-                  >
-                    <option value="mp4">MP4</option>
-                    <option value="mkv">MKV</option>
-                  </select>
-                </div>
-
-                <div>
-                  <span className="text-[10px] text-slate-500 block mb-1">Độ phân giải:</span>
-                  <select
-                    value={batchExportResolution}
-                    onChange={(e) => setBatchExportResolution(e.target.value as any)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-slate-200 text-xs focus:outline-none cursor-pointer"
-                  >
-                    <option value="original">Gốc (100%)</option>
-                    <option value="1080p">1080p (Full HD)</option>
-                    <option value="720p">720p (HD)</option>
-                    <option value="2k">2K (QHD)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <span className="text-[10px] text-slate-500 block mb-1">Tỷ lệ khung hình:</span>
-                <select
-                  value={batchExportAspectRatio}
-                  onChange={(e) => setBatchExportAspectRatio(e.target.value as any)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-slate-200 text-xs focus:outline-none cursor-pointer"
-                >
-                  <option value="original">Gốc</option>
-                  <option value="16:9">16:9 (Ngang)</option>
-                  <option value="9:16">9:16 (Dọc / Shorts / TikTok)</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Công đoạn thực hiện */}
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
-              <label className="text-slate-300 font-semibold flex items-center gap-1.5 text-xs">
-                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Công đoạn thực hiện:</span>
-              </label>
-              <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <label className="flex items-center gap-2 p-1.5 rounded bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={batchStages.ocr}
-                    onChange={(e) => setBatchStages({ ...batchStages, ocr: e.target.checked })}
-                    className="rounded accent-cyan-500 cursor-pointer"
-                  />
-                  <span className="text-slate-300">1. Quét OCR</span>
-                </label>
-                <label className="flex items-center gap-2 p-1.5 rounded bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={batchStages.translate}
-                    onChange={(e) => setBatchStages({ ...batchStages, translate: e.target.checked })}
-                    className="rounded accent-amber-500 cursor-pointer"
-                  />
-                  <span className="text-slate-300">2. Dịch thuật</span>
-                </label>
-                <label className="flex items-center gap-2 p-1.5 rounded bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={batchStages.dubbing}
-                    onChange={(e) => setBatchStages({ ...batchStages, dubbing: e.target.checked })}
-                    className="rounded accent-emerald-500 cursor-pointer"
-                  />
-                  <span className="text-slate-300">3. Lồng tiếng</span>
-                </label>
-                <label className="flex items-center gap-2 p-1.5 rounded bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={batchStages.export}
-                    onChange={(e) => setBatchStages({ ...batchStages, export: e.target.checked })}
-                    className="rounded accent-purple-500 cursor-pointer"
-                  />
-                  <span className="text-slate-300">4. Render xuất</span>
-                </label>
-              </div>
-            </div>
-
-            {/* Chuẩn hiện tại */}
-            <div className="pt-2 border-t border-slate-800/80 space-y-2">
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
-                <span>Chuẩn áp dụng:</span>
-                <button
-                  onClick={() => {
-                    if (onOpenSettingsTab) {
-                      onOpenSettingsTab('render');
-                    } else {
-                      onOpenPresetManager();
-                    }
-                  }}
-                  className="text-indigo-400 hover:text-indigo-300 font-medium transition cursor-pointer"
-                >
-                  Quản lý
-                </button>
-              </div>
-              <select
-                value={activeBatchPresetId || defaultPreset?.id}
-                onChange={(e) => setActiveBatchPresetId(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 text-[11px] focus:outline-none focus:border-indigo-500 transition"
-              >
-                {presets.map((p) => (
-                  <option key={p.id} value={p.id} className="bg-slate-900 text-slate-200">
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* 5. Nút Bắt Đầu Lớn (Cố định ở chân cột) */}
-          <div className="p-3 bg-slate-950 border-t border-slate-800 shrink-0">
-            <button
-              onClick={() => setShowBatchConfirmModal(true)}
-              disabled={isQueueRunning || projects.length === 0}
-              className="w-full py-3 bg-gradient-to-r from-indigo-600 via-cyan-600 to-emerald-600 hover:brightness-110 active:scale-95 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <Rocket className="w-4 h-4 text-white animate-bounce" />
-              <span>BẮT ĐẦU XỬ LÝ HÀNG LOẠT ({selectedProjectIds.length > 0 ? selectedProjectIds.length : projects.length})</span>
-            </button>
-            <button
-              onClick={async () => {
-                const target = projects.find((p) => p.project_id === selectedDramaTitle) || projects[0];
-                if (!target) return;
-                try {
-                  await apiClient.mergeProjectExports(target.project_id);
-                  onRefreshProjects();
-                } catch (err: any) {
-                  setQueueStatusMessage(err?.message || 'Không thể ghép video');
-                }
-              }}
-              disabled={isQueueRunning || projects.length === 0}
-              className="w-full mt-2 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Ghép các video đã xuất theo thứ tự
-            </button>
-          </div>
         </div>
       </div>
 
@@ -3027,104 +2276,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
         </div>
       )}
 
-      {/* 4. Thanh Nạp Nguồn Đáy (Source Management Footer Bar) */}
-      <footer className="h-14 shrink-0 bg-slate-900 border-t border-slate-800 px-4 flex items-center justify-between z-40 select-none">
-        {/* Nhóm Nút Nạp Nguồn */}
-        <div className="flex items-center gap-2">
-          {/* File Input Ẩn */}
-          <input
-            ref={batchFileInputRef}
-            type="file"
-            accept="video/*"
-            multiple
-            className="hidden"
-            onChange={handleBatchFileSelect}
-          />
 
-          <button
-            onClick={() => batchFileInputRef.current?.click()}
-            disabled={isBatchUploading || isQueueRunning}
-            className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow transition disabled:opacity-50 cursor-pointer"
-            title="Thêm video từ máy tính"
-          >
-            <FolderPlus className="w-3.5 h-3.5" />
-            <span>{isBatchUploading ? 'Đang nạp...' : 'Thêm video'}</span>
-          </button>
-
-          <button
-            onClick={() => {
-              if (onOpenDownloader) {
-                onOpenDownloader('direct');
-              } else {
-                setShowUrlDownloadModal(true);
-              }
-            }}
-            disabled={isQueueRunning}
-            className="px-3 py-2 bg-emerald-700/80 hover:bg-emerald-600 active:scale-95 text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow transition disabled:opacity-50 border border-emerald-600/40 cursor-pointer"
-            title="Tải từ link video"
-          >
-            <Globe className="w-3.5 h-3.5 text-emerald-300" />
-            <span>Tải từ Link</span>
-          </button>
-
-          <button
-            onClick={() => setShowDeviceSettingsModal(true)}
-            disabled={isQueueRunning}
-            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 border border-slate-700 shadow transition disabled:opacity-50 cursor-pointer"
-            title="Cấu hình thiết bị & proxy"
-          >
-            <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Thiết bị & Proxy</span>
-          </button>
-        </div>
-
-        {/* Cụm Thống Kê Tiến Độ, Phân Trang & Bộ Đổi Layout Cột */}
-        <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
-          {/* Thống kê 4 bước */}
-          <div className="hidden lg:flex items-center gap-2.5 px-3 py-1 rounded bg-slate-950 border border-slate-800 text-[11px]">
-            <span className="text-indigo-300 flex items-center gap-1">
-              📄 {scannedCount}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-cyan-300 flex items-center gap-1">
-              🌐 {translatedCount}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-emerald-300 flex items-center gap-1">
-              🎤 {voiceCount}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-amber-400 font-bold flex items-center gap-1">
-              ⏱ {completedCount}/{projects.length}
-            </span>
-          </div>
-
-          {/* Phân Trang */}
-          <div className="flex items-center gap-1">
-            <button className="p-1 rounded hover:bg-slate-800 disabled:opacity-30 text-slate-400">
-              <ChevronLeft className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-[11px] px-1">1/1</span>
-            <button className="p-1 rounded hover:bg-slate-800 disabled:opacity-30 text-slate-400">
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Dropdown Layout Cột (2 | 3 | 4 cột) */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] text-slate-500">Layout:</span>
-            <select
-              value={gridCols}
-              onChange={(e) => setGridCols(parseInt(e.target.value) as any)}
-              className="bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[11px] text-slate-300 font-bold focus:outline-none cursor-pointer"
-            >
-              <option value={2}>2 Cột</option>
-              <option value={3}>3 Cột</option>
-              <option value={4}>4 Cột</option>
-            </select>
-          </div>
-        </div>
-      </footer>
 
       {/* 4. Modal Quản Lý Gemini Key Pool (Xoay Tua & Cooldown 429) */}
       {showGeminiPoolModal && (

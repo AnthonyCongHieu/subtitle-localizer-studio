@@ -25,6 +25,7 @@ import { VideoDownloaderHub } from './components/project/VideoDownloaderHub';
 import { ExportModal } from './components/editor/ExportModal';
 import { GlobalActivityLogger, appLogger, useAppLoggerCount } from './components/common/GlobalActivityLogger';
 import { AdminLanView } from './components/admin/AdminLanView';
+import { AppSidebar } from './components/layout/AppSidebar';
 import { useTimelineShortcuts } from './hooks/useTimelineShortcuts';
 import { extractDramaInfo } from './utils/drama';
 
@@ -59,7 +60,7 @@ interface StoredStudioState {
   subtitleLineHeight?: number;
   viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin';
   downloaderTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings';
-  settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render';
+  settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch';
 }
 
 function getStoredStudioState(): StoredStudioState | null {
@@ -92,7 +93,7 @@ export const App: React.FC = () => {
   const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>(
     () => savedState?.downloaderTab || 'search'
   );
-  const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render'>(
+  const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch'>(
     () => savedState?.settingsTab || 'ocr'
   );
 
@@ -1490,22 +1491,39 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden select-none">
+    <div className="h-screen w-screen bg-slate-950 text-slate-100 flex flex-row font-sans overflow-hidden select-none">
       {/* ========================================================================= */}
-      {/* 1. VIEW ROUTER: DOWNLOADER / QUEUE / DASHBOARD / STUDIO */}
+      {/* 0. NAVIGATION SIDEBAR BÊN TRÁI (Chuẩn chuyên nghiệp, Mini 64px / Full 240px) */}
       {/* ========================================================================= */}
-      {viewMode === 'admin' ? (
-        <AdminLanView onBack={() => setViewMode('dashboard')} />
-      ) : viewMode === 'downloader' ? (
-        <VideoDownloaderHub
-          initialTab={downloaderTab || 'queue'}
-          onTabChange={setDownloaderTab}
-          onSwitchToDashboard={() => setViewMode('dashboard')}
-          onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
-          onOpenSettings={() => {
-            setSettingsTab('ocr');
-            setViewMode('settings');
-          }}
+      <AppSidebar
+        currentView={viewMode}
+        onNavigate={(newView, tab) => {
+          if (newView === 'settings' && tab) {
+            setSettingsTab(tab as any);
+          }
+          setViewMode(newView);
+        }}
+        hasActiveProject={Boolean(activeProject)}
+        activeProjectTitle={activeProject?.title}
+        isBackendOnline={true}
+      />
+
+      {/* ========================================================================= */}
+      {/* 1. VIEW ROUTER CONTAINER: DOWNLOADER / QUEUE / DASHBOARD / SETTINGS / STUDIO */}
+      {/* ========================================================================= */}
+      <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden relative">
+        {viewMode === 'admin' ? (
+          <AdminLanView onBack={() => setViewMode('dashboard')} />
+        ) : viewMode === 'downloader' ? (
+          <VideoDownloaderHub
+            initialTab={downloaderTab || 'queue'}
+            onTabChange={setDownloaderTab}
+            onSwitchToDashboard={() => setViewMode('dashboard')}
+            onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
+            onOpenSettings={() => {
+              setSettingsTab('ocr');
+              setViewMode('settings');
+            }}
           onRefreshProjects={loadProjects}
           onBatchProjectsCreated={(newProjs) => {
             setProjects((prev) => [...prev, ...newProjs]);
@@ -1522,14 +1540,6 @@ export const App: React.FC = () => {
           onSelectPreset={(p) => applyPresetProfile(p)}
           onSwitchToDashboard={() => setViewMode('dashboard')}
           onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
-          onOpenDownloader={(tab) => {
-            setDownloaderTab(tab || 'direct');
-            setViewMode('downloader');
-          }}
-          onOpenQueue={() => {
-            setDownloaderTab('queue');
-            setViewMode('downloader');
-          }}
         />
       ) : viewMode === 'dashboard' ? (
         <DashboardBatchHub
@@ -1595,19 +1605,6 @@ export const App: React.FC = () => {
             hasVideo={Boolean(videoUrl)}
             onStartScan={handleStartScan}
             onStopScan={handleStopScan}
-            onOpenDownloader={() => {
-              setDownloaderTab('direct');
-              setViewMode('downloader');
-            }}
-            onOpenQueue={() => {
-              setDownloaderTab('queue');
-              setViewMode('downloader');
-            }}
-            onOpenAdmin={() => setViewMode('admin')}
-            onOpenSettings={() => {
-              setSettingsTab('ocr');
-              setViewMode('settings');
-            }}
             onExportVideo={() => setIsExportModalOpen(true)}
             onTranslateAll={handleTranslateAll}
             isTranslating={isTranslatingAll}
@@ -1901,6 +1898,7 @@ export const App: React.FC = () => {
           />
         </>
       )}
+      </div>
 
 
       {/* Modal Xuất Phụ Đề & Video Thành Phẩm */}
