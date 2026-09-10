@@ -3,15 +3,11 @@ import {
   Crop,
   Eye,
   EyeOff,
-  Sparkles,
   Tv,
   Crosshair,
   ChevronRight,
   ChevronLeft,
   ChevronDown,
-  Loader2,
-  FileVideo,
-  Square,
   Layers,
   Plus,
   Trash2,
@@ -19,8 +15,6 @@ import {
   RotateCcw,
   Edit2,
   Save,
-  CheckCircle2,
-  Globe,
 } from 'lucide-react';
 import { RegionTrackV1, ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
 import {
@@ -28,9 +22,8 @@ import {
   MaskStyleType,
   SubtitlePlacementMode,
 } from '../../types/presets';
-import { apiClient } from '../../api/client';
 
-export type RightPanelTab = 'roi' | 'mask' | 'ai_export';
+export type RightPanelTab = 'roi' | 'mask';
 
 export interface PositionTemplate {
   id: string;
@@ -46,8 +39,8 @@ interface RightInspectorPanelProps {
   region: RegionTrackV1;
   onUpdateRegion: (r: RegionTrackV1) => void;
   onAutoDetectRoi?: () => void;
-  sourceLang: string;
-  targetLang: string;
+  sourceLang?: string;
+  targetLang?: string;
   onLanguageChange?: (s: string, t: string) => void;
   previewMask: boolean;
   onTogglePreviewMask: () => void;
@@ -116,9 +109,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   region,
   onUpdateRegion,
   onAutoDetectRoi: _onAutoDetectRoi,
-  sourceLang,
-  targetLang,
-  onLanguageChange,
+  sourceLang: _sourceLang,
+  targetLang: _targetLang,
+  onLanguageChange: _onLanguageChange,
   previewMask,
   onTogglePreviewMask,
   maskStyle = 'feather_tight',
@@ -145,25 +138,25 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onAspectRatioChange: _onAspectRatioChange,
   fitMode: _fitMode = 'contain',
   onToggleFitMode: _onToggleFitMode,
-  isFlippedH,
+  isFlippedH: _isFlippedH,
   onToggleFlipH: _onToggleFlipH,
-  isFlippedV,
+  isFlippedV: _isFlippedV,
   onToggleFlipV: _onToggleFlipV,
-  rotation,
+  rotation: _rotation,
   onRotationChange: _onRotationChange,
   onRotate: _onRotate,
-  videoPosition,
+  videoPosition: _videoPosition,
   onPositionChange: _onPositionChange,
   onResetTransform,
   onResetAllParameters,
-  activeProject,
-  cues = [],
-  onRefreshCues,
-  isScanning = false,
-  scanProgress,
-  statusMessage = null,
-  onStartScan,
-  onStopScan,
+  activeProject: _activeProject,
+  cues: _cues = [],
+  onRefreshCues: _onRefreshCues,
+  isScanning: _isScanning = false,
+  scanProgress: _scanProgress,
+  statusMessage: _statusMessage = null,
+  onStartScan: _onStartScan,
+  onStopScan: _onStopScan,
   isCollapsed = false,
   onToggleCollapse,
   regions = [],
@@ -171,8 +164,8 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onSelectRegion,
   onAddRegion,
   onDeleteRegion,
-  onUpdateActiveProject,
-  onRefreshProject,
+  onUpdateActiveProject: _onUpdateActiveProject,
+  onRefreshProject: _onRefreshProject,
   subtitleFontSize = 16,
   onSubtitleFontSizeChange,
   subtitleFontFamily = 'Inter, sans-serif',
@@ -181,8 +174,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onSubtitleTextColorChange,
   width,
 }) => {
-  // Kiểm tra dự án có phụ đề hay không để khóa thao tác Dịch và Lồng tiếng (P1 Guard)
-  const hasCues = (cues && cues.length > 0) || (activeProject?.cues_count ? activeProject.cues_count > 0 : false);
   const [activeTab, setActiveTab] = useState<RightPanelTab>('roi');
 
   // Mẫu vị trí gợi ý động (Position Templates CRUD)
@@ -242,62 +233,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
     setEditingPosTemplateId(null);
   };
 
-  // AI & Export states
-  const [isTranslatingAll, setIsTranslatingAll] = useState(false);
-  const [translateMsg, setTranslateMsg] = useState<string | null>(null);
-
-  const [isExportingMp4, setIsExportingMp4] = useState(false);
-  const [exportMessage, setExportMessage] = useState<string | null>(null);
-
-
-  const handleTranslateAllWithAi = async () => {
-    if (!activeProject) return;
-    setIsTranslatingAll(true);
-    setTranslateMsg('Đang gọi AI dịch thuật ngữ cảnh toàn bộ tập phim...');
-    try {
-      await apiClient.retranslateProject(activeProject.project_id);
-      setTranslateMsg('Dịch thuật và xử lý AI hoàn tất!');
-      if (onRefreshCues) onRefreshCues();
-      if (onRefreshProject) onRefreshProject();
-    } catch (err: any) {
-      setTranslateMsg(`Lỗi dịch AI: ${err?.message || 'Thất bại'}`);
-    } finally {
-      setIsTranslatingAll(false);
-    }
-  };
-
-  const handleExportMp4 = async () => {
-    if (!activeProject) return;
-    setIsExportingMp4(true);
-    setExportMessage('Đang kết xuất video MP4 gắn phụ đề...');
-    try {
-      const res = await apiClient.exportMp4(activeProject.project_id, {
-        use_translated: true,
-        mask_mode: previewMask ? (maskStyle || 'blur') : 'none',
-        blur_strength: blurStrength,
-        subtitle_placement: subtitlePlacement,
-        regions: regions,
-        flip_h: isFlippedH,
-        flip_v: isFlippedV,
-        video_x: videoPosition.x,
-        video_y: videoPosition.y,
-        rotation: rotation,
-      });
-      setExportMessage(`Xuất video thành công: ${res.output_path || 'Thành công'}`);
-      if (onUpdateActiveProject) {
-        onUpdateActiveProject({
-          has_export: true,
-          export_path: res.output_path,
-        });
-      }
-      if (onRefreshProject) onRefreshProject();
-    } catch (err: any) {
-      setExportMessage(`Lỗi xuất video: ${err?.message || 'Không thành công'}`);
-    } finally {
-      setIsExportingMp4(false);
-    }
-  };
-
   if (isCollapsed) {
     return (
       <aside className="w-12 bg-slate-950 border-l border-slate-800/80 flex flex-col items-center py-3 space-y-4 shrink-0 select-none z-20">
@@ -331,18 +266,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
           title="Che Sub & Kiểu Chữ"
         >
           <Eye className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => {
-            setActiveTab('ai_export');
-            onToggleCollapse?.();
-          }}
-          className={`p-2 rounded-lg transition ${
-            activeTab === 'ai_export' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-          }`}
-          title="AI Dịch & Xuất Bản"
-        >
-          <Sparkles className="w-4 h-4" />
         </button>
       </aside>
     );
@@ -379,18 +302,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             title="Che Sub & Kiểu Chữ"
           >
             Che/Chữ
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('ai_export')}
-            className={`flex-1 py-1 rounded-md font-medium text-center transition ${
-              activeTab === 'ai_export'
-                ? 'bg-indigo-600 text-white font-semibold shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-            title="AI Dịch & Xuất Bản"
-          >
-            AI/Xuất
           </button>
         </div>
 
@@ -821,49 +732,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 </button>
               </div>
             </div>
-
-            {/* Nút Quét Sub Nhanh & Dừng / Hủy */}
-            {onStartScan && (
-              isScanning ? (
-                <div className="flex items-center gap-2 w-full animate-in fade-in duration-150">
-                  <div className="flex-1 py-2 px-2.5 bg-indigo-950/70 border border-indigo-700/60 text-indigo-300 rounded-xl text-xs font-semibold flex flex-col items-center justify-center gap-0.5 shadow-inner min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
-                      <span>
-                        {scanProgress !== null && scanProgress !== undefined
-                          ? `Đang Quét (${Math.round(scanProgress)}%)...`
-                          : 'Đang Quét Phụ Đề...'}
-                      </span>
-                    </div>
-                    {statusMessage && (
-                      <span className="text-[10px] text-indigo-300/80 font-mono truncate max-w-full font-normal">
-                        {statusMessage}
-                      </span>
-                    )}
-                  </div>
-                  {onStopScan && (
-                    <button
-                      type="button"
-                      onClick={onStopScan}
-                      className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/30 active:scale-98 transition cursor-pointer"
-                      title="Dừng hoặc Hủy tiến trình quét ngay lập tức"
-                    >
-                      <Square className="w-3.5 h-3.5 fill-white" />
-                      <span>Dừng / Hủy</span>
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={onStartScan}
-                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-98 transition cursor-pointer"
-                >
-                  <Crop className="w-4 h-4" />
-                  <span>Bắt Đầu Quét Sub Theo Vùng Này</span>
-                </button>
-              )
-            )}
           </div>
         )}
 
@@ -1202,192 +1070,8 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
           </div>
         )}
 
-        {/* ================= TAB 3: AI & XUẤT BẢN ================= */}
-        {activeTab === 'ai_export' && (
-          <div className="space-y-4 animate-in fade-in duration-150">
-            {/* Ngôn Ngữ Nhận Diện (OCR) & Dịch Thuật (AI) */}
-            <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
-              <div className="flex items-center gap-1.5 pb-1 border-b border-slate-800/80">
-                <Globe className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="text-[11px] font-semibold text-slate-200">
-                  Ngôn Ngữ Nhận Diện (OCR) & Dịch Thuật (AI)
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <span className="text-[10px] text-slate-400 block mb-1 font-medium">Gốc (Video):</span>
-                  <div className="relative flex items-center">
-                    <select
-                      value={sourceLang}
-                      onChange={(e) => onLanguageChange && onLanguageChange(e.target.value, targetLang)}
-                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
-                    >
-                      <option value="zh">🇨🇳 Tiếng Trung</option>
-                      <option value="en">🇬🇧 Tiếng Anh</option>
-                      <option value="auto">🌐 Tự động</option>
-                    </select>
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 block mb-1 font-medium">Dịch sang (AI):</span>
-                  <div className="relative flex items-center">
-                    <select
-                      value={targetLang}
-                      onChange={(e) => onLanguageChange && onLanguageChange(sourceLang, e.target.value)}
-                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
-                    >
-                      <option value="vi">🇻🇳 Tiếng Việt</option>
-                      <option value="en">🇬🇧 Tiếng Anh</option>
-                      <option value="zh">🇨🇳 Tiếng Trung</option>
-                    </select>
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-
-
-            {/* 1. Thẻ Quét Phụ Đề Tự Động */}
-            <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 font-semibold text-slate-200">
-                  <Tv className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Quét Phụ Đề Tự Động</span>
-                </div>
-                {scanProgress !== null && scanProgress !== undefined && isScanning && (
-                  <span className="font-mono text-[10px] font-bold text-cyan-400 bg-indigo-950 px-2 py-0.5 rounded border border-indigo-700/60">
-                    {Math.round(scanProgress)}%
-                  </span>
-                )}
-              </div>
-
-              {isScanning ? (
-                <div className="space-y-2">
-                  <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className="bg-gradient-to-r from-indigo-500 to-cyan-400 h-full rounded-full transition-all duration-300"
-                      style={{ width: `${Math.max(0, Math.min(100, scanProgress || 0))}%` }}
-                    />
-                  </div>
-                  <div className="text-[10px] font-mono text-indigo-300 truncate">
-                    {statusMessage || 'Đang thực thi nhận diện OCR...'}
-                  </div>
-                  {onStopScan && (
-                    <button
-                      type="button"
-                      onClick={onStopScan}
-                      className="w-full py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow"
-                    >
-                      <Square className="w-3 h-3 fill-white" />
-                      <span>Dừng Quét Phụ Đề</span>
-                    </button>
-                  )}
-                </div>
-              ) : (
-                onStartScan && (
-                  <button
-                    type="button"
-                    onClick={onStartScan}
-                    disabled={!activeProject}
-                    className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 cursor-pointer"
-                  >
-                    <Tv className="w-3.5 h-3.5" />
-                    <span>{cues.length > 0 ? 'Quét Lại Phụ Đề' : 'Bắt Đầu Quét Sub'}</span>
-                  </button>
-                )
-              )}
-            </div>
-
-            {/* Nút Dịch AI Toàn Bộ */}
-            <div className="p-3 bg-indigo-950/40 border border-indigo-800/40 rounded-xl space-y-2">
-              <div className="flex items-center gap-1.5 font-semibold text-indigo-300">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                <span>Dịch Thuật Ngữ Cảnh Điện Ảnh</span>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Tự động hiểu mối quan hệ nhân vật, xưng hô chuẩn bối cảnh và nhịp điệu phụ đề.
-              </p>
-              <button
-                type="button"
-                onClick={handleTranslateAllWithAi}
-                disabled={isTranslatingAll || !activeProject || !hasCues}
-                title={!hasCues ? "Cần quét hoặc nhập phụ đề trước khi dịch" : "Dịch Toàn Bộ Tập Phim"}
-                className={`w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 ${!hasCues ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-              >
-                {isTranslatingAll ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Đang Dịch Bằng AI...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    <span>Dịch Toàn Bộ Tập Phim</span>
-                  </>
-                )}
-              </button>
-              {translateMsg && (
-                <div className="text-[11px] text-indigo-300 bg-slate-950/60 p-2 rounded border border-indigo-900 font-medium">
-                  {translateMsg}
-                </div>
-              )}
-            </div>
-
-            {/* Trình phát Master Voiceover Audio nếu đã lồng tiếng */}
-            {activeProject?.has_voiceover && (
-              <div className="p-3 bg-amber-950/20 border border-amber-800/40 rounded-xl space-y-2">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Tệp Thuyết Minh Video</span>
-                  </span>
-                  <span className="text-[10px] text-amber-300 font-mono">
-                    voiceover.mp3
-                  </span>
-                </div>
-                <audio
-                  controls
-                  src={apiClient.getVoiceoverAudioUrl(activeProject.project_id)}
-                  className="w-full h-8 rounded-lg"
-                />
-              </div>
-            )}
-
-            {/* Xuất Bản Video & File */}
-            <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2.5">
-              <span className="font-semibold text-slate-200 block">Xuất Bản & Kết Xuất:</span>
-
-              <button
-                type="button"
-                onClick={handleExportMp4}
-                disabled={isExportingMp4 || !activeProject}
-                className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50"
-              >
-                {isExportingMp4 ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Đang Kết Xuất MP4...</span>
-                  </>
-                ) : (
-                  <>
-                    <FileVideo className="w-4 h-4" />
-                    <span>Xuất Video MP4 (Inpainting)</span>
-                  </>
-                )}
-              </button>
-
-              {exportMessage && (
-                <div className="text-[11px] text-emerald-300 bg-slate-950/60 p-2 rounded border border-emerald-900 font-medium break-all">
-                  {exportMessage}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
       </div>
     </aside>
   );
 };
+

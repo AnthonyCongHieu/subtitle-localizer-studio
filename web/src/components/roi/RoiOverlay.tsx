@@ -1,6 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { RegionTrackV1 } from '../../types/api';
-import { Crosshair, Droplet, Scan } from 'lucide-react';
 
 interface RoiOverlayProps {
   region: RegionTrackV1;
@@ -262,27 +261,6 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
             onMouseDown={(e) => handleMouseDown('e', e)}
             title="Kéo chỉnh mép phải"
           />
-        </div>
-      )}
-
-      {/* Nhãn thông số ROI tinh tế - Đặt ở góc dưới đáy bên phải, không che nội dung video */}
-      {!disabled && (
-        <div className="absolute bottom-2 right-2 bg-slate-950/90 backdrop-blur-md text-indigo-300 border border-slate-800 px-2.5 py-1 rounded-lg text-[10px] font-mono flex items-center gap-1.5 shadow-xl pointer-events-none z-50">
-          <Crosshair className="w-3 h-3 text-indigo-400" />
-          <span className="font-semibold text-slate-200">ROI:</span>
-          {currentRegion.mask_enabled !== false ? (
-            <span className="text-emerald-400 font-semibold flex items-center gap-0.5">
-              <Droplet className="w-2.5 h-2.5" /> Làm mờ
-            </span>
-          ) : (
-            <span className="text-amber-400 font-semibold flex items-center gap-0.5">
-              <Scan className="w-2.5 h-2.5" /> Chỉ quét
-            </span>
-          )}
-          <span className="text-slate-600">|</span>
-          <span>Y: {Math.round(clampedY * 100)}%</span>
-          <span>H: {Math.round(clampedH * 100)}%</span>
-          <span>W: {Math.round(clampedW * 100)}%</span>
         </div>
       )}
     </div>

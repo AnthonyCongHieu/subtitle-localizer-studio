@@ -20,6 +20,8 @@ import {
   EyeOff,
   Sparkles,
   Crosshair,
+  Droplet,
+  Scan,
   FlipHorizontal,
   FlipVertical,
   RotateCw,
@@ -626,6 +628,38 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
             >
               <Crosshair className="w-3.5 h-3.5" />
             </button>
+
+            {/* Nhãn thông số ROI tinh tế trên Toolbar - Không che nội dung video */}
+            {(() => {
+              const currentReg = (regions && regions.find((r) => r.region_id === (activeRegionId || region.region_id))) || region;
+              const cX = Math.max(0.0, Math.min(0.97, currentReg.x));
+              const cY = Math.max(0.0, Math.min(0.98, currentReg.y));
+              const cW = Math.max(0.03, Math.min(1.0 - cX, currentReg.width));
+              const cH = Math.max(0.02, Math.min(1.0 - cY, currentReg.height));
+              return (
+                <div
+                  data-testid="roi-toolbar-badge"
+                  className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-800 text-[10px] font-mono text-indigo-300 select-none shadow-sm shrink-0"
+                  title="Thông số Vùng Quét ROI Hiện Tại"
+                >
+                  <Crosshair className="w-3 h-3 text-indigo-400" />
+                  <span className="font-semibold text-slate-200">ROI:</span>
+                  {currentReg.mask_enabled !== false ? (
+                    <span className="text-emerald-400 font-semibold flex items-center gap-0.5">
+                      <Droplet className="w-2.5 h-2.5" /> Làm mờ
+                    </span>
+                  ) : (
+                    <span className="text-amber-400 font-semibold flex items-center gap-0.5">
+                      <Scan className="w-2.5 h-2.5" /> Chỉ quét
+                    </span>
+                  )}
+                  <span className="text-slate-600">|</span>
+                  <span>Y: {Math.round(cY * 100)}%</span>
+                  <span>H: {Math.round(cH * 100)}%</span>
+                  <span>W: {Math.round(cW * 100)}%</span>
+                </div>
+              );
+            })()}
 
             {/* Nút Menu Hamburger ≡ chuẩn CapCut góc phải trên cùng */}
             <div className="relative">
