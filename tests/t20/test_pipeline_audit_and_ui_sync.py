@@ -61,13 +61,17 @@ class PipelineAuditAndUiSyncTest(unittest.TestCase):
     def test_ui_selects_standardization_with_chevrons(self) -> None:
         inspector_file = REPOSITORY_ROOT / "web" / "src" / "components" / "inspector" / "RightInspectorPanel.tsx"
         sidebar_file = REPOSITORY_ROOT / "web" / "src" / "components" / "sidebar" / "LeftMediaSidebar.tsx"
+        picker_file = REPOSITORY_ROOT / "web" / "src" / "components" / "common" / "VoiceCatalogPicker.tsx"
         inspector_content = inspector_file.read_text(encoding="utf-8")
         sidebar_content = sidebar_file.read_text(encoding="utf-8")
+        picker_content = picker_file.read_text(encoding="utf-8")
 
         self.assertIn("ChevronDown", inspector_content)
         self.assertIn("ChevronDown", sidebar_content)
+        self.assertIn("ChevronDown", picker_content)
         self.assertIn("appearance-none pr-7", inspector_content)
-        self.assertIn("appearance-none pr-7", sidebar_content)
+        self.assertIn("appearance-none", sidebar_content)
+        self.assertIn("appearance-none pr-7", picker_content)
 
 
 if __name__ == "__main__":

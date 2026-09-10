@@ -1748,7 +1748,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-amber-500"
                         disabled
                       >
-                        <option value="gemini">Google Gemini 2.5 / 3.8 Flash Multimodal (Khuyên dùng)</option>
+                        <option value="gemini">Google Gemini 2.5 Flash Multimodal (Khuyên dùng)</option>
                       </select>
 
                     </div>
@@ -2447,9 +2447,8 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                           }
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-amber-500/60 transition"
                         >
-                          <option value="gemini-3.8-flash">Gemini 3.8 Flash — Mới nhất, tư duy sâu</option>
+                          <option value="gemini-2.5-flash">Gemini 2.5 Flash — Khuyên dùng (Ổn định, siêu nhanh)</option>
                           <option value="gemini-3.7-flash">Gemini 3.7 Flash — Logic mạnh</option>
-                          <option value="gemini-2.5-flash">Gemini 2.5 Flash — Ổn định, siêu nhanh</option>
                           <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
                           <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
                         </select>

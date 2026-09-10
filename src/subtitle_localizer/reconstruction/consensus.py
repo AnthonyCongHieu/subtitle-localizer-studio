@@ -34,3 +34,47 @@ def majority_vote_text(texts: List[str]) -> str:
     # Lấy xâu xuất hiện nhiều nhất
     most_common, _ = counts.most_common(1)[0]
     return most_common
+
+
+def fuse_ocr_and_asr(asr_text: str, ocr_text: str, ocr_conf: float = 0.50) -> str:
+    """Hợp nhất thông minh giữa văn bản âm thanh CapCut ASR và văn bản thị giác Local OCR.
+    
+    Nguyên tắc:
+    1. Local OCR là Ground Truth chuẩn xác tuyệt đối cho danh từ riêng, tên nhân vật,
+       và các từ ngữ bị ASR nghe nhầm.
+    2. Nếu OCR chỉ bắt được 1 trích đoạn ngắn của câu ASR dài (do sub tách nhịp),
+       không cắt cụt câu ASR.
+    3. Trả về xâu ký tự tối ưu nhất.
+    """
+    if not ocr_text or ocr_conf < 0.35:
+        return asr_text
+    if not asr_text:
+        return ocr_text
+
+    clean_asr = "".join(c for c in asr_text if c.isalnum())
+    clean_ocr = "".join(c for c in ocr_text if c.isalnum())
+
+    if clean_ocr == clean_asr:
+        return ocr_text
+
+    # Nếu OCR là chuỗi con ngắn của ASR (ví dụ sub tách nhịp visual), giữ câu ASR đầy đủ
+    if clean_ocr in clean_asr and len(clean_ocr) < len(clean_asr) * 0.70:
+        return asr_text
+
+    # Nếu ASR là chuỗi con của OCR, OCR đầy đủ hơn
+    if clean_asr in clean_ocr:
+        return ocr_text
+
+    common = sum(1 for c in clean_ocr if c in clean_asr)
+    sim = common / max(1, max(len(clean_ocr), len(clean_asr)))
+
+    # Nếu độ tương đồng >= 0.45 và độ dài tương đương: OCR là Ground Truth
+    if sim >= 0.45:
+        if abs(len(clean_ocr) - len(clean_asr)) <= max(3, int(len(clean_asr) * 0.40)):
+            return ocr_text
+
+    # Nếu ASR bị ảo giác âm thanh nặng nhưng OCR nhận diện với độ tin cậy cao (>= 0.85)
+    if ocr_conf >= 0.85 and abs(len(clean_ocr) - len(clean_asr)) <= 6:
+        return ocr_text
+
+    return asr_text

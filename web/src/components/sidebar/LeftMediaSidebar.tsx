@@ -34,19 +34,8 @@ import { appLogger } from '../common/GlobalActivityLogger';
 export type LeftSidebarTab = 'media' | 'subtitles' | 'dubbing' | 'presets';
 export type CueFilterMode = 'all' | 'untranslated' | 'translated';
 
-export {
-  detectVoiceProvider,
-  VOICE_CATALOG,
-  type VoiceItem,
-  VOICE_CATEGORIES,
-  type VoiceCategory,
-  MALE_VOICE_OPTIONS,
-  FEMALE_VOICE_OPTIONS,
-} from '../../constants/voiceCatalog';
-import {
-  detectVoiceProvider,
-  VOICE_CATALOG,
-} from '../../constants/voiceCatalog';
+import { detectVoiceProvider } from '../../constants/voiceCatalog';
+import { VoiceCatalogPicker } from '../common/VoiceCatalogPicker';
 
 interface LeftMediaSidebarProps {
   projects: ProjectManifestV1[];
@@ -79,6 +68,7 @@ interface LeftMediaSidebarProps {
   onUpdateActiveProject?: (patch: Partial<ProjectManifestV1>) => void;
   currentRoi?: RegionTrackV1;
   isScanning?: boolean;
+  scanProgress?: number | null;
   statusMessage?: string | null;
   width?: number;
 }
@@ -110,6 +100,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   onUpdateActiveProject,
   currentRoi,
   isScanning = false,
+  scanProgress,
   statusMessage,
   width,
 }) => {
@@ -139,7 +130,6 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   const [isTestingVoice, setIsTestingVoice] = useState(false);
   const [testVoiceMsg, setTestVoiceMsg] = useState<string | null>(null);
   const [dubbingSpeed, setDubbingSpeed] = useState<number>(1.0);
-  const [voiceCategoryFilter, setVoiceCategoryFilter] = useState<'all' | 'capcut' | 'edge' | 'gemini'>('all');
 
   // Đồng bộ cấu hình lồng tiếng riêng của video hiện tại nếu có
   useEffect(() => {
@@ -291,9 +281,11 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
     try {
       const voiceToUse = customVoice || perCueVoices[cue.cue_id] || selectedVoice;
       const prov = detectVoiceProvider(voiceToUse);
+      const rateStr = dubbingSpeed === 1.0 ? '+0%' : (dubbingSpeed > 1 ? `+${Math.round((dubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - dubbingSpeed) * 100)}%`);
       const res = await apiClient.dubSingleCue(activeProject.project_id, cue.cue_id, {
         voice: voiceToUse,
         provider: prov,
+        rate: rateStr,
       });
       if (res.cue_audio_url) {
         playSingleCueAudio(cue.cue_id, res.cue_audio_url);
@@ -1119,10 +1111,25 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
             {filteredCues.length === 0 && (
               isScanning ? (
                 <div className="p-8 text-center flex flex-col items-center justify-center gap-3 text-slate-300 text-xs">
-                  <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="relative flex items-center justify-center">
+                    <div className="w-12 h-12 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+                    {scanProgress !== null && scanProgress !== undefined && (
+                      <span className="absolute font-mono font-bold text-xs text-cyan-400">
+                        {Math.round(scanProgress)}%
+                      </span>
+                    )}
+                  </div>
                   <div className="font-medium text-indigo-300">
                     {statusMessage || 'Đang thực thi tiến trình quét phụ đề...'}
                   </div>
+                  {scanProgress !== null && scanProgress !== undefined && (
+                    <div className="w-full max-w-xs bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-gradient-to-r from-indigo-500 to-cyan-400 h-full rounded-full transition-all duration-300"
+                        style={{ width: `${Math.max(0, Math.min(100, scanProgress))}%` }}
+                      />
+                    </div>
+                  )}
                   <div className="text-[11px] text-slate-500 max-w-xs leading-relaxed">
                     Hệ thống đang trích xuất frame, chạy OCR và tinh chỉnh ranh giới. Danh sách câu sẽ tự động xuất hiện khi hoàn thành.
                   </div>
@@ -1139,7 +1146,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
 
       {/* ================= TAB 3: LỒNG TIẾNG AI (VOICEOVER) ================= */}
       {activeTab === 'dubbing' && (
-        <div className="flex-1 min-h-0 flex flex-col p-3 space-y-4 overflow-y-auto text-xs">
+        <div className="flex-1 min-h-0 flex flex-col p-3 pb-28 space-y-4 overflow-y-auto text-xs">
           <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
             <div className="flex items-center gap-1.5 font-semibold text-slate-200">
               <Mic className="w-4 h-4 text-amber-400" />
@@ -1156,10 +1163,10 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 <button
                   type="button"
                   onClick={() => handleDubbingModeChange('single')}
-                  className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
+                  className={`py-1.5 rounded-lg border text-center transition text-xs font-semibold cursor-pointer active:scale-95 ${
                     dubbingMode === 'single'
                       ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   Đơn giọng (1 người)
@@ -1167,10 +1174,10 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 <button
                   type="button"
                   onClick={() => handleDubbingModeChange('multi')}
-                  className={`py-1.5 px-2 rounded-lg border text-center transition font-semibold text-xs cursor-pointer ${
+                  className={`py-1.5 rounded-lg border text-center transition text-xs font-semibold cursor-pointer active:scale-95 ${
                     dubbingMode === 'multi'
                       ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-300'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   Đa giọng (Nam / Nữ)
@@ -1178,207 +1185,39 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
               </div>
             </div>
 
-            {/* Khi chọn Đơn Giọng: Danh Sách Thẻ Giọng Đọc & Bộ Lọc Nhà Cung Cấp */}
             {dubbingMode === 'single' && (
-              <div className="space-y-2 pt-1">
-                {/* Bộ lọc loại giọng đọc */}
-                <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[10px] select-none">
-                  {[
-                    { id: 'all', label: 'Tất cả' },
-                    { id: 'capcut', label: '🎬 CapCut Trend' },
-                    { id: 'edge', label: '⚡ Edge-TTS' },
-                    { id: 'gemini', label: '🌟 Gemini AI' },
-                  ].map((cat) => (
-                    <button
-                      key={cat.id}
-                      type="button"
-                      onClick={() => setVoiceCategoryFilter(cat.id as any)}
-                      className={`px-2 py-1 rounded-full font-semibold shrink-0 transition cursor-pointer ${
-                        voiceCategoryFilter === cat.id
-                          ? 'bg-amber-500 text-slate-950 shadow-sm'
-                          : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {cat.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Danh Sách Thẻ Giọng Đọc Trực Quan (Visual Voice Cards) */}
-                <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
-                  {VOICE_CATALOG
-                    .filter((v) => voiceCategoryFilter === 'all' || v.provider === voiceCategoryFilter)
-                    .map((v) => {
-                      const isSelected = selectedVoice === v.id;
-                      const isTestingThis = isTestingVoice && currentTestingVoice === v.id;
-                      return (
-                        <div
-                          key={v.id}
-                          onClick={() => handleVoiceChange(v.id)}
-                          className={`p-2 rounded-xl border transition flex items-center justify-between cursor-pointer active:scale-98 ${
-                            isSelected
-                              ? 'bg-amber-950/40 border-amber-500 shadow-md ring-1 ring-amber-500/40'
-                              : 'bg-slate-950/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900/60'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <div
-                              className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
-                                v.gender === 'Nam' ? 'bg-sky-500/20 text-sky-300' : 'bg-rose-500/20 text-rose-300'
-                              }`}
-                            >
-                              {v.gender === 'Nam' ? '♂' : '♀'}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-semibold text-slate-100 text-xs truncate">{v.name}</span>
-                                <span
-                                  className={`text-[9px] px-1 py-0.2 rounded font-bold ${
-                                    v.provider === 'capcut'
-                                      ? 'bg-amber-500/20 text-amber-300'
-                                      : v.provider === 'gemini'
-                                      ? 'bg-purple-500/20 text-purple-300'
-                                      : 'bg-sky-500/20 text-sky-300'
-                                  }`}
-                                >
-                                  {v.provider === 'capcut' ? 'CapCut' : v.provider === 'gemini' ? 'Gemini' : 'Edge'}
-                                </span>
-                              </div>
-                              <p className="text-[10px] text-slate-400 truncate">{v.style}</p>
-                            </div>
-                          </div>
-
-                          {/* Nút nghe thử mẫu */}
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleTestVoice(v.id);
-                            }}
-                            disabled={isTestingThis}
-                            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-amber-300 transition cursor-pointer shrink-0 ml-1.5 active:scale-95"
-                            title={`Nghe thử ${v.name}`}
-                          >
-                            {isTestingThis ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                            ) : (
-                              <Volume2 className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      );
-                    })}
-                </div>
-
-                {/* Dropdown chọn nhanh chuẩn giao diện */}
-                <div className="space-y-1 pt-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-slate-400 text-[10px] block font-medium">Hoặc chọn nhanh từ danh mục:</label>
-                    {detectVoiceProvider(selectedVoice) === 'capcut' && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                        🎬 CapCut Cloud TTS
-                      </span>
-                    )}
-                    {detectVoiceProvider(selectedVoice) === 'edge' && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
-                        ⚡ Microsoft Edge-TTS
-                      </span>
-                    )}
-                    {detectVoiceProvider(selectedVoice) === 'gemini' && (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                        🌟 Gemini AI TTS
-                      </span>
-                    )}
-                  </div>
-                  <div className="relative flex items-center">
-                    <select
-                      value={selectedVoice}
-                      onChange={(e) => handleVoiceChange(e.target.value)}
-                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
-                    >
-                      <optgroup label="🎬 Giọng Đọc CapCut Hot Trend (Review Phim & TikTok)">
-                        <option value="BV075_streaming">Thanh Niên Tự Tin (Review phim)</option>
-                        <option value="BV074_streaming">Cô Gái Hoạt Ngôn (Tươi sáng, thu hút)</option>
-                        <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (Tâm sự, nhẹ nhàng)</option>
-                        <option value="BV562_streaming">Mai (Thuyết minh chuẩn đài truyền hình)</option>
-                        <option value="vi_female_huong">Hương (Nữ phổ thông miền Bắc)</option>
-                        <option value="BV560_streaming">Alex Đại Đế (Nam trầm quyền uy)</option>
-                        <option value="BV075_streaming_vibrato_dsp">Việt Méo (Hài hước, parody)</option>
-                        <option value="BV074_streaming_dsp">Bé Nhí Nhảnh (Trẻ em dễ thương)</option>
-                      </optgroup>
-
-                      <optgroup label="🇻🇳 Giọng Đọc Chuẩn Edge TTS (Miễn phí & Tự nhiên)">
-                        <option value="vi-VN-NamMinhNeural">Nam Minh (Nam trầm ấm, kịch tính, chuẩn đài)</option>
-                        <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ truyền cảm, dịu dàng, chuẩn phim)</option>
-                      </optgroup>
-
-                      <optgroup label="🌟 Giọng Đọc Gemini AI TTS (Đa sắc thái)">
-                        <option value="Puck">Puck (Gemini Tự Nhiên)</option>
-                        <option value="Kore">Kore (Gemini Truyền Cảm)</option>
-                        <option value="Fenrir">Fenrir (Gemini Trầm Ấm)</option>
-                        <option value="Aoede">Aoede (Gemini Thanh Thoát)</option>
-                      </optgroup>
-
-                      <optgroup label="🌍 Giọng Đọc Quốc Tế (English)">
-                        <option value="en-US-JennyNeural">Jenny (US Female Warm)</option>
-                        <option value="en-US-GuyNeural">Guy (US Male Broadcast)</option>
-                        <option value="en-US-AriaNeural">Aria (US Dynamic Narrator)</option>
-                        <option value="en-US-ChristopherNeural">Christopher (US Deep Storyteller)</option>
-                        <option value="en-GB-RyanNeural">Ryan (British Classic)</option>
-                        <option value="en-GB-SoniaNeural">Sonia (British Elegant)</option>
-                      </optgroup>
-                    </select>
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-                  </div>
-                </div>
-              </div>
+              <VoiceCatalogPicker
+                selectedVoiceId={selectedVoice}
+                onChange={handleVoiceChange}
+                onPreview={(voiceId) => handleTestVoice(voiceId)}
+                previewingVoiceId={isTestingVoice ? currentTestingVoice : undefined}
+              />
             )}
 
-            {/* Khi chọn Đa Giọng: Phân Vai Nam / Nữ */}
             {dubbingMode === 'multi' && (
               <div className="space-y-3 pt-1">
-                {/* Giọng Nam */}
                 <div className="space-y-1">
                   <label className="text-slate-400 text-[10px] block font-medium">Giọng Nam (Phân vai thoại nam):</label>
-                  <div className="relative flex items-center">
-                    <select
-                      value={selectedMaleVoice}
-                      onChange={(e) => handleMaleVoiceChange(e.target.value)}
-                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
-                    >
-                      <option value="vi-VN-NamMinhNeural">Nam Minh (Edge-TTS trầm ấm)</option>
-                      <option value="BV075_streaming">Thanh Niên Tự Tin (CapCut Review)</option>
-                      <option value="BV560_streaming">Alex Đại Đế (CapCut Uy quyền)</option>
-                      <option value="BV075_streaming_vibrato_dsp">Việt Méo (CapCut Parody)</option>
-                      <option value="Fenrir">Fenrir (Gemini Trầm)</option>
-                      <option value="Puck">Puck (Gemini Tự nhiên)</option>
-                    </select>
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-                  </div>
+                  <VoiceCatalogPicker
+                    selectedVoiceId={selectedMaleVoice}
+                    onChange={handleMaleVoiceChange}
+                    gender="Nam"
+                    onPreview={(voiceId) => handleTestVoice(voiceId)}
+                    previewingVoiceId={isTestingVoice ? currentTestingVoice : undefined}
+                  />
                 </div>
 
-                {/* Giọng Nữ */}
                 <div className="space-y-1">
                   <label className="text-slate-400 text-[10px] block font-medium">Giọng Nữ (Phân vai thoại nữ):</label>
-                  <div className="relative flex items-center">
-                    <select
-                      value={selectedFemaleVoice}
-                      onChange={(e) => handleFemaleVoiceChange(e.target.value)}
-                      className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
-                    >
-                      <option value="vi-VN-HoaiMyNeural">Hoài My (Edge-TTS Dịu dàng)</option>
-                      <option value="BV074_streaming">Cô Gái Hoạt Ngôn (CapCut)</option>
-                      <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (CapCut)</option>
-                      <option value="BV562_streaming">Mai (CapCut Thuyết minh)</option>
-                      <option value="vi_female_huong">Hương (CapCut Miền Bắc)</option>
-                      <option value="Kore">Kore (Gemini Nữ)</option>
-                      <option value="Aoede">Aoede (Gemini Thanh thoát)</option>
-                    </select>
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-                  </div>
+                  <VoiceCatalogPicker
+                    selectedVoiceId={selectedFemaleVoice}
+                    onChange={handleFemaleVoiceChange}
+                    gender="Nữ"
+                    onPreview={(voiceId) => handleTestVoice(voiceId)}
+                    previewingVoiceId={isTestingVoice ? currentTestingVoice : undefined}
+                  />
                 </div>
 
-                {/* 2 nút nghe thử Nam / Nữ */}
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     type="button"

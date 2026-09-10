@@ -59,6 +59,12 @@ interface VideoPlayerProps {
   onTogglePreviewMask?: () => void;
   maskStyle?: MaskStyleType;
   blurStrength?: number;
+  maskOpacity?: number;
+  maskPadding?: number;
+  maskBorderRadius?: number;
+  responsiveFontScale?: boolean;
+  subtitleStroke?: 'none' | 'soft' | 'stroke' | 'glow';
+  subtitleLineHeight?: number;
   showSubtitleOverlay: boolean;
   subtitlePlacement?: SubtitlePlacementMode;
   videoPosition?: { x: number; y: number };
@@ -182,6 +188,12 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   onTogglePreviewMask,
   maskStyle = 'feather_tight',
   blurStrength = 20,
+  maskOpacity = 1,
+  maskPadding = 0,
+  maskBorderRadius = 0,
+  responsiveFontScale = false,
+  subtitleStroke = 'soft',
+  subtitleLineHeight,
   showSubtitleOverlay,
   subtitlePlacement = 'roi',
   videoPosition = { x: 0, y: 0 },
@@ -211,8 +223,6 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   const videoBoxRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const subTextRef = useRef<HTMLDivElement>(null);
-  const [measuredSubHeight, setMeasuredSubHeight] = useState<number>(0);
 
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number }>({
     width: 0,
@@ -242,6 +252,10 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
     }
   });
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [windowedBoxSize, setWindowedBoxSize] = useState<{ width: number; height: number }>({
+    width: 360,
+    height: 640,
+  });
   const [videoDuration, setVideoDuration] = useState<number>(0);
   const [showMenu, setShowMenu] = useState<boolean>(false);
   const [showGrid, setShowGrid] = useState<boolean>(false);
@@ -257,11 +271,11 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   }, []);
 
   const handleToggleFullscreen = useCallback(() => {
-    if (!videoBoxRef.current) return;
+    if (!viewportRef.current) return;
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     } else {
-      videoBoxRef.current.requestFullscreen().catch(() => {});
+      viewportRef.current.requestFullscreen().catch(() => {});
     }
   }, []);
 
@@ -282,7 +296,7 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(document.fullscreenElement === videoBoxRef.current);
+      setIsFullscreen(document.fullscreenElement === viewportRef.current);
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -348,7 +362,7 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
     });
     observer.observe(vp);
     return () => observer.disconnect();
-  }, [canvasRatio.ratioNum, videoUrl]);
+  }, [canvasRatio.ratioNum, videoUrl, isFullscreen]);
 
   // Quan sát trực tiếp videoBoxRef để cập nhật boxDimensions chính xác từng pixel,
   // bao gồm cả chế độ Cửa Sổ thường lẫn Toàn Màn Hình (Fullscreen 100vw/100vh)
@@ -444,20 +458,44 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
 
   // Style biến đổi video (Vị trí X, Y, Lật ngang, Lật dọc, Xoay, Zoom)
   const scaleZoom = zoomLevel === 'fit' ? 1.0 : zoomLevel;
-  const effectiveBoxWidth = boxDimensions.width > 0 ? boxDimensions.width : (!isFullscreen ? canvasFitSize.width : 0);
-  const effectiveBoxHeight = boxDimensions.height > 0 ? boxDimensions.height : (!isFullscreen ? canvasFitSize.height : 0);
+  const effectiveBoxWidth = boxDimensions.width > 0 ? boxDimensions.width : canvasFitSize.width;
+  const effectiveBoxHeight = boxDimensions.height > 0 ? boxDimensions.height : canvasFitSize.height;
 
-  // Tự động đo chiều cao thực tế của khối chữ phụ đề để co giãn lớp làm mờ ôm khít 100%
   useEffect(() => {
-    if (subTextRef.current) {
-      const h = subTextRef.current.offsetHeight;
-      if (h > 0) {
-        setMeasuredSubHeight(h);
-      }
-    } else {
-      setMeasuredSubHeight(0);
-    }
-  }, [activeCue, effectiveBoxHeight, subtitleFontSize, subtitleFontFamily]);
+    if (isFullscreen) return;
+    if (effectiveBoxWidth <= 0 || effectiveBoxHeight <= 0) return;
+    setWindowedBoxSize((prev) => {
+      if (prev.width === effectiveBoxWidth && prev.height === effectiveBoxHeight) return prev;
+      return { width: effectiveBoxWidth, height: effectiveBoxHeight };
+    });
+  }, [isFullscreen, effectiveBoxWidth, effectiveBoxHeight]);
+
+  const subtitleFontScale = responsiveFontScale
+    ? effectiveBoxWidth / 360
+    : (isFullscreen ? effectiveBoxWidth / Math.max(1, windowedBoxSize.width) : 1);
+
+  const getOverlayGeometry = useCallback((reg: RegionTrackV1) => {
+    const padding = Math.min(24, Math.max(-4, maskPadding));
+    const effectiveLeft = Math.max(0, Math.round(reg.x * effectiveBoxWidth) - padding);
+    const effectiveTop = Math.max(0, Math.round(reg.y * effectiveBoxHeight) - padding);
+    const effectiveWidth = Math.min(
+      effectiveBoxWidth - effectiveLeft,
+      Math.round(reg.width * effectiveBoxWidth) + padding * 2
+    );
+    const effectiveHeight = Math.min(
+      effectiveBoxHeight - effectiveTop,
+      Math.round(reg.height * effectiveBoxHeight) + padding * 2
+    );
+    return { effectiveLeft, effectiveTop, effectiveWidth, effectiveHeight };
+  }, [effectiveBoxHeight, effectiveBoxWidth, maskPadding]);
+
+  const subtitleTextShadow = subtitleStroke === 'none'
+    ? 'none'
+    : subtitleStroke === 'stroke'
+      ? '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000'
+      : subtitleStroke === 'glow'
+        ? '0 0 4px #000, 0 0 10px rgba(0,0,0,0.95), 0 0 16px rgba(0,0,0,0.8)'
+        : '0 1px 3px rgba(0,0,0,0.95), 0 2px 8px rgba(0,0,0,0.85)';
 
   const contentTransformStyle: React.CSSProperties = {
     transform: `translate(${videoPosition.x}px, ${videoPosition.y}px) scale(${scaleZoom}) rotate(${rotation}deg) scaleX(${isFlippedH ? -1 : 1}) scaleY(${isFlippedV ? -1 : 1})`,
@@ -714,26 +752,28 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
         <>
           <div
           ref={viewportRef}
-          className="flex-1 min-h-0 min-w-0 w-full flex items-center justify-center relative overflow-hidden p-2 sm:p-3 bg-slate-950"
+          data-testid="player-fullscreen-root"
+          className={
+            isFullscreen
+              ? 'w-screen h-screen p-0 bg-black flex items-center justify-center relative overflow-hidden'
+              : 'flex-1 min-h-0 min-w-0 w-full flex items-center justify-center relative overflow-hidden p-2 sm:p-3 bg-slate-950'
+          }
         >
-          {/* Khung Canvas chuẩn CapCut với pixel cố định tính toán qua ResizeObserver (chống co rút 300px) */}
+          {/* Canvas giữ tỉ lệ thật; overlay ROI/phụ đề nằm trong canvas để không lệch khi fullscreen */}
           <div
             ref={videoBoxRef}
+            data-testid="player-canvas-box"
             className={`relative bg-black flex items-center justify-center transition-all duration-100 ${
               isFullscreen
-                ? 'w-screen h-screen max-w-none max-h-none rounded-none border-none'
+                ? 'rounded-none border-none'
                 : 'rounded-none border border-slate-800/90 shadow-2xl'
             }`}
-            style={
-              isFullscreen
-                ? { width: '100vw', height: '100vh', maxWidth: '100vw', maxHeight: '100vh' }
-                : {
-                    width: canvasFitSize.width > 0 ? `${canvasFitSize.width}px` : '100%',
-                    height: canvasFitSize.height > 0 ? `${canvasFitSize.height}px` : '100%',
-                    maxWidth: '100%',
-                    maxHeight: '100%',
-                  }
-            }
+            style={{
+              width: `${canvasFitSize.width}px`,
+              height: `${canvasFitSize.height}px`,
+              maxWidth: '100%',
+              maxHeight: '100%',
+            }}
           >
             {/* === 1. Lớp Khung Chuẩn (Canvas Bounds): Cố định theo khung chuẩn góc vuông, clip 100% phần video tràn ra ngoài === */}
             <div
@@ -812,43 +852,30 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
               />
             )}
 
-            {/* === 3. Lớp Phủ Che Sub Gốc (Preview Mask Bám Khít 100% Tọa Độ Khung ROI & Co Giãn Theo Chữ) === */}
+            {/* === 3. Lớp Phủ Che Sub Gốc (khóa đúng khung ROI, không nhảy theo box từng câu) === */}
             {previewMask && effectiveBoxWidth > 0 && effectiveBoxHeight > 0 && (
               <>
                 {(regions && regions.length > 0 ? regions : [region])
                   .filter((r) => r.mask_enabled !== false)
                   .map((reg) => {
                     const isSolidBox = maskStyle === 'box';
-                    // Mở rộng bleed ra ngoài để triệt tiêu vĩnh viễn hiện tượng mép mờ bị suy giảm (edge falloff) của backdrop-filter
-                    const bleed = isSolidBox ? 0 : Math.max(14, Math.round(blurStrength * 0.8));
-                    const isSubTargetRegion = reg.region_id === subDisplayRegion.region_id;
-                    const baseHeight = Math.round(reg.height * effectiveBoxHeight);
-
-                    // Tự động mở rộng chiều cao lớp làm mờ nếu câu phụ đề dịch dài 2 hoặc 3 dòng vượt quá khung ROI
-                    const shouldExpandForSub =
-                      isSubTargetRegion &&
-                      subtitlePlacement === 'roi' &&
-                      showSubtitleOverlay &&
-                      Boolean(activeCue) &&
-                      measuredSubHeight > 0;
-
-                    const effectiveHeight = shouldExpandForSub
-                      ? Math.max(baseHeight, measuredSubHeight + 12)
-                      : baseHeight;
-                    const extraY = shouldExpandForSub ? effectiveHeight - baseHeight : 0;
-                    const effectiveTop = Math.max(
-                      0,
-                      Math.round(reg.y * effectiveBoxHeight) - Math.round(extraY / 2)
-                    );
+                    const bleed = (isSolidBox ? 0 : Math.max(14, Math.round(blurStrength * 0.8))) +
+                      Math.min(24, Math.max(-4, maskPadding));
+                    const {
+                      effectiveLeft,
+                      effectiveTop,
+                      effectiveWidth,
+                      effectiveHeight,
+                    } = getOverlayGeometry(reg);
 
                     return (
                       <div
                         key={reg.region_id}
-                        className="absolute pointer-events-none overflow-hidden z-30 transition-all duration-100"
+                        className="absolute pointer-events-none overflow-hidden z-30"
                         style={{
-                          left: `${Math.round(reg.x * effectiveBoxWidth)}px`,
+                          left: `${effectiveLeft}px`,
                           top: `${effectiveTop}px`,
-                          width: `${Math.round(reg.width * effectiveBoxWidth)}px`,
+                          width: `${effectiveWidth}px`,
                           height: `${effectiveHeight}px`,
                         }}
                       >
@@ -862,6 +889,8 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
                             bottom: `-${bleed}px`,
                             backdropFilter: isSolidBox ? 'none' : `blur(${blurStrength}px)`,
                             WebkitBackdropFilter: isSolidBox ? 'none' : `blur(${blurStrength}px)`,
+                            opacity: Math.min(1, Math.max(0.1, maskOpacity)),
+                            borderRadius: `${[0, 4, 8, 16].includes(maskBorderRadius) ? maskBorderRadius : 0}px`,
                           }}
                         />
                       </div>
@@ -873,42 +902,36 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
             {/* === 4. Lớp Phủ Hiển Thị Phụ Đề Dịch Tiếng Việt (CHỈ DUY NHẤT 1 VÙNG HIỂN THỊ CHUẨN) === */}
             {showSubtitleOverlay && activeCue && effectiveBoxWidth > 0 && (
               <div
-                className={`absolute pointer-events-none flex justify-center z-40 transition-all duration-75 px-4 ${
-                  subtitlePlacement === 'bottom'
-                    ? 'bottom-[6%] left-0 right-0 items-end'
-                    : 'items-center'
+                key={`sub-overlay-${activeCue.cue_id}`}
+                className={`absolute pointer-events-none flex items-center justify-center z-40 ${
+                  subtitlePlacement === 'bottom' ? 'bottom-[6%] left-0 right-0 px-4' : ''
                 }`}
-                style={
-                  subtitlePlacement === 'bottom'
-                    ? { left: 0, right: 0, bottom: '6%', margin: '0 auto' }
-                    : {
-                        left: 0,
-                        right: 0,
-                        top: `${
-                          measuredSubHeight > 0 && (measuredSubHeight + 12) > Math.round(subDisplayRegion.height * effectiveBoxHeight)
-                            ? Math.max(0, Math.round(subDisplayRegion.y * effectiveBoxHeight) - Math.round(((measuredSubHeight + 12) - Math.round(subDisplayRegion.height * effectiveBoxHeight)) / 2))
-                            : Math.round(subDisplayRegion.y * effectiveBoxHeight)
-                        }px`,
-                        minHeight: `${
-                          measuredSubHeight > 0 && (measuredSubHeight + 12) > Math.round(subDisplayRegion.height * effectiveBoxHeight)
-                            ? measuredSubHeight + 12
-                            : Math.round(subDisplayRegion.height * effectiveBoxHeight)
-                        }px`,
-                        margin: '0 auto',
-                      }
-                }
+                style={subtitlePlacement === 'bottom'
+                  ? { left: 0, right: 0, bottom: '6%', margin: '0 auto' }
+                  : (() => {
+                      const geometry = getOverlayGeometry(subDisplayRegion);
+                      return {
+                        left: `${geometry.effectiveLeft}px`,
+                        top: `${geometry.effectiveTop}px`,
+                        width: `${geometry.effectiveWidth}px`,
+                        height: `${geometry.effectiveHeight}px`,
+                      };
+                    })()}
               >
-                <div className="relative inline-flex items-center justify-center max-w-[94%] px-4 py-1.5 transition-all duration-100">
+                <div className="relative inline-flex items-center justify-center w-full max-w-[92%] px-3 py-1 break-words text-center">
                   {/* Phụ đề dịch tiếng Việt chuẩn điện ảnh - Hỗ trợ tùy biến phông, cỡ chữ, màu sắc */}
                   <div
-                    ref={subTextRef}
                     data-testid="rendered-subtitle-text"
                     style={{
-                      fontSize: subtitleFontSize ? `${subtitleFontSize}px` : undefined,
+                      fontSize: subtitleFontSize
+                        ? `${subtitleFontSize * subtitleFontScale}px`
+                        : undefined,
                       fontFamily: subtitleFontFamily || undefined,
                       color: subtitleTextColor || '#fde047',
+                      lineHeight: subtitleLineHeight,
+                      textShadow: subtitleTextShadow,
                     }}
-                    className="font-bold tracking-wide text-center leading-snug drop-shadow-[0_2px_4px_rgba(0,0,0,1)] [text-shadow:_0_1px_3px_rgba(0,0,0,0.95),_0_2px_8px_rgba(0,0,0,0.85)] select-none whitespace-normal"
+                    className="font-bold tracking-wide text-center select-none whitespace-normal break-words max-w-full"
                   >
                     {activeCue.translated_text || activeCue.source_text}
                   </div>

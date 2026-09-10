@@ -29,7 +29,7 @@ from subtitle_localizer.service.pipeline_settings import DubbingSettings
 class MultiProviderTTSTest(unittest.TestCase):
     def test_dubbing_settings_has_provider_and_gemini_prompt(self) -> None:
         dub = DubbingSettings()
-        self.assertEqual(dub.provider, "edge")
+        self.assertEqual(dub.provider, "capcut")
         self.assertEqual(dub.gemini_prompt_style, "dramatic")
 
         custom_dub = DubbingSettings(provider="capcut", voice="BV075_streaming")
@@ -89,6 +89,25 @@ class MultiProviderTTSTest(unittest.TestCase):
         self.assertIn("BV075_streaming", body)
         self.assertIn("sami_text_to_speech", body)
 
+    def test_capcut_ssml_applies_percent_speaking_rate(self) -> None:
+        client = CapCutTTSClient()
+        _, _, body = client.build_tts_request(
+            text="Xin chào các bạn",
+            voice="BV075_streaming",
+            rate="+30%",
+        )
+        self.assertIn("prosody rate", body)
+        self.assertIn("1.30", body)
+
+    def test_parse_speaking_rate_from_ui_presets(self) -> None:
+        from subtitle_localizer.dubbing.tts import parse_speaking_rate
+
+        self.assertAlmostEqual(parse_speaking_rate("+0%"), 1.0)
+        self.assertAlmostEqual(parse_speaking_rate("0.9"), 0.9)
+        self.assertAlmostEqual(parse_speaking_rate("+15%"), 1.15)
+        self.assertAlmostEqual(parse_speaking_rate("+30%"), 1.3)
+        self.assertAlmostEqual(parse_speaking_rate("-10%"), 0.9)
+
     @patch("subtitle_localizer.dubbing.capcut_tts.CapCutTTSClient.synthesize", new_callable=AsyncMock)
     def test_synthesize_text_routes_to_capcut(self, mock_capcut: AsyncMock) -> None:
         import asyncio
@@ -135,6 +154,27 @@ class MultiProviderTTSTest(unittest.TestCase):
         ))
         self.assertEqual(result, b"fake_gemini_mp3_data")
         mock_gemini.assert_called_once()
+
+    @patch("subtitle_localizer.dubbing.tts.apply_speaking_rate_to_audio")
+    @patch("subtitle_localizer.dubbing.gemini_tts.GeminiTTSClient.synthesize", new_callable=AsyncMock)
+    def test_gemini_synthesize_applies_ui_speaking_rate(self, mock_gemini: AsyncMock, mock_apply) -> None:
+        import asyncio
+
+        mock_gemini.return_value = b"fake_gemini_mp3_data"
+        mock_apply.return_value = b"sped_up_mp3"
+
+        result = asyncio.run(
+            synthesize_text(
+                text="Trời xanh ngắt",
+                provider="gemini",
+                voice="Puck",
+                prompt_style="dramatic",
+                rate="+30%",
+            )
+        )
+        self.assertEqual(result, b"sped_up_mp3")
+        mock_apply.assert_called_once()
+        self.assertEqual(mock_apply.call_args.args[1], "+30%")
 
     @patch("subtitle_localizer.dubbing.gemini_tts.GeminiTTSClient.synthesize", new_callable=AsyncMock)
     @patch("subtitle_localizer.dubbing.tts._synthesize_edge_tts", new_callable=AsyncMock)

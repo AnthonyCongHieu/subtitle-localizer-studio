@@ -86,6 +86,23 @@ class FrameAccurateBoundaryRefiner:
         if not cues:
             return cues
 
+        # Short-circuit: Nếu tất cả cues đều đã có timing căn chỉnh từ âm thanh (CapCut ASR / Draft)
+        all_audio_aligned = all(
+            any(f in (cue.quality_flags or []) for f in ("capcut_cloud_extracted", "capcut_draft_extracted", "audio_aligned"))
+            for cue in cues
+        )
+        if all_audio_aligned:
+            for i, cue in enumerate(cues):
+                prev_end = cues[i - 1].end_pts if i > 0 else 0.0
+                next_start = cues[i + 1].start_pts if i + 1 < len(cues) else cue.end_pts + 1.0
+                new_s = max(prev_end, round(cue.start_pts - self.lead_in, 3))
+                new_e = min(next_start - 0.02 if next_start > cue.end_pts else cue.end_pts + self.lead_out, round(cue.end_pts + self.lead_out, 3))
+                cue.start_pts = new_s
+                cue.end_pts = max(round(new_s + 0.35, 3), new_e)
+            if progress_callback:
+                progress_callback(len(cues), len(cues))
+            return cues
+
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             logger.warning("Không thể mở video: %s", video_path)
@@ -116,6 +133,14 @@ class FrameAccurateBoundaryRefiner:
 
             s_pts = cue.start_pts
             e_pts = cue.end_pts
+
+            # Bỏ qua quét CPU nếu câu này đã có timing căn chỉnh âm thanh chuẩn
+            if any(f in (cue.quality_flags or []) for f in ("capcut_cloud_extracted", "capcut_draft_extracted", "audio_aligned")):
+                new_s = max(prev_end, round(s_pts - self.lead_in, 3))
+                new_e = min(next_start - 0.02 if next_start > e_pts else e_pts + self.lead_out, round(e_pts + self.lead_out, 3))
+                cue.start_pts = new_s
+                cue.end_pts = max(round(new_s + 0.35, 3), new_e)
+                continue
 
             # 1. Xác định khung hình neo (Anchor Frame) ở giữa khoảng thời gian của cue
             anchor_target_pts = (s_pts + e_pts) / 2.0

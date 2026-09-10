@@ -17,6 +17,7 @@ import {
   Mic,
   Loader2,
   Square,
+  CheckCircle2,
 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { SubtitleCueV1 } from '../../types/api';
@@ -47,6 +48,7 @@ interface BottomTimelineProps {
   onOriginalAudioVolumeChange?: (vol: number) => void;
   isAudioMuted?: boolean;
   onToggleAudioMute?: () => void;
+  onSetAudioMuted?: (muted: boolean) => void;
   isVideoVisible?: boolean;
   onToggleVideoVisible?: () => void;
   isSubVisible?: boolean;
@@ -54,11 +56,14 @@ interface BottomTimelineProps {
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   isScanning?: boolean;
+  scanProgress?: number | null;
   statusMessage?: string | null;
+  onDismissStatus?: () => void;
   onStopScan?: () => void;
   isTranslating?: boolean;
   isDubbing?: boolean;
   height?: number;
+  dubbingMode?: 'single' | 'multi';
 }
 
 /**
@@ -98,6 +103,7 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
   onOriginalAudioVolumeChange,
   isAudioMuted: externalAudioMuted,
   onToggleAudioMute,
+  onSetAudioMuted,
   isVideoVisible: externalVideoVisible,
   onToggleVideoVisible,
   isSubVisible: externalSubVisible,
@@ -105,11 +111,14 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
   onZoomIn,
   onZoomOut,
   isScanning = false,
+  scanProgress,
   statusMessage,
+  onDismissStatus,
   onStopScan,
   isTranslating = false,
   isDubbing = false,
   height,
+  dubbingMode = 'single',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackAreaRef = useRef<HTMLDivElement>(null);
@@ -198,10 +207,17 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
   const voiceoverLanesData = useMemo(() => {
     if (!cues || cues.length === 0) return { cuesWithLanes: [], maxLanes: 1 };
     const sorted = [...cues].sort((a, b) => a.start_pts - b.start_pts);
+    if (dubbingMode !== 'multi') {
+      const maxLanes = 1;
+      return {
+        cuesWithLanes: sorted.map((cue) => ({ cue, lane: 0 })),
+        maxLanes,
+      };
+    }
     const lanesEndPts: number[] = [];
     const cuesWithLanes = sorted.map((cue) => {
       let lane = 0;
-      while (lane < lanesEndPts.length && lanesEndPts[lane] > cue.start_pts + 0.05) {
+      while (lane < lanesEndPts.length && lanesEndPts[lane] > cue.start_pts + 0.22) {
         lane++;
       }
       lanesEndPts[lane] = cue.end_pts;
@@ -209,7 +225,7 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
     });
     const maxLanes = Math.max(1, lanesEndPts.length);
     return { cuesWithLanes, maxLanes };
-  }, [cues]);
+  }, [cues, dubbingMode]);
 
   // Kiểm tra chính xác xem mốc thời gian có nằm trong câu phụ đề nào hiện hữu hay không
   // Khi người dùng xóa câu phụ đề trên giao diện, khoảng thời gian đó lập tức bị ngắt âm
@@ -278,8 +294,8 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
         if (audio.volume !== targetVol) {
           audio.volume = targetVol;
         }
-        // Giữ audio bám sát theo Playhead
-        if (Math.abs(t - currentTime) > 0.08) {
+        // Giữ audio bám sát theo Playhead mà không gây giật lùi frame (ngưỡng an toàn 0.25s)
+        if (Math.abs(t - currentTime) > 0.25) {
           try {
             audio.currentTime = currentTime;
           } catch {}
@@ -1188,12 +1204,27 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
           {(isScanning || isTranslating || isDubbing || (statusMessage && statusMessage !== 'Sẵn sàng' && statusMessage !== '')) && (
             <div
               data-testid="timeline-progress-pill"
-              className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-indigo-950/90 border border-indigo-500/40 text-indigo-200 text-xs shadow-inner animate-in fade-in"
+              className={`flex items-center gap-2 px-2.5 py-1 rounded-lg border text-xs shadow-inner animate-in fade-in ${
+                isScanning || isTranslating || isDubbing
+                  ? 'bg-indigo-950/90 border-indigo-500/40 text-indigo-200'
+                  : 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200'
+              }`}
             >
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+              {isScanning || isTranslating || isDubbing ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              )}
+              {scanProgress !== null && scanProgress !== undefined && isScanning && (
+                <span className="font-mono text-[11px] font-bold text-cyan-400 bg-indigo-900/80 px-1.5 py-0.2 rounded border border-indigo-500/40 shrink-0">
+                  {Math.round(scanProgress)}%
+                </span>
+              )}
               <span
                 data-testid="timeline-progress-text"
-                className="font-mono text-[11px] font-semibold text-indigo-200 truncate max-w-[240px] md:max-w-[420px]"
+                className={`font-mono text-[11px] font-semibold truncate max-w-[200px] md:max-w-[360px] ${
+                  isScanning || isTranslating || isDubbing ? 'text-indigo-200' : 'text-emerald-200'
+                }`}
                 title={statusMessage || 'Đang xử lý...'}
               >
                 {statusMessage || (isScanning ? 'Đang quét phụ đề...' : isTranslating ? 'Đang dịch AI...' : 'Đang lồng tiếng...')}
@@ -1208,6 +1239,16 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
                 >
                   <Square className="w-2.5 h-2.5 fill-white" />
                   <span>Dừng</span>
+                </button>
+              )}
+              {onDismissStatus && (
+                <button
+                  type="button"
+                  onClick={onDismissStatus}
+                  className="ml-1 text-slate-400 hover:text-white p-0.5 rounded hover:bg-white/10 transition cursor-pointer text-[10px] leading-none shrink-0"
+                  title="Đóng thông báo"
+                >
+                  ✕
                 </button>
               )}
             </div>
@@ -1467,8 +1508,13 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
                       const v = Number(e.target.value);
                       handleOriginalAudioVolumeChange(v);
                       if (v > 0 && isAudioMuted) {
-                        if (onToggleAudioMute) onToggleAudioMute();
-                        else setInternalAudioMuted(false);
+                        if (onSetAudioMuted) {
+                          onSetAudioMuted(false);
+                        } else if (onToggleAudioMute) {
+                          onToggleAudioMute();
+                        } else {
+                          setInternalAudioMuted(false);
+                        }
                       }
                     }}
                     className="flex-1 h-2 bg-slate-800 hover:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500 transition shadow-inner"

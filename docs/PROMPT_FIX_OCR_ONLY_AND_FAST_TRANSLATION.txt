@@ -1,0 +1,204 @@
+# ==============================================================================
+# MASTER IMPLEMENTATION PROMPT CHO AUTONOMOUS IMPLEMENTER AGENT:
+# KHẮC PHỤC TRIỆT ĐỂ LỖI BỎ QUA OCR_ONLY VÀ TỐI ƯU HÓA DỊCH THUẬT SIÊU TỐC
+# (TICKET: FIX-PIPELINE-OCR-ONLY-AND-RESTORE-FAST-TRANSLATION)
+# ==============================================================================
+
+Bạn là Kỹ Sư Hệ Thống AI & Full-Stack Cấp Cao (Senior AI Systems & Full-Stack Architect).
+Nhiệm vụ của bạn là thực hiện Ticket kỹ thuật: "Khắc phục triệt để lỗi bỏ qua tham số ocr_only khiến hệ thống tự ý dịch khi bấm Quét Sub, mở khóa dịch thuật siêu tốc qua Gemini API Pool và đồng bộ hóa cấu hình mặc định Peak Performance".
+
+Tuân thủ nghiêm ngặt mọi quy tắc phát triển trong `AGENTS.md`:
+- Triển khai đúng 1 ticket duy nhất trong phiên làm việc và dừng lại tại `STOPPED_AFTER_TICKET`.
+- Viết Red-First tests trước khi chỉnh sửa mã nguồn nghiệp vụ.
+- Bảo tồn 100% chuẩn mã hóa UTF-8, tiếng Việt, Hán tự, Nhật, Hàn; tuyệt đối không để xảy ra mojibake hay ký tự lỗi \ufffd.
+- Bảo toàn Contract công khai của API, kiểm tra dữ liệu đầu vào chặt chẽ.
+- Trước khi hoàn tất, chạy đầy đủ kiểm thử targeted, adjacent và regression verification.
+
+--------------------------------------------------------------------------------
+MỤC LỤC CHI TIẾT:
+1. HIỆN TƯỢNG LỖI & PHÂN TÍCH NGUYÊN NHÂN GỐC RỄ (ROOT CAUSE ANALYSIS)
+2. CÁC TẬP TIN MỤC TIÊU CẦN CHỈNH SỬA (EXACT FILE SPECIFICATIONS)
+3. RED-FIRST TESTS CẦN TẠO MỚI
+4. CẬP NHẬT FILE CẤU HÌNH HỆ THỐNG MẶC ĐỊNH (PIPELINE SETTINGS)
+5. QUY TRÌNH KIỂM THỬ HỒI QUY & TIÊU CHUẨN NGHIỆM THU (ACCEPTANCE GATES)
+--------------------------------------------------------------------------------
+
+================================================================================
+PHẦN 1: HIỆN TƯỢNG LỖI & PHÂN TÍCH NGUYÊN NHÂN GỐC RỄ
+================================================================================
+
+1.1. LỖI 1: BẤM "QUÉT SUB" NHƯNG HỆ THỐNG TỰ ĐỘNG CHẠY LUÔN DỊCH THUẬT
+- Hiện tượng: Người dùng chỉ bấm nút "Quét Sub" (`Đang Quét...`), mong muốn chỉ nhận diện chữ trên video và tinh chỉnh ranh giới timeline rồi dừng lại để kiểm tra câu thoại gốc. Nhưng hệ thống sau khi quét xong lại tự tiện chuyển sang trạng thái "Đang dịch phụ đề (zh -> vi)...", xoay vòng rất lâu và chiếm dụng giao diện.
+- Nguyên nhân gốc rễ:
+  * Phía Frontend (`web/src/App.tsx` dòng 1283 & 1298) gọi đúng API:
+    `await apiClient.runPipeline(activeProject.project_id, { ocr_only: true });`
+  * Phía Backend (`src/subtitle_localizer/service/server.py` dòng 99):
+    Model Pydantic `PipelineRunRequest` chỉ khai báo:
+    ```python
+    class PipelineRunRequest(BaseModel):
+        max_duration_seconds: Optional[float] = None
+        sync: bool = False
+        # THIẾU TRƯỜNG: ocr_only: bool = False
+    ```
+  * Tại endpoint `POST /api/v1/projects/{project_id}/pipeline/run` (dòng 1453 & 1482):
+    Mã nguồn gọi:
+    `worker.run_pipeline_synchronous(project_id, max_duration_seconds=max_dur)`
+    mà KHÔNG HỀ truyền `ocr_only` từ `req` vào!
+  * Vì vậy, trong `worker.py`, tham số `ocr_only` luôn nhận giá trị mặc định là `False`.
+    Dẫn đến khối code tại dòng 724:
+    `if not ocr_only and manifest.target_language and ...:`
+    luôn được thực thi, ép hệ thống tự ý chạy Stage 4 (Translation Stage).
+
+1.2. LỖI 2: PHẦN DỊCH THUẬT CHẠY CỰC KỲ LÂU VÀ NẶNG MÁY
+- Hiện tượng: Khi dịch, hệ thống xoay tít hàng phút cho một đoạn video ngắn, CPU/VRAM bị chiếm dụng nặng.
+- Nguyên nhân gốc rễ:
+  * Trong `src/subtitle_localizer/translation/real.py` (dòng 401-413), có một khối mã hardcode ép buộc:
+    ```python
+    test_cloud_opt_in = "PYTEST_CURRENT_TEST" in os.environ and "TEST_WITH_GEMINI" in os.environ
+    if not test_cloud_opt_in:
+        provider = "local"
+    else:
+        provider = "gemini"
+    if not test_cloud_opt_in:
+        auto_fallback = False
+    ```
+  * Đoạn mã trên đã TƯỚC ĐOẠT quyền lựa chọn của người dùng trong `pipeline_settings.json`!
+    Dù người dùng chọn `provider = "gemini"` và hệ thống có sẵn 43 API keys trong `gemini_keys_pool.json`, hệ thống vẫn bị ép cứng chuyển về `provider = "local"`.
+  * Khi chạy `local`, hệ thống gọi mô hình `qwen2.5:7b-instruct` qua Ollama. Mô hình này có 7.6 tỷ tham số (nặng 4.7 GB). Trên các dòng card như RTX 3050 (4GB/6GB VRAM), mô hình bị quá tải bộ nhớ và tràn sang RAM CPU (System RAM offload), khiến tốc độ sinh từ rớt thảm hại (mất 45s - 90s cho 1 batch 35 câu), gây cảm giác đơ/treo.
+  * Trong khi đó, nếu dùng Gemini API qua Key Pool, 200 câu dịch chỉ tốn vẻn vẹn 2 – 3 giây với chất lượng văn phong điện ảnh vượt trội.
+
+================================================================================
+PHẦN 2: CHI TIẾT CÁC TẬP TIN CẦN CHỈNH SỬA
+================================================================================
+
+2.1. CHỈNH SỬA `src/subtitle_localizer/service/server.py`
+Mục tiêu: Tiếp nhận chuẩn xác trường `ocr_only` từ HTTP request body và chuyển tiếp vào Background Worker.
+
+- Bước 1: Cập nhật `PipelineRunRequest`:
+  ```python
+  class PipelineRunRequest(BaseModel):
+      max_duration_seconds: Optional[float] = None
+      sync: bool = False
+      ocr_only: bool = False
+  ```
+
+- Bước 2: Tại endpoint `POST /api/v1/projects/{project_id}/pipeline/run`:
+  Trích xuất cờ `is_ocr_only = bool(req.ocr_only) if req else False`.
+  Truyền vào cả nhánh đồng bộ và bất đồng bộ:
+  * Nhánh đồng bộ:
+    ```python
+    success = worker.run_pipeline_synchronous(
+        project_id, max_duration_seconds=max_dur, ocr_only=is_ocr_only
+    )
+    ```
+  * Nhánh thread bất đồng bộ `_bg_run()`:
+    ```python
+    worker.run_pipeline_synchronous(
+        project_id, max_duration_seconds=max_dur, ocr_only=is_ocr_only
+    )
+    ```
+  * Trong kết quả trả về của API, bổ sung trường `"ocr_only": is_ocr_only` để client dễ dàng debug đối soát.
+
+2.2. CHỈNH SỬA `src/subtitle_localizer/translation/real.py`
+Mục tiêu: Xóa bỏ hardcode ép buộc `provider = "local"`, khôi phục cơ chế định tuyến thông minh theo đúng cấu hình người dùng:
+Ưu tiên Gemini qua Pool Keys (nếu provider là "gemini" hoặc "auto") -> Tự động Fallback sang Local Qwen nếu mất mạng hoặc lỗi key -> Áp dụng từ điển thuật ngữ.
+
+- Tại phương thức `translate_cues()`:
+  Thay thế đoạn logic cưỡng chế dòng 401-413 bằng logic định tuyến chuẩn:
+  ```python
+  from subtitle_localizer.service.pipeline_settings import get_global_pipeline_settings
+  pipe_settings = get_global_pipeline_settings().translation
+  configured_provider = getattr(pipe_settings, "provider", "auto")
+  auto_fallback = getattr(pipe_settings, "auto_fallback", True)
+
+  is_pytest = "PYTEST_CURRENT_TEST" in os.environ and "TEST_WITH_GEMINI" not in os.environ
+  
+  # Xác định provider hiệu lực:
+  # Nếu đang chạy pytest đơn thuần (không có cờ TEST_WITH_GEMINI) -> mock/local để tránh gọi mạng ngoài.
+  # Trong môi trường ứng dụng thực tế -> Tôn trọng cấu hình người dùng đã thiết lập.
+  if is_pytest:
+      provider = "local"
+      auto_fallback = False
+  else:
+      provider = configured_provider
+  ```
+
+- Đảm bảo luồng thực thi:
+  1. Nếu `provider in ("gemini", "auto")`:
+     Lấy `get_global_gemini_pool()`. Nếu pool có key hợp lệ -> chạy `_translate_with_gemini()`.
+     Nếu Gemini thành công -> hoàn tất.
+     Nếu Gemini lỗi hoặc pool rỗng và `auto_fallback == True` -> ghi log warning và chuyển êm xuống `_translate_with_local_qwen()`.
+  2. Nếu `provider in ("local", "local_model")`:
+     Chạy `_translate_with_local_qwen()`.
+     Nếu local thất bại và `auto_fallback == True` -> cứu hộ sang Gemini.
+  3. Áp dụng từ điển `DEFAULT_CHINESE_VIETNAMESE_GLOSSARY` để chuẩn hóa danh từ riêng và tiếng lóng.
+
+2.3. CẬP NHẬT `pipeline_settings.json` (VÀ `src/subtitle_localizer/service/pipeline_settings.py`)
+Mục tiêu: Thiết lập cấu hình mặc định chuẩn "Peak Performance" để người dùng không phải cấu hình thủ công:
+- `"ocr"`:
+  * `"mode": "local"` (Chạy trực tiếp GPU máy tính, không chờ đợi Cloud API)
+  * `"engine": "ppocrv5"`
+  * `"primary_backend": "ppocrv5"`
+  * `"ppocr_model_tier": "mobile"` (16.5MB siêu tốc)
+  * `"recognition_batch_size": 16` (Bão hòa Tensor Cores RTX 3050)
+  * `"enable_nvdec_hwaccel": true` (Giải mã phần cứng GPU 600-1000 FPS)
+  * `"enable_anti_noise_funnel": true` (Lọc 5 tầng diệt rác thị giác)
+  * `"enable_stroke_dhash_cache": true` (Bỏ qua 80% lượt quét lặp lại)
+- `"translation"`:
+  * `"provider": "gemini"`
+  * `"gemini_model": "gemini-2.5-flash"`
+  * `"auto_fallback": true`
+  * `"batch_size": 35`
+
+================================================================================
+PHẦN 3: RED-FIRST TESTS CẦN TẠO MỚI
+================================================================================
+
+Tạo mới file test: `tests/unit/test_pipeline_ocr_only_flag.py`:
+1. `test_pipeline_run_request_schema_includes_ocr_only`:
+   Khởi tạo `PipelineRunRequest(ocr_only=True)` -> Xác nhận schema Pydantic parse thành công trường `ocr_only == True`.
+2. `test_server_run_pipeline_passes_ocr_only_to_worker`:
+   Mock `worker.run_pipeline_synchronous` trong `server.py`.
+   Gửi request `POST /api/v1/projects/{pid}/pipeline/run` với body `{"ocr_only": true}`.
+   Khẳng định (assert) `worker.run_pipeline_synchronous` được gọi với đối số `ocr_only=True`.
+3. `test_worker_skips_translation_when_ocr_only_is_true`:
+   Chạy `worker.run_pipeline_synchronous(..., ocr_only=True)`.
+   Khẳng định StageRun lưu vào database không có stage `translation`, và danh sách cues lưu lại chỉ chứa `source_text` gốc, không gọi Translator.
+
+Tạo mới file test: `tests/unit/test_translation_routing.py`:
+1. `test_translation_provider_respects_gemini_config`:
+   Xác nhận khi cấu hình `provider="gemini"`, hàm `translate_cues()` định tuyến gọi Gemini thay vì bị ép về local.
+2. `test_translation_auto_fallback_to_local_when_gemini_fails`:
+   Xác nhận khi Gemini pool rỗng hoặc lỗi và `auto_fallback=True`, hệ thống tự động kích hoạt local qwen mà không crash.
+
+================================================================================
+PHẦN 4: LỆNH CHẠY KIỂM THỬ & BÁO CÁO NGHIỆM THU
+================================================================================
+
+Thực thi tuần tự các lệnh sau trong PowerShell:
+
+```powershell
+# 1. Chạy Red-First Tests cho tính năng mới
+pytest tests/unit/test_pipeline_ocr_only_flag.py tests/unit/test_translation_routing.py -v
+
+# 2. Chạy kiểm thử hồi quy toàn bộ hệ thống dịch thuật và worker
+pytest tests/t06/test_translation.py tests/t07/test_service_worker.py tests/unit/test_breakthrough_worker_bridge.py -v
+
+# 3. Kiểm tra cú pháp toàn bộ repository Python
+python -m compileall src tests
+
+# 4. Kiểm tra build giao diện Frontend
+cd web
+npm run build
+cd ..
+
+# 5. Kiểm tra mã hóa và mojibake
+git diff --name-only
+```
+
+Tiêu chuẩn hoàn thành:
+- Toàn bộ các bài kiểm thử unit & regression đều đạt PASS (Exit 0).
+- Khi người dùng bấm nút "Quét Sub" trên giao diện Web, hệ thống chỉ chạy OCR và hiển thị phụ đề gốc, tuyệt đối không tự ý nhảy sang Dịch.
+- Khi người dùng bấm nút "Dịch AI", hệ thống định tuyến qua Gemini API và trả về kết quả dịch trong vòng 2 – 3 giây.
+- Kết thúc phiên làm việc bằng thông báo chuẩn: `STOPPED_AFTER_TICKET`.
+# ==============================================================================

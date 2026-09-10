@@ -41,10 +41,16 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
   const inactiveRegions = (regions || []).filter((r) => r.region_id !== currentRegion.region_id);
 
   // Tính toán tọa độ pixel từ tỷ lệ phần trăm chuẩn hóa [0.0, 1.0]
-  const boxLeft = Math.round(currentRegion.x * containerWidth);
-  const boxTop = Math.round(currentRegion.y * containerHeight);
-  const boxWidth = Math.round(currentRegion.width * containerWidth);
-  const boxHeight = Math.round(currentRegion.height * containerHeight);
+  // Kẹp an toàn để bảo đảm tuyệt đối không bao giờ bị tràn ngoài viền hay W > 100%
+  const clampedX = Math.max(0.0, Math.min(0.97, currentRegion.x));
+  const clampedY = Math.max(0.0, Math.min(0.98, currentRegion.y));
+  const clampedW = Math.max(0.03, Math.min(1.0 - clampedX, currentRegion.width));
+  const clampedH = Math.max(0.02, Math.min(1.0 - clampedY, currentRegion.height));
+
+  const boxLeft = Math.round(clampedX * containerWidth);
+  const boxTop = Math.round(clampedY * containerHeight);
+  const boxWidth = Math.round(clampedW * containerWidth);
+  const boxHeight = Math.round(clampedH * containerHeight);
 
   // Bắt đầu sự kiện kéo thả hoặc co giãn kích thước
   const handleMouseDown = useCallback(
@@ -89,18 +95,17 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
       const minW = 0.03;
       const minH = 0.02;
 
-      // Cho phép kéo thả và mở rộng vùng quét ra ngoài khung hình (tối đa 30% ngoài viền)
-      // giúp bắt trọn vẹn phụ đề nằm sát mép đáy hoặc mép cạnh
-      const boundMinX = -0.30;
-      const boundMaxX = 1.30;
-      const boundMinY = -0.30;
-      const boundMaxY = 1.30;
+      // Giới hạn tuyệt đối trong phạm vi khung hình [0.0, 1.0]
+      const boundMinX = 0.0;
+      const boundMaxX = 1.0;
+      const boundMinY = 0.0;
+      const boundMaxY = 1.0;
 
       if (dragMode === 'move') {
         newX = Math.max(boundMinX, Math.min(boundMaxX - orig.width, orig.x + deltaX));
         newY = Math.max(boundMinY, Math.min(boundMaxY - orig.height, orig.y + deltaY));
       } else {
-        // Co giãn các góc và cạnh linh hoạt vượt ra ngoài biên
+        // Co giãn các góc và cạnh linh hoạt, luôn khống chế trong phạm vi [0.0, 1.0]
         if (dragMode.includes('w')) {
           const maxLeft = orig.x + orig.width - minW;
           newX = Math.max(boundMinX, Math.min(maxLeft, orig.x + deltaX));
@@ -118,6 +123,12 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
           newH = Math.max(minH, Math.min(boundMaxY - orig.y, orig.height + deltaY));
         }
       }
+
+      // Khống chế an toàn tuyệt đối chống tràn biên
+      newX = Math.max(0.0, Math.min(1.0 - minW, newX));
+      newY = Math.max(0.0, Math.min(1.0 - minH, newY));
+      newW = Math.max(minW, Math.min(1.0 - newX, newW));
+      newH = Math.max(minH, Math.min(1.0 - newY, newH));
 
       onChange({
         ...region,
@@ -269,9 +280,9 @@ export const RoiOverlay: React.FC<RoiOverlayProps> = ({
             </span>
           )}
           <span className="text-slate-600">|</span>
-          <span>Y: {Math.round(currentRegion.y * 100)}%</span>
-          <span>H: {Math.round(currentRegion.height * 100)}%</span>
-          <span>W: {Math.round(currentRegion.width * 100)}%</span>
+          <span>Y: {Math.round(clampedY * 100)}%</span>
+          <span>H: {Math.round(clampedH * 100)}%</span>
+          <span>W: {Math.round(clampedW * 100)}%</span>
         </div>
       )}
     </div>

@@ -78,6 +78,7 @@ interface RightInspectorPanelProps {
   cues?: SubtitleCueV1[];
   onRefreshCues?: () => void;
   isScanning?: boolean;
+  scanProgress?: number | null;
   statusMessage?: string | null;
   onStartScan?: () => void;
   onStopScan?: () => void;
@@ -96,6 +97,18 @@ interface RightInspectorPanelProps {
   onSubtitleFontFamilyChange?: (font: string) => void;
   subtitleTextColor?: string;
   onSubtitleTextColorChange?: (color: string) => void;
+  maskOpacity?: number;
+  onMaskOpacityChange?: (opacity: number) => void;
+  maskPadding?: number;
+  onMaskPaddingChange?: (padding: number) => void;
+  maskBorderRadius?: number;
+  onMaskBorderRadiusChange?: (radius: number) => void;
+  responsiveFontScale?: boolean;
+  onResponsiveFontScaleChange?: (enabled: boolean) => void;
+  subtitleStroke?: 'none' | 'soft' | 'stroke' | 'glow';
+  onSubtitleStrokeChange?: (stroke: 'none' | 'soft' | 'stroke' | 'glow') => void;
+  subtitleLineHeight?: number;
+  onSubtitleLineHeightChange?: (lh: number) => void;
   width?: number;
 }
 
@@ -112,10 +125,22 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onMaskStyleChange,
   blurStrength = 20,
   onBlurStrengthChange,
+  maskOpacity = 1.0,
+  onMaskOpacityChange,
+  maskPadding = 0,
+  onMaskPaddingChange,
+  maskBorderRadius = 0,
+  onMaskBorderRadiusChange,
   showSubtitleOverlay,
   onToggleSubtitleOverlay,
   subtitlePlacement = 'roi',
   onSubtitlePlacementChange,
+  responsiveFontScale = false,
+  onResponsiveFontScaleChange,
+  subtitleStroke = 'soft',
+  onSubtitleStrokeChange,
+  subtitleLineHeight = 1.35,
+  onSubtitleLineHeightChange,
   aspectRatio: _aspectRatio,
   onAspectRatioChange: _onAspectRatioChange,
   fitMode: _fitMode = 'contain',
@@ -135,6 +160,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   cues = [],
   onRefreshCues,
   isScanning = false,
+  scanProgress,
   statusMessage = null,
   onStartScan,
   onStopScan,
@@ -162,13 +188,13 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   // Mẫu vị trí gợi ý động (Position Templates CRUD)
   const [positionTemplates, setPositionTemplates] = useState<PositionTemplate[]>(() => {
     const DEFAULT_POSITION_TEMPLATES: PositionTemplate[] = [
-      { id: 'one_line', name: '1 Dòng Đáy', y: 0.82, height: 0.12, width: 0.84, x: 0.08, is_builtin: true },
-      { id: 'two_lines', name: '2 Dòng Đáy', y: 0.78, height: 0.18, width: 0.88, x: 0.06, is_builtin: true },
-      { id: 'tiktok_portrait', name: 'Dọc TikTok', y: 0.70, height: 0.24, width: 0.90, x: 0.05, is_builtin: true },
-      { id: 'top_header', name: 'Tiêu Đề Trên', y: 0.06, height: 0.12, width: 0.86, x: 0.07, is_builtin: true },
+      { id: 'one_line', name: '1 Dòng Sub', y: 0.61, height: 0.08, width: 0.94, x: 0.03, is_builtin: true },
+      { id: 'two_lines', name: '2 Dòng Sub', y: 0.59, height: 0.13, width: 0.94, x: 0.03, is_builtin: true },
+      { id: 'three_lines', name: '3 Dòng Sub', y: 0.57, height: 0.17, width: 0.94, x: 0.03, is_builtin: true },
+      { id: 'top_header', name: 'Tiêu Đề Trên', y: 0.06, height: 0.08, width: 0.94, x: 0.03, is_builtin: true },
     ];
     try {
-      const raw = localStorage.getItem('sub_studio_pos_templates_v1');
+      const raw = localStorage.getItem('sub_studio_pos_templates_v2');
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -185,7 +211,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   const savePosTemplates = (templates: PositionTemplate[]) => {
     setPositionTemplates(templates);
     try {
-      localStorage.setItem('sub_studio_pos_templates_v1', JSON.stringify(templates));
+      localStorage.setItem('sub_studio_pos_templates_v2', JSON.stringify(templates));
     } catch {}
   };
 
@@ -768,13 +794,13 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 <div className="space-y-1">
                   <div className="flex justify-between text-[11px]">
                     <span className="text-slate-400">Chiều Rộng (W):</span>
-                    <span className="text-indigo-400 font-mono font-bold">{Math.round(region.width * 100)}%</span>
+                    <span className="text-indigo-400 font-mono font-bold">{Math.min(100, Math.round(region.width * 100))}%</span>
                   </div>
                   <input
                     type="range"
                     min="40"
                     max="100"
-                    value={Math.round(region.width * 100)}
+                    value={Math.min(100, Math.round(region.width * 100))}
                     onChange={(e) => {
                       const w = parseInt(e.target.value) / 100;
                       const x = Math.max(0, (1.0 - w) / 2);
@@ -787,11 +813,11 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 {/* Nút Căn giữa chuẩn */}
                 <button
                   type="button"
-                  onClick={() => onUpdateRegion({ ...region, x: 0.06, y: 0.81, width: 0.88, height: 0.15 })}
+                  onClick={() => onUpdateRegion({ ...region, x: 0.03, y: 0.61, width: 0.94, height: 0.08 })}
                   className="w-full py-2 bg-slate-950 hover:bg-slate-800 text-indigo-300 hover:text-white rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1.5 border border-slate-800 cursor-pointer"
                 >
                   <Crosshair className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>⌖ Căn giữa chuẩn phụ đề đáy</span>
+                  <span>⌖ Căn giữa chuẩn full ngang (W: 94%)</span>
                 </button>
               </div>
             </div>
@@ -803,7 +829,11 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   <div className="flex-1 py-2 px-2.5 bg-indigo-950/70 border border-indigo-700/60 text-indigo-300 rounded-xl text-xs font-semibold flex flex-col items-center justify-center gap-0.5 shadow-inner min-w-0">
                     <div className="flex items-center gap-1.5">
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
-                      <span>Đang Quét Phụ Đề...</span>
+                      <span>
+                        {scanProgress !== null && scanProgress !== undefined
+                          ? `Đang Quét (${Math.round(scanProgress)}%)...`
+                          : 'Đang Quét Phụ Đề...'}
+                      </span>
                     </div>
                     {statusMessage && (
                       <span className="text-[10px] text-indigo-300/80 font-mono truncate max-w-full font-normal">
@@ -896,6 +926,66 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-amber-500"
                 />
               </div>
+
+              {/* Độ che phủ / Độ mờ đục (Mask Opacity) */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-400">Độ che phủ (Opacity):</span>
+                  <span className="text-amber-400 font-mono font-bold">{Math.round(maskOpacity * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  step="5"
+                  value={Math.round(maskOpacity * 100)}
+                  onChange={(e) => onMaskOpacityChange && onMaskOpacityChange(parseInt(e.target.value, 10) / 100)}
+                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-amber-500"
+                />
+              </div>
+
+              {/* Mở rộng viền che (Mask Padding) */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-400">Mở rộng lề khung che (Padding):</span>
+                  <span className="text-amber-400 font-mono font-bold">{maskPadding > 0 ? `+${maskPadding}` : maskPadding}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="-4"
+                  max="24"
+                  step="1"
+                  value={maskPadding}
+                  onChange={(e) => onMaskPaddingChange && onMaskPaddingChange(parseInt(e.target.value, 10))}
+                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-amber-500"
+                />
+              </div>
+
+              {/* Bo góc khung che (Border Radius) */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-slate-400 block font-medium">Bo góc khung che:</label>
+                <div className="grid grid-cols-4 gap-1">
+                  {[
+                    { val: 0, label: 'Vuông 0' },
+                    { val: 4, label: 'Nhẹ 4px' },
+                    { val: 8, label: 'Vừa 8px' },
+                    { val: 16, label: 'Tròn 16px' },
+                  ].map((rad) => (
+                    <button
+                      key={rad.val}
+                      type="button"
+                      onClick={() => onMaskBorderRadiusChange && onMaskBorderRadiusChange(rad.val)}
+                      className={`py-1 rounded text-[10px] font-semibold transition cursor-pointer active:scale-95 ${
+                        maskBorderRadius === rad.val
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-sm'
+                          : 'bg-slate-950 hover:bg-slate-850 text-slate-400 border border-slate-800'
+                      }`}
+                    >
+                      {rad.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {/* Hiển thị & Định vị Phụ đề dịch */}
@@ -948,7 +1038,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-3">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-slate-200">Kiểu Dáng & Cỡ Chữ</span>
-                <span className="text-[10px] text-indigo-400 font-mono font-bold">{subtitleFontSize || 16}px</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-indigo-400 font-mono font-bold">{subtitleFontSize || 16}px</span>
+                </div>
               </div>
 
               {/* Phông chữ */}
@@ -964,6 +1056,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                     <option value="Roboto, sans-serif">Roboto (Google Font chuẩn)</option>
                     <option value="'Be Vietnam Pro', sans-serif">Be Vietnam Pro (Việt hóa đẹp)</option>
                     <option value="Montserrat, sans-serif">Montserrat (Đậm & Điện ảnh)</option>
+                    <option value="Oswald, sans-serif">Oswald (Tiêu đề ấn tượng)</option>
+                    <option value="'Playfair Display', serif">Playfair Display (Cổ điển sang trọng)</option>
+                    <option value="'Noto Sans', sans-serif">Noto Sans (Đa ngôn ngữ rõ nét)</option>
                     <option value="Arial, sans-serif">Arial (Không chân cơ bản)</option>
                     <option value="'Times New Roman', serif">Times New Roman (Cổ điển có chân)</option>
                     <option value="'Courier New', monospace">Courier New (Đơn cách Monospace)</option>
@@ -1004,6 +1099,68 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   value={subtitleFontSize || 16}
                   data-testid="subtitle-font-size-slider"
                   onChange={(e) => onSubtitleFontSizeChange && onSubtitleFontSizeChange(parseInt(e.target.value, 10))}
+                  className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+
+              {/* Font chữ tỉ lệ theo khung hình (Responsive Font Scale) */}
+              <div className="flex items-center justify-between p-2 bg-slate-950 rounded-lg border border-slate-800">
+                <div>
+                  <div className="text-[11px] font-medium text-slate-200">Font chữ tỉ lệ theo khung nhìn</div>
+                  <div className="text-[10px] text-slate-400">Tự co giãn chữ khi phóng to hoặc xem toàn màn hình</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onResponsiveFontScaleChange && onResponsiveFontScaleChange(!responsiveFontScale)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${
+                    responsiveFontScale
+                      ? 'bg-cyan-600 text-white'
+                      : 'bg-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {responsiveFontScale ? 'BẬT' : 'TẮT'}
+                </button>
+              </div>
+
+              {/* Kiểu viền & Đổ bóng chữ (Text Stroke / Shadow) */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-slate-400 block font-medium">Viền & Đổ bóng chữ:</label>
+                <div className="grid grid-cols-4 gap-1">
+                  {[
+                    { id: 'none', label: 'Không viền' },
+                    { id: 'soft', label: 'Bóng nhẹ' },
+                    { id: 'stroke', label: 'Viền đen' },
+                    { id: 'glow', label: 'Phát sáng' },
+                  ].map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => onSubtitleStrokeChange && onSubtitleStrokeChange(st.id as any)}
+                      className={`py-1 rounded text-[10px] font-semibold transition cursor-pointer active:scale-95 ${
+                        subtitleStroke === st.id
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-slate-950 hover:bg-slate-850 text-slate-400 border border-slate-800'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Khoảng cách dòng (Line Height) */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-400">Khoảng cách dòng (Line Height):</span>
+                  <span className="text-indigo-400 font-mono font-bold">{subtitleLineHeight?.toFixed(2) || '1.35'}x</span>
+                </div>
+                <input
+                  type="range"
+                  min="1.1"
+                  max="1.8"
+                  step="0.05"
+                  value={subtitleLineHeight || 1.35}
+                  onChange={(e) => onSubtitleLineHeightChange && onSubtitleLineHeightChange(parseFloat(e.target.value))}
                   className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
                 />
               </div>
@@ -1091,6 +1248,57 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             </div>
 
 
+
+            {/* 1. Thẻ Quét Phụ Đề Tự Động */}
+            <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-slate-200">
+                  <Tv className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Quét Phụ Đề Tự Động</span>
+                </div>
+                {scanProgress !== null && scanProgress !== undefined && isScanning && (
+                  <span className="font-mono text-[10px] font-bold text-cyan-400 bg-indigo-950 px-2 py-0.5 rounded border border-indigo-700/60">
+                    {Math.round(scanProgress)}%
+                  </span>
+                )}
+              </div>
+
+              {isScanning ? (
+                <div className="space-y-2">
+                  <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-indigo-500 to-cyan-400 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(0, Math.min(100, scanProgress || 0))}%` }}
+                    />
+                  </div>
+                  <div className="text-[10px] font-mono text-indigo-300 truncate">
+                    {statusMessage || 'Đang thực thi nhận diện OCR...'}
+                  </div>
+                  {onStopScan && (
+                    <button
+                      type="button"
+                      onClick={onStopScan}
+                      className="w-full py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow"
+                    >
+                      <Square className="w-3 h-3 fill-white" />
+                      <span>Dừng Quét Phụ Đề</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                onStartScan && (
+                  <button
+                    type="button"
+                    onClick={onStartScan}
+                    disabled={!activeProject}
+                    className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold flex items-center justify-center gap-1.5 transition shadow disabled:opacity-50 cursor-pointer"
+                  >
+                    <Tv className="w-3.5 h-3.5" />
+                    <span>{cues.length > 0 ? 'Quét Lại Phụ Đề' : 'Bắt Đầu Quét Sub'}</span>
+                  </button>
+                )
+              )}
+            </div>
 
             {/* Nút Dịch AI Toàn Bộ */}
             <div className="p-3 bg-indigo-950/40 border border-indigo-800/40 rounded-xl space-y-2">

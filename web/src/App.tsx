@@ -51,6 +51,12 @@ interface StoredStudioState {
   subtitleFontSize?: number;
   subtitleFontFamily?: string;
   subtitleTextColor?: string;
+  maskOpacity?: number;
+  maskPadding?: number;
+  maskBorderRadius?: number;
+  responsiveFontScale?: boolean;
+  subtitleStroke?: 'none' | 'soft' | 'stroke' | 'glow';
+  subtitleLineHeight?: number;
   viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin';
   downloaderTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings';
   settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render';
@@ -122,30 +128,41 @@ export const App: React.FC = () => {
     }
     return [{
       region_id: 'roi-main',
-      x: 0.05,
-      y: 0.70,
-      width: 0.90,
-      height: 0.26,
+      x: 0.03,
+      y: 0.61,
+      width: 0.94,
+      height: 0.08,
     }];
   });
   const [activeRegionId, setActiveRegionId] = useState<string>(() => savedState?.activeRegionId || 'roi-main');
 
   const activeRoiRegion = regions.find((r) => r.region_id === activeRegionId) || regions[0] || {
     region_id: 'roi-main',
-    x: 0.05,
-    y: 0.70,
-    width: 0.90,
-    height: 0.26,
+    x: 0.03,
+    y: 0.61,
+    width: 0.94,
+    height: 0.08,
   };
 
   // Thao tác với Đa Vùng Quét OCR
   const handleUpdateRegion = useCallback((updated: RegionTrackV1) => {
+    const clampedX = Math.max(0.0, Math.min(0.97, updated.x));
+    const clampedY = Math.max(0.0, Math.min(0.98, updated.y));
+    const clampedW = Math.max(0.03, Math.min(1.0 - clampedX, updated.width));
+    const clampedH = Math.max(0.02, Math.min(1.0 - clampedY, updated.height));
+    const safeUpdated: RegionTrackV1 = {
+      ...updated,
+      x: clampedX,
+      y: clampedY,
+      width: clampedW,
+      height: clampedH,
+    };
     setRegions((prev) => {
-      const exists = prev.some((r) => r.region_id === updated.region_id);
+      const exists = prev.some((r) => r.region_id === safeUpdated.region_id);
       if (exists) {
-        return prev.map((r) => (r.region_id === updated.region_id ? updated : r));
+        return prev.map((r) => (r.region_id === safeUpdated.region_id ? safeUpdated : r));
       }
-      return [...prev, updated];
+      return [...prev, safeUpdated];
     });
   }, []);
 
@@ -191,6 +208,12 @@ export const App: React.FC = () => {
   const [subtitleFontSize, setSubtitleFontSize] = useState<number>(() => (typeof savedState?.subtitleFontSize === 'number' ? savedState.subtitleFontSize : 16));
   const [subtitleFontFamily, setSubtitleFontFamily] = useState<string>(() => savedState?.subtitleFontFamily || 'Inter, sans-serif');
   const [subtitleTextColor, setSubtitleTextColor] = useState<string>(() => savedState?.subtitleTextColor || '#fde047');
+  const [maskOpacity, setMaskOpacity] = useState<number>(() => (typeof savedState?.maskOpacity === 'number' ? savedState.maskOpacity : 1.0));
+  const [maskPadding, setMaskPadding] = useState<number>(() => (typeof savedState?.maskPadding === 'number' ? savedState.maskPadding : 0));
+  const [maskBorderRadius, setMaskBorderRadius] = useState<number>(() => (typeof savedState?.maskBorderRadius === 'number' ? savedState.maskBorderRadius : 0));
+  const [responsiveFontScale, setResponsiveFontScale] = useState<boolean>(() => (typeof savedState?.responsiveFontScale === 'boolean' ? savedState.responsiveFontScale : false));
+  const [subtitleStroke, setSubtitleStroke] = useState<'none' | 'soft' | 'stroke' | 'glow'>(() => (savedState?.subtitleStroke || 'soft'));
+  const [subtitleLineHeight, setSubtitleLineHeight] = useState<number>(() => (typeof savedState?.subtitleLineHeight === 'number' ? savedState.subtitleLineHeight : 1.25));
 
   // Trạng thái phát video và thanh timeline
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -241,8 +264,28 @@ export const App: React.FC = () => {
   const [wsStatus, setWsStatus] = useState<WsConnectionStatus>('disconnected');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [scanProgress, setScanProgress] = useState<number | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  // Lắng nghe tiến trình phần trăm % từ Active Tasks để đồng bộ tức thời lên UI
+  useEffect(() => {
+    const unsub = appLogger.subscribeActiveTasks((tasks) => {
+      if (!activeProject) {
+        setScanProgress(null);
+        return;
+      }
+      const scanTask = tasks.find((t) => t.taskKey === `scan-${activeProject.project_id}` || t.taskKey.startsWith('scan-'));
+      if (scanTask && scanTask.progress !== undefined) {
+        setScanProgress(scanTask.progress);
+      } else if (!isScanning) {
+        setScanProgress(null);
+      }
+    });
+    return () => {
+      unsub();
+    };
+  }, [activeProject, isScanning]);
 
   // Video Proxy Quality state (original / 720p / 480p) lưu trữ trong localStorage để chống lag
   const [videoQuality, setVideoQuality] = useState<'original' | '720p' | '480p'>(() => {
@@ -448,6 +491,12 @@ export const App: React.FC = () => {
     setFitMode('contain');
     setMaskStyle('blur');
     setBlurStrength(15);
+    setMaskOpacity(1.0);
+    setMaskPadding(0);
+    setMaskBorderRadius(0);
+    setResponsiveFontScale(false);
+    setSubtitleStroke('soft');
+    setSubtitleLineHeight(1.25);
     setPreviewMask(false);
     setShowSubtitleOverlay(true);
     const defaultRoi: RegionTrackV1 = {
@@ -885,10 +934,10 @@ export const App: React.FC = () => {
           height: defPreset.roi.height,
         } : {
           region_id: 'roi-main',
-          x: 0.05,
-          y: 0.70,
-          width: 0.90,
-          height: 0.26,
+          x: 0.03,
+          y: 0.61,
+          width: 0.94,
+          height: 0.08,
         };
         setRegions([initRoi]);
         setActiveRegionId('roi-main');
@@ -1042,6 +1091,12 @@ export const App: React.FC = () => {
       subtitleFontSize,
       subtitleFontFamily,
       subtitleTextColor,
+      maskOpacity,
+      maskPadding,
+      maskBorderRadius,
+      responsiveFontScale,
+      subtitleStroke,
+      subtitleLineHeight,
       viewMode,
       downloaderTab,
       settingsTab,
@@ -1097,6 +1152,15 @@ export const App: React.FC = () => {
     activePresetId,
     selectedDramaTitle,
     activeProject,
+    subtitleFontSize,
+    subtitleFontFamily,
+    subtitleTextColor,
+    maskOpacity,
+    maskPadding,
+    maskBorderRadius,
+    responsiveFontScale,
+    subtitleStroke,
+    subtitleLineHeight,
     viewMode,
     downloaderTab,
     settingsTab,
@@ -1184,6 +1248,9 @@ export const App: React.FC = () => {
           if (activeStage?.metrics?.label) {
             setStatusMessage(activeStage.metrics.label);
           }
+          if (activeStage?.progress !== undefined) {
+            setScanProgress(Math.round(activeStage.progress * 100));
+          }
 
           const scanKey = `scan-${activeProject.project_id}`;
           if (runningStage) {
@@ -1201,6 +1268,7 @@ export const App: React.FC = () => {
 
           if (isPipelineTerminal || hasError || hasCancel) {
             setIsScanning(false);
+            setScanProgress(null);
             if (pipelineStage && pipelineStage.status === 'completed') {
               const successMsg = pipelineStage.metrics?.label || 'Đã hoàn tất quét phụ đề!';
               setStatusMessage(successMsg);
@@ -1252,9 +1320,21 @@ export const App: React.FC = () => {
       appLogger.info('Đang phân tích khung hình để bắt dính vị trí chữ...', 'ROI');
       const res = await apiClient.autoDetectRoi(activeProject.project_id, currentTime);
       if (res.region) {
-        handleUpdateRegion(res.region);
-        setStatusMessage(`Đã bắt dính vùng chữ thành công! (${res.detected_count} vùng)`);
-        appLogger.success(`Đã bắt dính vùng chữ thành công! (${res.detected_count} vùng)`, 'ROI');
+        const clampedW = Math.max(0.03, Math.min(1.0 - res.region.x, res.region.width));
+        const newRegion: RegionTrackV1 = {
+          region_id: res.region.region_id || 'roi-main',
+          x: res.region.x,
+          y: res.region.y,
+          width: clampedW,
+          height: res.region.height,
+          mask_enabled: res.region.mask_enabled !== false,
+        };
+        setRegions([newRegion]);
+        setActiveRegionId(newRegion.region_id);
+        const lineDesc = (res as any).line_description || '1 dòng sub';
+        const msg = `Đã bắt dính phụ đề: ${lineDesc} (Full ngang, H: ${Math.round(newRegion.height * 100)}%)`;
+        setStatusMessage(msg);
+        appLogger.success(msg, 'ROI');
       } else {
         appLogger.warn('Không phát hiện vùng chữ rõ ràng trên khung hình', 'ROI');
       }
@@ -1388,6 +1468,16 @@ export const App: React.FC = () => {
     }
   }, [activeProject, cues.length, loadCues]);
 
+  // Tự động ẩn thông báo trạng thái sau 4 giây khi tác vụ hoàn thành (không bị treo đè nút)
+  useEffect(() => {
+    if (!statusMessage) return;
+    if (isScanning || isTranslatingAll || isDubbingAll) return;
+    const timer = setTimeout(() => {
+      setStatusMessage(null);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [statusMessage, isScanning, isTranslatingAll, isDubbingAll]);
+
   const handleResetTransform = () => {
     setVideoPosition({ x: 0, y: 0 });
     setIsFlippedH(false);
@@ -1501,6 +1591,7 @@ export const App: React.FC = () => {
             loggerCount={loggerCount}
             onToggleLogger={() => appLogger.toggle()}
             isScanning={isScanning}
+            scanProgress={scanProgress}
             hasVideo={Boolean(videoUrl)}
             onStartScan={handleStartScan}
             onStopScan={handleStopScan}
@@ -1557,6 +1648,7 @@ export const App: React.FC = () => {
                 );
               }}
               isScanning={isScanning}
+              scanProgress={scanProgress}
               statusMessage={statusMessage}
               width={leftSidebarWidth}
             />
@@ -1628,6 +1720,12 @@ export const App: React.FC = () => {
               subtitleFontSize={subtitleFontSize}
               subtitleFontFamily={subtitleFontFamily}
               subtitleTextColor={subtitleTextColor}
+              maskOpacity={maskOpacity}
+              maskPadding={maskPadding}
+              maskBorderRadius={maskBorderRadius}
+              responsiveFontScale={responsiveFontScale}
+              subtitleStroke={subtitleStroke}
+              subtitleLineHeight={subtitleLineHeight}
             />
 
             {/* Splitter Co Giãn Phải */}
@@ -1656,6 +1754,18 @@ export const App: React.FC = () => {
               onSubtitleFontFamilyChange={setSubtitleFontFamily}
               subtitleTextColor={subtitleTextColor}
               onSubtitleTextColorChange={setSubtitleTextColor}
+              maskOpacity={maskOpacity}
+              onMaskOpacityChange={setMaskOpacity}
+              maskPadding={maskPadding}
+              onMaskPaddingChange={setMaskPadding}
+              maskBorderRadius={maskBorderRadius}
+              onMaskBorderRadiusChange={setMaskBorderRadius}
+              responsiveFontScale={responsiveFontScale}
+              onResponsiveFontScaleChange={setResponsiveFontScale}
+              subtitleStroke={subtitleStroke}
+              onSubtitleStrokeChange={(val) => setSubtitleStroke(val as any)}
+              subtitleLineHeight={subtitleLineHeight}
+              onSubtitleLineHeightChange={setSubtitleLineHeight}
               sourceLang={sourceLang}
               targetLang={targetLang}
               onLanguageChange={(s, t) => {
@@ -1720,6 +1830,7 @@ export const App: React.FC = () => {
                 );
               }}
               isScanning={isScanning}
+              scanProgress={scanProgress}
               statusMessage={statusMessage}
               onStartScan={handleStartScan}
               onStopScan={handleStopScan}
@@ -1773,15 +1884,19 @@ export const App: React.FC = () => {
             )}
             isAudioMuted={isAudioMuted}
             onToggleAudioMute={() => setIsAudioMuted((p) => !p)}
+            onSetAudioMuted={(muted) => setIsAudioMuted(muted)}
             isVideoVisible={isVideoVisible}
             onToggleVideoVisible={() => setIsVideoVisible((p) => !p)}
             isSubVisible={showSubtitleOverlay}
             onToggleSubVisible={() => setShowSubtitleOverlay((p) => !p)}
             isScanning={isScanning}
+            scanProgress={scanProgress}
             statusMessage={statusMessage}
+            onDismissStatus={() => setStatusMessage(null)}
             onStopScan={handleStopScan}
             isTranslating={isTranslatingAll}
             isDubbing={isDubbingAll}
+            dubbingMode={activeProject?.custom_pipeline_settings?.dubbing?.mode === 'multi' ? 'multi' : 'single'}
           />
         </>
       )}

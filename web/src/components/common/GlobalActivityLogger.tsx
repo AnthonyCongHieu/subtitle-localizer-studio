@@ -21,6 +21,7 @@ export interface LogOptions {
   progress?: number; // 0..100
   duration?: number; // ms
   details?: string;
+  saveToHistory?: boolean;
 }
 
 export interface ActivityLogItem {
@@ -255,19 +256,31 @@ class AppLoggerService {
       }
     }
 
-    // Ghi vào danh sách Log
-    this.logs.unshift(item);
-    if (this.logs.length > 300) this.logs.pop();
+    // Chống spam: Không ghi tiến trình % hoặc các update định kỳ vào lịch sử nhật ký (nhật ký chỉ ghi mốc sự kiện)
+    const isProgressTick =
+      options.saveToHistory === false ||
+      (Boolean(options.taskKey) && (options.progress !== undefined || /\b\d{1,3}%\b/.test(message)));
 
-    // Phát sự kiện cho listeners
-    this.listeners.forEach((fn) => {
-      try {
-        fn(item, showToast);
-      } catch (e) {
-        console.error('Lỗi listener logger:', e);
-      }
-    });
-    this.notifyStateChange();
+    const isDuplicate =
+      this.logs.length > 0 &&
+      this.logs[0].message === message &&
+      this.logs[0].level === level &&
+      timestamp - this.logs[0].timestamp < 3000;
+
+    if (!isProgressTick && !isDuplicate) {
+      this.logs.unshift(item);
+      if (this.logs.length > 300) this.logs.pop();
+
+      // Phát sự kiện cho listeners
+      this.listeners.forEach((fn) => {
+        try {
+          fn(item, showToast);
+        } catch (e) {
+          console.error('Lỗi listener logger:', e);
+        }
+      });
+      this.notifyStateChange();
+    }
 
     // Xử lý Toast nổi
     if (showToast) {
@@ -412,12 +425,25 @@ class AppLoggerService {
     const message = updates.message || existing?.message || 'Đang xử lý...';
     const level = updates.level || 'loading';
 
-    this.log(message, level, {
+    // Cập nhật Tác Vụ Đang Xử Lý (Active Tasks) hiển thị thanh tiến trình & % ở ngoài nhật ký
+    this.activeTasks.set(taskKey, {
       taskKey,
+      message,
       category,
       progress: updates.progress,
+      startTime: existing?.startTime || Date.now(),
+    });
+    this.notifyActiveTasks();
+
+    // Cập nhật thẻ Toast nổi tương ứng nếu có
+    this.pushToast({
+      taskKey,
+      type: level,
+      message,
+      category,
+      progress: updates.progress,
+      duration: 0,
       details: updates.details,
-      showToast: true,
     });
   }
 
@@ -430,15 +456,29 @@ class AppLoggerService {
     const existing = this.activeTasks.get(taskKey);
     const cat = category || existing?.category || 'Hoàn tất';
     const normLevel: LogLevel = level === 'warn' ? 'warning' : level;
+
+    // Xóa khỏi danh sách Active Tasks
+    if (this.activeTasks.has(taskKey)) {
+      this.activeTasks.delete(taskKey);
+      this.notifyActiveTasks();
+    }
+    this.dismiss(taskKey);
+
+    // Ghi sự kiện mốc hoàn thành vào nhật ký
     this.log(message, normLevel, {
       taskKey,
       category: cat,
       showToast: true,
       duration: normLevel === 'error' ? 5000 : 3200,
+      saveToHistory: true,
     });
   }
 
   dismiss(toastIdOrTaskKey: string) {
+    if (this.activeTasks.has(toastIdOrTaskKey)) {
+      this.activeTasks.delete(toastIdOrTaskKey);
+      this.notifyActiveTasks();
+    }
     this.toasts = this.toasts.filter(
       (t) => t.id !== toastIdOrTaskKey && t.taskKey !== toastIdOrTaskKey
     );
@@ -752,9 +792,16 @@ export const GlobalActivityLogger: React.FC = () => {
                           </span>
                           <span className="truncate font-medium">{t.message}</span>
                         </div>
-                        <span className="text-[10px] text-neutral-400 font-mono shrink-0">
-                          {Math.round((Date.now() - t.startTime) / 1000)}s
-                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {t.progress !== undefined && (
+                            <span className="px-1.5 py-0.5 rounded bg-cyan-950/80 text-[11px] text-cyan-400 font-mono font-bold border border-cyan-800/60 shadow-sm">
+                              {t.progress}%
+                            </span>
+                          )}
+                          <span className="text-[10px] text-neutral-400 font-mono">
+                            {Math.round((Date.now() - t.startTime) / 1000)}s
+                          </span>
+                        </div>
                       </div>
 
                       {t.progress !== undefined && (

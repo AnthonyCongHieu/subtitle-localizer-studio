@@ -27,7 +27,7 @@ class _DetectorWithMetadata(_Detector):
         return [[[[0, 0], [w, 0], [w, h], [0, h]], "ignored", 0.99]], None
 
 
-def test_settings_accept_breakthrough_fields_without_changing_legacy_defaults():
+def test_settings_accept_breakthrough_fields_with_peak_performance_defaults():
     settings = ExtractionSettings(
         engine="ppocrv5",
         primary_backend="ppocrv5",
@@ -37,7 +37,12 @@ def test_settings_accept_breakthrough_fields_without_changing_legacy_defaults():
     )
     assert settings.engine == "ppocrv5"
     assert settings.recognition_batch_size == 32
-    assert ExtractionSettings().engine == "rapidocr"
+    assert ExtractionSettings().engine == "ppocrv5"
+    assert ExtractionSettings().primary_backend == "ppocrv5"
+    assert ExtractionSettings().recognition_batch_size == 16
+    assert ExtractionSettings().enable_nvdec_hwaccel is True
+    assert ExtractionSettings().enable_anti_noise_funnel is True
+    assert ExtractionSettings().enable_stroke_dhash_cache is True
 
 
 def test_ppocr_bridge_extracts_tight_detector_boxes_and_preserves_pts():

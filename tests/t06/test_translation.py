@@ -121,17 +121,79 @@ class TranslationRuntimeTest(unittest.TestCase):
     def test_extraction_and_pipeline_settings_defaults_api_priority(self) -> None:
         from subtitle_localizer.service.pipeline_settings import ExtractionSettings, TranslationSettings, GlobalPipelineSettings
         ext = ExtractionSettings()
-        self.assertEqual(ext.mode, "api")
+        self.assertEqual(ext.mode, "local")
+        self.assertEqual(ext.engine, "ppocrv5")
+        self.assertEqual(ext.primary_backend, "ppocrv5")
+        self.assertEqual(ext.recognition_batch_size, 16)
+        self.assertTrue(ext.enable_nvdec_hwaccel)
+        self.assertTrue(ext.enable_anti_noise_funnel)
+        self.assertTrue(ext.enable_stroke_dhash_cache)
         self.assertTrue(ext.auto_fallback)
 
         trans = TranslationSettings()
-        self.assertEqual(trans.provider, "local")
-        self.assertEqual(trans.gemini_model, "gemini-3.8-flash")
-        self.assertFalse(trans.auto_fallback)
+        self.assertEqual(trans.provider, "gemini")
+        self.assertEqual(trans.gemini_model, "gemini-2.5-flash")
+        self.assertTrue(trans.auto_fallback)
+        self.assertEqual(trans.batch_size, 35)
+
+        retired_trans = TranslationSettings(gemini_model="gemini-3.8-flash")
+        self.assertEqual(retired_trans.gemini_model, "gemini-2.5-flash")
 
         global_s = GlobalPipelineSettings()
-        self.assertEqual(global_s.ocr.mode, "api")
-        self.assertEqual(global_s.translation.provider, "local")
+        self.assertEqual(global_s.ocr.mode, "local")
+        self.assertEqual(global_s.translation.provider, "gemini")
+
+    def test_apply_model_response_1based_and_0based_indexing(self) -> None:
+        from subtitle_localizer.translation.real import RealTranslationProvider
+        provider = RealTranslationProvider()
+        cues = [
+            SubtitleCueV1(cue_id="c1", start_pts=0.0, end_pts=1.0, source_text="你好"),
+            SubtitleCueV1(cue_id="c2", start_pts=1.0, end_pts=2.0, source_text="再见"),
+        ]
+        # Test 1-based model response: [1] [Nam] Xin chào, [2] [Nữ] Tạm biệt
+        resp_1based = "[1] [Nam] Xin chào\n[2] [Nữ] Tạm biệt"
+        updated = provider._apply_model_response(cues, [0, 1], resp_1based)
+        self.assertEqual(updated, 2)
+        self.assertEqual(cues[0].translated_text, "Xin chào")
+        self.assertEqual(cues[0].style.get("speaker"), "male")
+        self.assertEqual(cues[1].translated_text, "Tạm biệt")
+        self.assertEqual(cues[1].style.get("speaker"), "female")
+
+        # Test 0-based model response: [0] [Nữ] Chào bạn, [1] [Nam] Hẹn gặp lại
+        resp_0based = "[0] [Nữ] Chào bạn\n[1] [Nam] Hẹn gặp lại"
+        updated2 = provider._apply_model_response(cues, [0, 1], resp_0based)
+        self.assertEqual(updated2, 2)
+        self.assertEqual(cues[0].translated_text, "Chào bạn")
+        self.assertEqual(cues[0].style.get("speaker"), "female")
+        self.assertEqual(cues[1].translated_text, "Hẹn gặp lại")
+        self.assertEqual(cues[1].style.get("speaker"), "male")
+
+    def test_strips_narrator_role_prefix_from_translated_text(self) -> None:
+        from subtitle_localizer.translation.real import RealTranslationProvider
+
+        provider = RealTranslationProvider()
+        cues = [
+            SubtitleCueV1(cue_id="c4", start_pts=9.94, end_pts=11.48, source_text="有人跟大学"),
+            SubtitleCueV1(
+                cue_id="c5",
+                start_pts=12.62,
+                end_pts=15.78,
+                source_text="影视君男人是从业多年的影视审核员",
+            ),
+        ]
+        response = (
+            "[0] (Tiếng người dẫn chuyện) Có người học theo người khác\n"
+            "[1] [Nam] (Tiếng người dẫn chuyện) Anh ấy đã làm việc trong ngành kiểm duyệt phim ảnh nhiều năm"
+        )
+        updated = provider._apply_model_response(cues, [0, 1], response)
+        self.assertEqual(updated, 2)
+        self.assertEqual(cues[0].translated_text, "Có người học theo người khác")
+        self.assertNotIn("dẫn chuyện", cues[0].translated_text.lower())
+        self.assertEqual(
+            cues[1].translated_text,
+            "Anh ấy đã làm việc trong ngành kiểm duyệt phim ảnh nhiều năm",
+        )
+        self.assertEqual(cues[1].style.get("speaker"), "male")
 
 
 if __name__ == "__main__":

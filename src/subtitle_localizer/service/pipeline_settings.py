@@ -15,10 +15,10 @@ DEFAULT_SETTINGS_FILE = Path("pipeline_settings.json")
 
 
 class ExtractionSettings(BaseModel):
-    # Kiến trúc 2 Mode (Mặc định: Ưu tiên API xịn nhất, tự động fallback về Local khi lỗi):
+    # Kiến trúc 2 Mode (Mặc định: Local OCR tốc độ cao, có thể bật Cloud API theo từng project):
     # - "api": Chạy qua đám mây Cloud AI (CapCut ByteDance ASR hoặc Gemini Multimodal VLM)
     # - "local": Chạy hoàn toàn trên máy cục bộ (Offline qua GPU RTX 3050 & CPU)
-    mode: str = "api"  # "api" | "local" (Mặc định toàn hệ thống: Ưu tiên API)
+    mode: str = "local"  # "api" | "local" (Mặc định toàn hệ thống: Local OCR)
 
     # Tự động cứu hộ chuyển về Local Hybrid khi Cloud API gặp lỗi:
     auto_fallback: bool = True
@@ -43,12 +43,12 @@ class ExtractionSettings(BaseModel):
     # RapidOCR remains the safe default because it includes DBNet detection;
     # PP-OCRv5 is recognition-only and is enabled explicitly after detector
     # boxes are available.
-    engine: str = "rapidocr"  # "rapidocr" | "ppocrv5" | "paddle"
-    primary_backend: str = "rapidocr"  # "rapidocr" | "ppocrv5" | "paddle" | "auto"
+    engine: str = "ppocrv5"  # "rapidocr" | "ppocrv5" | "paddle"
+    primary_backend: str = "ppocrv5"  # "rapidocr" | "ppocrv5" | "paddle" | "auto"
     fallback_backend: str = "rapidocr"
     # Number of detected text crops processed per recognizer call. RapidOCR
     # supports this batching internally; it does not batch video frames.
-    recognition_batch_size: int = 6
+    recognition_batch_size: int = 16
     default_source_lang: str = "auto"  # "auto" | "zh" | "en" | "vi"
     sample_fps: float = 2.5
     diff_threshold: float = 2.5
@@ -66,14 +66,17 @@ class ExtractionSettings(BaseModel):
 
     # Breakthrough OCR opt-in controls.  Defaults preserve legacy behaviour.
     ppocr_model_tier: str = "mobile"
-    enable_nvdec_hwaccel: bool = False
+    enable_nvdec_hwaccel: bool = True
     nvdec_device_id: int = 0
-    enable_anti_noise_funnel: bool = False
+    enable_anti_noise_funnel: bool = True
     anti_noise_ar_min: float = 0.88
     anti_noise_h_max: int = 130
     anti_noise_swt_cov_max: float = 0.40
     anti_noise_lum_min: int = 135
-    enable_stroke_dhash_cache: bool = False
+    enable_adaptive_rescue: bool = True
+    adaptive_rescue_mid_y: float = 0.35
+    adaptive_rescue_mid_h: float = 0.30
+    enable_stroke_dhash_cache: bool = True
     stroke_dhash_threshold: int = 4
     dbnet_limit_side_len: int = 960
     dbnet_limit_type: str = "max"
@@ -109,15 +112,23 @@ OcrSettings = ExtractionSettings
 
 
 class TranslationSettings(BaseModel):
-    provider: str = "local"
+    provider: str = "gemini"
     target_language: str = "vi"  # "vi" | "en" | "zh" | "none"
-    gemini_model: str = "gemini-3.8-flash"  # "gemini-3.8-flash" | "gemini-3.7-flash" | "gemini-2.5-flash"
+    gemini_model: str = "gemini-2.5-flash"  # "gemini-2.5-flash" | "gemini-3.7-flash"
     local_model: str = "qwen2.5:7b-instruct"  # "qwen2.5:7b-instruct" | "qwen2.5:3b-instruct" | "qwen2.5:14b-instruct"
     local_endpoint: str = "http://localhost:11434"  # Ollama / llama.cpp / OpenAI-compatible endpoint
-    auto_fallback: bool = False
+    auto_fallback: bool = True
     batch_size: int = 35
     prompt_tone: str = "dramatic"  # "dramatic" | "daily" | "humorous" | "literal"
     use_glossary: bool = True
+
+    @root_validator(pre=True)
+    def normalize_retired_gemini_models(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        values = dict(values or {})
+        model = values.get("gemini_model")
+        if model in {"gemini-3.8-flash", "3.8", "gemini-3.8"}:
+            values["gemini_model"] = "gemini-2.5-flash"
+        return values
 
 
 class DubbingSettings(BaseModel):

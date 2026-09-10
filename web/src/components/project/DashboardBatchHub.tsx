@@ -58,7 +58,9 @@ import {
   detectVoiceProvider,
   VOICE_CATEGORIES,
   VoiceCategory,
+  getVoiceDropdownGroups,
 } from '../../constants/voiceCatalog';
+import { VoiceCatalogPicker } from '../common/VoiceCatalogPicker';
 import {
   loadBatchExportConfig,
   saveBatchExportConfig,
@@ -2652,37 +2654,15 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                             }}
                             className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
                           >
-                            <optgroup label="🎬 Giọng Đọc CapCut Hot Trend (Review Phim & TikTok)">
-                              <option value="BV075_streaming">Thanh Niên Tự Tin (Review phim)</option>
-                              <option value="BV074_streaming">Cô Gái Hoạt Ngôn (Tươi sáng, thu hút)</option>
-                              <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (Tâm sự, nhẹ nhàng)</option>
-                              <option value="BV562_streaming">Mai (Thuyết minh chuẩn đài truyền hình)</option>
-                              <option value="vi_female_huong">Hương (Nữ phổ thông miền Bắc)</option>
-                              <option value="BV560_streaming">Alex Đại Đế (Nam trầm quyền uy)</option>
-                              <option value="BV075_streaming_vibrato_dsp">Việt Méo (Hài hước, parody)</option>
-                              <option value="BV074_streaming_dsp">Bé Nhí Nhảnh (Trẻ em dễ thương)</option>
-                            </optgroup>
-
-                            <optgroup label="🇻🇳 Giọng Đọc Chuẩn Edge TTS (Miễn phí & Tự nhiên)">
-                              <option value="vi-VN-NamMinhNeural">Nam Minh (Nam trầm ấm, kịch tính, chuẩn đài)</option>
-                              <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ truyền cảm, dịu dàng, chuẩn phim)</option>
-                            </optgroup>
-
-                            <optgroup label="🌟 Giọng Đọc Gemini AI TTS (Đa sắc thái)">
-                              <option value="Puck">Puck (Gemini Tự Nhiên)</option>
-                              <option value="Kore">Kore (Gemini Truyền Cảm)</option>
-                              <option value="Fenrir">Fenrir (Gemini Trầm Ấm)</option>
-                              <option value="Aoede">Aoede (Gemini Thanh Thoát)</option>
-                            </optgroup>
-
-                            <optgroup label="🌍 Giọng Đọc Quốc Tế (English)">
-                              <option value="en-US-JennyNeural">Jenny (US Female Warm)</option>
-                              <option value="en-US-GuyNeural">Guy (US Male Broadcast)</option>
-                              <option value="en-US-AriaNeural">Aria (US Dynamic Narrator)</option>
-                              <option value="en-US-ChristopherNeural">Christopher (US Deep Storyteller)</option>
-                              <option value="en-GB-RyanNeural">Ryan (British Classic)</option>
-                              <option value="en-GB-SoniaNeural">Sonia (British Elegant)</option>
-                            </optgroup>
+                            {getVoiceDropdownGroups().map((group) => (
+                              <optgroup key={group.label} label={group.label}>
+                                {group.options.map((opt) => (
+                                  <option key={opt.id} value={opt.id}>
+                                    {opt.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ))}
                           </select>
                           <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
                         </div>
@@ -2690,51 +2670,36 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                     </div>
                   )}
 
-                  {/* Khi chọn Đa Giọng: Phân Vai Nam / Nữ */}
                   {batchDubbingMode === 'gender_multi' && (
                     <div className="space-y-3 pt-1">
-                      {/* Giọng Nam */}
                       <div className="space-y-1">
                         <label className="text-slate-400 text-[10px] block font-medium">Giọng Nam (Phân vai thoại nam):</label>
-                        <div className="relative flex items-center">
-                          <select
-                            value={batchDubbingVoiceMale}
-                            onChange={(e) => setBatchDubbingVoiceMale(e.target.value)}
-                            className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
-                          >
-                            <option value="vi-VN-NamMinhNeural">Nam Minh (Edge-TTS trầm ấm)</option>
-                            <option value="BV075_streaming">Thanh Niên Tự Tin (CapCut Review)</option>
-                            <option value="BV560_streaming">Alex Đại Đế (CapCut Uy quyền)</option>
-                            <option value="BV075_streaming_vibrato_dsp">Việt Méo (CapCut Parody)</option>
-                            <option value="Fenrir">Fenrir (Gemini Trầm)</option>
-                            <option value="Puck">Puck (Gemini Tự nhiên)</option>
-                          </select>
-                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-                        </div>
+                        <VoiceCatalogPicker
+                          selectedVoiceId={batchDubbingVoiceMale}
+                          onChange={(voiceId) => {
+                            setBatchDubbingVoiceMale(voiceId);
+                            setTestVoiceMsg(null);
+                          }}
+                          gender="Nam"
+                          onPreview={(voiceId) => handleTestVoice(voiceId)}
+                          previewingVoiceId={isTestingVoice ? currentTestingVoice || undefined : undefined}
+                        />
                       </div>
 
-                      {/* Giọng Nữ */}
                       <div className="space-y-1">
                         <label className="text-slate-400 text-[10px] block font-medium">Giọng Nữ (Phân vai thoại nữ):</label>
-                        <div className="relative flex items-center">
-                          <select
-                            value={batchDubbingVoiceFemale}
-                            onChange={(e) => setBatchDubbingVoiceFemale(e.target.value)}
-                            className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 appearance-none pr-7 focus:outline-none transition shadow-sm font-medium cursor-pointer"
-                          >
-                            <option value="vi-VN-HoaiMyNeural">Hoài My (Edge-TTS Dịu dàng)</option>
-                            <option value="BV074_streaming">Cô Gái Hoạt Ngôn (CapCut)</option>
-                            <option value="BV421_vivn_streaming">Nhỏ Ngọt Ngào (CapCut)</option>
-                            <option value="BV562_streaming">Mai (CapCut Thuyết minh)</option>
-                            <option value="vi_female_huong">Hương (CapCut Miền Bắc)</option>
-                            <option value="Kore">Kore (Gemini Nữ)</option>
-                            <option value="Aoede">Aoede (Gemini Thanh thoát)</option>
-                          </select>
-                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-                        </div>
+                        <VoiceCatalogPicker
+                          selectedVoiceId={batchDubbingVoiceFemale}
+                          onChange={(voiceId) => {
+                            setBatchDubbingVoiceFemale(voiceId);
+                            setTestVoiceMsg(null);
+                          }}
+                          gender="Nữ"
+                          onPreview={(voiceId) => handleTestVoice(voiceId)}
+                          previewingVoiceId={isTestingVoice ? currentTestingVoice || undefined : undefined}
+                        />
                       </div>
 
-                      {/* 2 nút nghe thử Nam / Nữ */}
                       <div className="grid grid-cols-2 gap-2 pt-1">
                         <button
                           type="button"
@@ -4237,9 +4202,8 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                                   }
                                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
                                 >
-                                  <option value="gemini-3.8-flash">Gemini 3.8 Flash (Mới nhất)</option>
+                                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Khuyên dùng)</option>
                                   <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
-                                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
                                   <option value="qwen2.5:7b-instruct">Local Qwen 2.5 (7B)</option>
                                 </select>
                               </div>

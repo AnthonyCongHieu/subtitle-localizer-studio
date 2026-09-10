@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 MIGRATIONS = {
     1: """
@@ -131,6 +131,20 @@ MIGRATIONS = {
         download_json TEXT NOT NULL,
         updated_at REAL NOT NULL
     );
+    """,
+    4: """
+    ALTER TABLE lan_jobs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE lan_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3;
+    ALTER TABLE lan_jobs ADD COLUMN lease_id TEXT;
+    ALTER TABLE lan_jobs ADD COLUMN lease_expires_at REAL;
+    ALTER TABLE lan_jobs ADD COLUMN heartbeat_at REAL;
+    ALTER TABLE lan_jobs ADD COLUMN started_at REAL;
+    ALTER TABLE lan_jobs ADD COLUMN finished_at REAL;
+    ALTER TABLE lan_jobs ADD COLUMN current_stage TEXT;
+    ALTER TABLE lan_jobs ADD COLUMN result_json TEXT;
+    ALTER TABLE lan_jobs ADD COLUMN artifacts_json TEXT;
+    ALTER TABLE lan_jobs ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 1;
+    CREATE INDEX IF NOT EXISTS idx_lan_jobs_lease ON lan_jobs(lease_expires_at);
     """,
 }
 

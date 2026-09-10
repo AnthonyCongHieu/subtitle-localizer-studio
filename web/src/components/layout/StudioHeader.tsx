@@ -39,6 +39,7 @@ interface StudioHeaderProps {
   loggerCount: number;
   onToggleLogger: () => void;
   isScanning: boolean;
+  scanProgress?: number | null;
   hasVideo: boolean;
   onStartScan: () => void;
   onStopScan?: () => void;
@@ -73,6 +74,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
   loggerCount: _loggerCount,
   onToggleLogger: _onToggleLogger,
   isScanning,
+  scanProgress,
   hasVideo,
   onStartScan,
   onStopScan,
@@ -282,7 +284,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
               title={statusMessage || '1. Quét Sub: Đang quét phụ đề... (Chi tiết xem tại Dòng thời gian. Nhấp để dừng)'}
             >
               <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-              <span>Đang Quét...</span>
+              <span>{scanProgress !== null && scanProgress !== undefined ? `Quét (${Math.round(scanProgress)}%)` : 'Đang Quét...'}</span>
             </button>
           ) : (
             <button

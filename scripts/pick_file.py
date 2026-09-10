@@ -65,7 +65,9 @@ if ($res -eq [System.Windows.Forms.DialogResult]::OK) {
     Write-Output ""
 }
 """
-    cmd = ["powershell", "-NoProfile", "-STA", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps_script]
+    # Keep the host interactive: ``-NonInteractive`` prevents Windows Forms
+    # dialogs from being activated when the picker is launched by the API.
+    cmd = ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", ps_script]
     res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=120)
     return res.stdout.strip()
 
@@ -118,7 +120,19 @@ def main():
     except Exception:
         pass
 
-    # Trên Windows ưu tiên PowerShell STA (Không bao giờ treo COM STA)
+    # Tkinter opens the dialog in the user's desktop session.  This is the
+    # reliable path when the API is hosted from a normal interactive launcher.
+    # PowerShell remains a fallback for installations where Tk is unavailable.
+    if os.name == "nt":
+        try:
+            output = pick_via_tkinter(mode)
+            if output is not None:
+                print(output)
+                return
+        except Exception:
+            pass
+
+    # Fallback to a native PowerShell STA picker, then Tkinter on non-Windows.
     if os.name == "nt":
         try:
             output = pick_via_powershell(mode)
@@ -128,7 +142,6 @@ def main():
         except Exception:
             pass
 
-    # Fallback sang Tkinter
     try:
         output = pick_via_tkinter(mode)
         print(output)

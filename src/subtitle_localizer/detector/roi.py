@@ -88,6 +88,32 @@ def compute_tight_roi_from_observations(
     if not all_boxes or crop_width <= 0 or crop_height <= 0:
         return None
 
+
+
+def compute_tight_roi_from_observations(
+    observations: List[Any],
+    base_roi: RegionTrackV1,
+    crop_width: int,
+    crop_height: int,
+    padding_x: float = 0.02,
+    padding_y: float = 0.015,
+) -> Optional[RegionTrackV1]:
+    """
+    Tự co giãn ROI thông minh dựa trên toạ độ thực tế của các bounding box phụ đề đã nhận diện:
+    - Tìm min/max box bao trọn toàn bộ các câu phụ đề
+    - Cộng padding an toàn để che đủ nét chữ mà không che thừa nội dung video xung quanh
+    - Trả về RegionTrackV1 mới được co gọn, hoặc None nếu không phát hiện box nào
+    """
+    all_boxes = []
+    for obs in observations:
+        boxes = getattr(obs, "boxes", [])
+        for box in boxes:
+            if len(box) >= 4:
+                all_boxes.append(box)
+
+    if not all_boxes or crop_width <= 0 or crop_height <= 0:
+        return None
+
     # Tọa độ trong crop: x1, y1, x2, y2
     min_bx = min(b[0] for b in all_boxes)
     min_by = min(b[1] for b in all_boxes)
@@ -95,24 +121,31 @@ def compute_tight_roi_from_observations(
     max_by = max(b[3] for b in all_boxes)
 
     # Chuyển đổi sang hệ tọa độ chuẩn hóa toàn video (0.0 -> 1.0)
-    norm_x1 = base_roi.x + (min_bx / crop_width) * base_roi.width
     norm_y1 = base_roi.y + (min_by / crop_height) * base_roi.height
-    norm_x2 = base_roi.x + (max_bx / crop_width) * base_roi.width
     norm_y2 = base_roi.y + (max_by / crop_height) * base_roi.height
 
-    # Thêm padding an toàn vừa khít
-    tight_x = max(0.0, norm_x1 - padding_x)
-    tight_y = max(0.0, norm_y1 - padding_y)
-    tight_w = min(1.0 - tight_x, (norm_x2 - norm_x1) + padding_x * 2)
-    tight_h = min(1.0 - tight_y, (norm_y2 - norm_y1) + padding_y * 2)
+    # Thêm padding an toàn theo chiều cao (tối thiểu 2.2% chiều cao video) để không bị xén nét chữ
+    pad_y = max(padding_y, 0.022)
+    tight_y = max(0.0, norm_y1 - pad_y)
+    raw_h = (norm_y2 - norm_y1) + pad_y * 2
 
-    # Chỉ áp dụng nếu kích thước hợp lệ
-    if tight_w >= 0.05 and tight_h >= 0.02:
-        return RegionTrackV1(
-            region_id=base_roi.region_id,
-            x=round(tight_x, 4),
-            y=round(tight_y, 4),
-            width=round(tight_w, 4),
-            height=round(tight_h, 4),
-        )
-    return None
+    # Chiều cao thích ứng theo số dòng phụ đề (1 dòng: tối thiểu 8%, 2 dòng: 12.5%, 3 dòng: 16.5%)
+    if raw_h < 0.10:
+        tight_h = max(raw_h, 0.080)
+    elif raw_h < 0.15:
+        tight_h = max(raw_h, 0.125)
+    else:
+        tight_h = max(raw_h, 0.165)
+    tight_h = min(1.0 - tight_y, tight_h)
+
+    # Che full ngang màn hình theo đúng quy chuẩn: x=0.03, width=0.94
+    tight_x = 0.03
+    tight_w = 0.94
+
+    return RegionTrackV1(
+        region_id=base_roi.region_id,
+        x=round(tight_x, 4),
+        y=round(tight_y, 4),
+        width=round(tight_w, 4),
+        height=round(tight_h, 4),
+    )

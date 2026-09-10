@@ -75,6 +75,14 @@ export const VOICE_CATALOG: VoiceItem[] = [
   { id: 'Kore', name: 'Kore', gender: 'Nữ', provider: 'gemini', style: 'Gemini AI Truyền cảm' },
   { id: 'Fenrir', name: 'Fenrir', gender: 'Nam', provider: 'gemini', style: 'Gemini AI Trầm ấm' },
   { id: 'Aoede', name: 'Aoede', gender: 'Nữ', provider: 'gemini', style: 'Gemini AI Thanh thoát' },
+
+  // International English
+  { id: 'en-US-JennyNeural', name: 'Jenny', gender: 'Nữ', provider: 'edge', style: 'US Female Warm' },
+  { id: 'en-US-GuyNeural', name: 'Guy', gender: 'Nam', provider: 'edge', style: 'US Male Broadcast' },
+  { id: 'en-US-AriaNeural', name: 'Aria', gender: 'Nữ', provider: 'edge', style: 'US Dynamic Narrator' },
+  { id: 'en-US-ChristopherNeural', name: 'Christopher', gender: 'Nam', provider: 'edge', style: 'US Deep Storyteller' },
+  { id: 'en-GB-RyanNeural', name: 'Ryan', gender: 'Nam', provider: 'edge', style: 'British Classic Male' },
+  { id: 'en-GB-SoniaNeural', name: 'Sonia', gender: 'Nữ', provider: 'edge', style: 'British Elegant Female' },
 ];
 
 export const VOICE_CATEGORIES = [
@@ -86,21 +94,59 @@ export const VOICE_CATEGORIES = [
 
 export type VoiceCategory = typeof VOICE_CATEGORIES[number]['id'];
 
-export const MALE_VOICE_OPTIONS = [
-  { id: 'vi-VN-NamMinhNeural', name: 'Nam Minh (Edge-TTS trầm ấm)' },
-  { id: 'BV075_streaming', name: 'Thanh Niên Tự Tin (CapCut Review)' },
-  { id: 'BV560_streaming', name: 'Alex Đại Đế (CapCut Uy quyền)' },
-  { id: 'BV075_streaming_vibrato_dsp', name: 'Việt Méo (CapCut Parody)' },
-  { id: 'Fenrir', name: 'Fenrir (Gemini Trầm)' },
-  { id: 'Puck', name: 'Puck (Gemini Tự nhiên)' },
+export interface VoiceGroup {
+  label: string;
+  options: { id: string; name: string }[];
+}
+
+export function filterVoiceCatalog(options: {
+  category?: VoiceCategory;
+  gender?: VoiceItem['gender'];
+} = {}): VoiceItem[] {
+  const category = options.category ?? 'all';
+  const gender = options.gender;
+  return VOICE_CATALOG.filter((voice) => {
+    if (category !== 'all' && voice.provider !== category) return false;
+    if (gender && voice.gender !== gender) return false;
+    return true;
+  });
+}
+
+type VoiceDropdownGroupKey = 'capcut' | 'edge' | 'gemini' | 'international';
+
+function dropdownGroupKey(voice: VoiceItem): VoiceDropdownGroupKey {
+  if (voice.provider === 'edge' && voice.id.startsWith('en-')) return 'international';
+  return voice.provider;
+}
+
+const DROPDOWN_GROUP_DEFS: { key: VoiceDropdownGroupKey; label: string }[] = [
+  { key: 'capcut', label: '🎬 Giọng Đọc CapCut Hot Trend (Review Phim & TikTok)' },
+  { key: 'edge', label: '🇻🇳 Giọng Đọc Chuẩn Edge TTS (Miễn phí & Tự nhiên)' },
+  { key: 'gemini', label: '🌟 Giọng Đọc Gemini AI TTS (Đa sắc thái)' },
+  { key: 'international', label: '🌍 Giọng Đọc Quốc Tế (English)' },
 ];
 
-export const FEMALE_VOICE_OPTIONS = [
-  { id: 'vi-VN-HoaiMyNeural', name: 'Hoài My (Edge-TTS Dịu dàng)' },
-  { id: 'BV074_streaming', name: 'Cô Gái Hoạt Ngôn (CapCut)' },
-  { id: 'BV421_vivn_streaming', name: 'Nhỏ Ngọt Ngào (CapCut)' },
-  { id: 'BV562_streaming', name: 'Mai (CapCut Thuyết minh)' },
-  { id: 'vi_female_huong', name: 'Hương (CapCut Miền Bắc)' },
-  { id: 'Kore', name: 'Kore (Gemini Nữ)' },
-  { id: 'Aoede', name: 'Aoede (Gemini Thanh thoát)' },
-];
+export function voiceDropdownLabel(voice: VoiceItem): string {
+  return voice.name + ' (' + voice.style + ')';
+}
+
+export function getVoiceDropdownGroups(voices: VoiceItem[] = VOICE_CATALOG): VoiceGroup[] {
+  return DROPDOWN_GROUP_DEFS
+    .map((def) => ({
+      label: def.label,
+      options: voices
+        .filter((voice) => dropdownGroupKey(voice) === def.key)
+        .map((voice) => ({ id: voice.id, name: voiceDropdownLabel(voice) })),
+    }))
+    .filter((group) => group.options.length > 0);
+}
+
+export const MALE_VOICE_GROUPS: VoiceGroup[] = getVoiceDropdownGroups(
+  filterVoiceCatalog({ gender: 'Nam' }),
+);
+export const FEMALE_VOICE_GROUPS: VoiceGroup[] = getVoiceDropdownGroups(
+  filterVoiceCatalog({ gender: 'Nữ' }),
+);
+
+export const MALE_VOICE_OPTIONS = MALE_VOICE_GROUPS.flatMap((g) => g.options);
+export const FEMALE_VOICE_OPTIONS = FEMALE_VOICE_GROUPS.flatMap((g) => g.options);

@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ITEMS = ("src", "scripts/run_worker_agent.py", "requirements.txt", "pipeline_settings.json", "worker")
+DEFAULT_ITEMS = ("src", "scripts/run_worker_agent.py", "requirements.txt", "pipeline_settings.json", "worker", "start-worker.bat")
 
 
 def package(destination: Path) -> Path:

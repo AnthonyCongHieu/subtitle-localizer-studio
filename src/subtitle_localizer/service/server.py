@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import json
 import logging
 import os
 import threading
 import time
 import uuid
+import numpy as np
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,8 +39,18 @@ from subtitle_localizer.domain.models import (
 from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
 from subtitle_localizer.service.websocket import WebSocketManager
+from subtitle_localizer.reconstruction.builder import normalize_sequential_cues
 from subtitle_localizer.service.worker import BackgroundWorker
-from subtitle_localizer.service.lan import LanCoordinator
+from subtitle_localizer.service.lan import LanCoordinator, LanLeaseError, LanStateError
+from subtitle_localizer.service.lan_artifacts import CoordinatorArtifactStore
+from subtitle_localizer.service.lan_protocol import (
+    ArtifactMetadata,
+    JobPackage,
+    ProtocolError,
+    ResultPackage,
+    PROTOCOL_VERSION,
+    sha256_file,
+)
 
 
 class CreateProjectRequest(BaseModel):
@@ -99,6 +112,7 @@ class AutoDetectRoiRequest(BaseModel):
 class PipelineRunRequest(BaseModel):
     max_duration_seconds: Optional[float] = None
     sync: bool = False
+    ocr_only: bool = False
 
 
 class WorkerRegistrationRequest(BaseModel):
@@ -110,14 +124,23 @@ class WorkerRegistrationRequest(BaseModel):
     model_version: str = ""
     gpu_name: str = ""
     vram_mb: int = 0
+    vram_free_mb: Optional[int] = None
+    disk_free_bytes: Optional[int] = None
+    slots_available: Optional[int] = None
     capabilities: Dict[str, bool] = {}
 
 
 class WorkerHeartbeatRequest(BaseModel):
     queue_depth: int = 0
     active_job_id: Optional[str] = None
+    job_id: Optional[str] = None
+    lease_id: Optional[str] = None
     gpu_name: Optional[str] = None
     vram_mb: Optional[int] = None
+    vram_free_mb: Optional[int] = None
+    disk_free_bytes: Optional[int] = None
+    slots_available: Optional[int] = None
+    capabilities: Optional[Dict[str, bool]] = None
     last_error: Optional[str] = None
 
 
@@ -128,13 +151,27 @@ class LanJobRequest(BaseModel):
     job_type: str = "ocr"
     profile: str = "full_speed_quality"
     video_fingerprint: str = ""
+    max_attempts: int = 3
+    protocol_version: Optional[str] = None
+    stage_plan: List[str] = Field(default_factory=list)
+    package: Optional[Dict[str, Any]] = None
+    metrics: Optional[Dict[str, Any]] = None
 
+
+class LanJobRetryRequest(BaseModel):
+    stage_plan: Optional[List[str]] = None
 
 class LanJobUpdateRequest(BaseModel):
     status: Optional[str] = None
     progress: Optional[float] = None
     metrics: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    lease_id: Optional[str] = None
+    worker_id: Optional[str] = None
+    current_stage: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+    artifacts: Optional[List[Dict[str, Any]]] = None
+    lease_expires_at: Optional[float] = None
 
 
 class DownloadPreviewRequest(BaseModel):
@@ -447,13 +484,39 @@ def create_app(
     app = FastAPI(title="Subtitle Localizer Studio API", version="1.0.0")
 
     # Optional LAN boundary. Empty means backwards-compatible token-only auth.
+    lan_allowlist_error: Optional[str] = None
+    allowed_lan_networks: list[Any] = []
+    for value in os.getenv("SL_LAN_ALLOWED_IPS", "").split(","):
+        item = value.strip()
+        if not item:
+            continue
+        try:
+            allowed_lan_networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            lan_allowlist_error = f"SL_LAN_ALLOWED_IPS chứa CIDR/IP không hợp lệ: {item}"
+            break
+
     @app.middleware("http")
     async def lan_ip_whitelist(request: Request, call_next):
-        allowed_lan_ips = {item.strip() for item in os.getenv("SL_LAN_ALLOWED_IPS", "").split(",") if item.strip()}
-        if allowed_lan_ips and request.url.path.startswith("/api/v1/admin/"):
-            client_ip = request.client.host if request.client else ""
-            if client_ip not in allowed_lan_ips:
-                return Response(content='{"detail":"IP không được phép truy cập LAN admin"}', status_code=403, media_type="application/json")
+        if request.url.path.startswith("/api/v1/admin/"):
+            if lan_allowlist_error:
+                return Response(
+                    content=json.dumps({"detail": lan_allowlist_error}, ensure_ascii=False),
+                    status_code=500,
+                    media_type="application/json",
+                )
+            if allowed_lan_networks:
+                client_ip = request.client.host if request.client else ""
+                try:
+                    address = ipaddress.ip_address(client_ip)
+                    allowed = any(
+                        address.version == network.version and address in network
+                        for network in allowed_lan_networks
+                    )
+                except ValueError:
+                    allowed = any(network.prefixlen == 0 for network in allowed_lan_networks)
+                if not allowed:
+                    return Response(content='{"detail":"IP không được phép truy cập LAN admin"}', status_code=403, media_type="application/json")
         return await call_next(request)
 
     # Load local environment config if present
@@ -473,7 +536,9 @@ def create_app(
     running_project_ids: set[str] = set()
     running_lock = threading.Lock()
     lan = LanCoordinator(db)
+    lan_artifacts = CoordinatorArtifactStore(resolved_output_root / ".lan-artifacts")
     app.state.lan_coordinator = lan
+    app.state.lan_artifacts = lan_artifacts
 
     async def broadcast_lan(event_type: str, payload: Dict[str, Any], *, job_id: Optional[str] = None) -> None:
         """Push LAN control-plane changes through the existing authenticated WS channel."""
@@ -525,7 +590,13 @@ def create_app(
             data = request.model_dump(exclude_none=True) if hasattr(request, "model_dump") else request.dict(exclude_none=True)
             result = lan.heartbeat(worker_id, data).to_dict()
             await broadcast_lan("worker_heartbeat", result)
+            await broadcast_lan("lan_overview", lan.overview())
+            active_job_id = data.get("job_id") or data.get("active_job_id")
+            if active_job_id:
+                await broadcast_lan("job_heartbeat", lan.get_job(str(active_job_id)).to_dict(), job_id=str(active_job_id))
             return result
+        except LanStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
 
@@ -533,11 +604,18 @@ def create_app(
     async def set_worker_status(worker_id: str, status: str = Query(...), authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
         try:
-            return lan.set_worker_status(worker_id, status).to_dict()
+            result = lan.set_worker_status(worker_id, status).to_dict()
+            await broadcast_lan("worker_status_changed", result)
+            return result
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
+    @app.get("/api/v1/admin/overview")
+    async def lan_overview(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        return lan.overview()
 
     @app.get("/api/v1/admin/workers")
     async def list_workers(authorization: Optional[str] = Header(None)) -> List[Dict[str, Any]]:
@@ -549,10 +627,49 @@ def create_app(
         verify_auth(authorization)
         try:
             data = request.model_dump() if hasattr(request, "model_dump") else request.dict()
-            result = lan.create_job(data).to_dict()
+            project = repository.get_project(data["project_id"])
+            source = Path(project.source_video_path) if project and project.source_video_path else None
+            if data.get("package") is not None:
+                package_data = dict(data["package"])
+                package_data.setdefault("job_id", data.get("job_id") or f"pending-{uuid.uuid4().hex[:12]}")
+                package_data.setdefault("project_id", data["project_id"])
+                package_data.setdefault("protocol_version", data.get("protocol_version") or PROTOCOL_VERSION)
+                package_data.setdefault("stage_plan", data.get("stage_plan") or ["download", "prepare", "ocr", "translate", "publish"])
+                JobPackage.from_dict(package_data)
+            elif source and source.is_file() and (data.get("protocol_version") or data.get("stage_plan")):
+                source_meta = ArtifactMetadata(source.name, "source", source.stat().st_size, sha256_file(source))
+                data["package"] = {
+                    "protocol_version": data.get("protocol_version") or PROTOCOL_VERSION,
+                    "job_id": "pending",
+                    "project_id": project.project_id,
+                    "project": project.to_dict(),
+                    "settings": project.custom_pipeline_settings or {},
+                    "cues": [cue.to_dict() for cue in repository.get_cues(project.project_id)],
+                    "regions": [region.to_dict() for region in project.regions],
+                    "stage_plan": data.get("stage_plan") or ["download", "prepare", "ocr", "translate", "publish"],
+                    "artifacts": [source_meta.to_dict()],
+                }
+            result_obj = lan.create_job(data)
+            if result_obj.package:
+                package = dict(result_obj.package)
+                package["job_id"] = result_obj.job_id
+                source_items = package.get("artifacts") or []
+                if source and source.is_file() and source_items and source_items[0].get("kind") == "source":
+                    source_meta = lan_artifacts.put_source(result_obj.job_id, source, name=source_items[0]["name"])
+                    package["artifacts"] = [{**source_meta.to_dict(),
+                                             "download_url": f"/api/v1/admin/jobs/{result_obj.job_id}/source/{source_meta.name}"}]
+                validated = JobPackage.from_dict(package)
+                lan_artifacts.write_package(result_obj.job_id, validated.to_dict())
+                result_obj.package = validated.to_dict()
+                result_obj.protocol_version = validated.protocol_version
+                result_obj.stage_plan = list(validated.stage_plan)
+                lan._persist_job(result_obj)
+            result = result_obj.to_dict()
             await broadcast_lan("job_updated", result, job_id=result.get("job_id"))
             return result
-        except ValueError as error:
+        except LanStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ValueError, ProtocolError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
@@ -567,9 +684,105 @@ def create_app(
         verify_auth(authorization)
         try:
             job = lan.claim_next_job(worker_id)
+            if job:
+                await broadcast_lan("job_claimed", job.to_dict(), job_id=job.job_id)
             return {"job": job.to_dict() if job else None}
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
+    @app.get("/api/v1/admin/jobs/{job_id}/package")
+    async def get_lan_job_package(job_id: str, authorization: Optional[str] = Header(None)) -> FileResponse:
+        verify_auth(authorization)
+        try:
+            job = lan.get_job(job_id)
+            if not job.package:
+                raise HTTPException(status_code=404, detail="Job package không tồn tại")
+            path = lan_artifacts.package_path(job_id)
+            if not path.is_file():
+                lan_artifacts.write_package(job_id, job.package)
+            return FileResponse(path, media_type="application/json", filename="package.json")
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job không tồn tại") from error
+
+    @app.get("/api/v1/admin/jobs/{job_id}/source/{artifact_name}")
+    async def get_lan_job_source(job_id: str, artifact_name: str,
+                                 authorization: Optional[str] = Header(None)) -> FileResponse:
+        verify_auth(authorization)
+        try:
+            package = JobPackage.from_dict(lan.get_job(job_id).package or {})
+            metadata = next((item for item in package.artifacts
+                             if item.name == artifact_name and item.kind == "source"), None)
+            if metadata is None:
+                raise HTTPException(status_code=404, detail="Source artifact không tồn tại")
+            path = lan_artifacts.source_path(job_id, artifact_name)
+            if not path.is_file() or path.stat().st_size != metadata.size_bytes or sha256_file(path) != metadata.sha256:
+                raise HTTPException(status_code=409, detail="Source artifact không vượt qua xác minh")
+            return FileResponse(path, media_type=metadata.content_type, filename=metadata.name)
+        except (KeyError, ProtocolError) as error:
+            raise HTTPException(status_code=404, detail="Job/source không tồn tại") from error
+
+    @app.post("/api/v1/admin/jobs/{job_id}/lease")
+    async def heartbeat_lan_job_lease(job_id: str, worker_id: str = Query(...),
+                                      authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            job = lan.heartbeat_job_lease(worker_id, job_id)
+            return {"job_id": job.job_id, "status": job.status,
+                    "cancel_requested": job.status == "cancelled",
+                    "lease_expires_at": job.lease_expires_at}
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job không tồn tại") from error
+        except LanStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.put("/api/v1/admin/jobs/{job_id}/results/{artifact_name}")
+    async def upload_lan_result(job_id: str, artifact_name: str, request: Request,
+                                authorization: Optional[str] = Header(None),
+                                x_artifact_size: int = Header(...),
+                                x_artifact_sha256: str = Header(...),
+                                x_artifact_kind: str = Header("result")) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            job = lan.get_job(job_id)
+            if job.status == "cancelled":
+                raise HTTPException(status_code=409, detail="Job đã bị hủy")
+            metadata = ArtifactMetadata(artifact_name, x_artifact_kind, x_artifact_size, x_artifact_sha256)
+            import io
+            path = lan_artifacts.save_result(job_id, metadata, io.BytesIO(await request.body()))
+            return {"status": "verified", "artifact": metadata.to_dict(),
+                    "size_bytes": path.stat().st_size}
+        except ProtocolError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job không tồn tại") from error
+
+    @app.post("/api/v1/admin/jobs/{job_id}/results/commit")
+    async def commit_lan_result(job_id: str, request: Request,
+                                authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            job = lan.get_job(job_id)
+            result = ResultPackage.from_dict(await request.json())
+            if result.job_id != job_id or result.project_id != job.project_id:
+                raise ProtocolError("Định danh ResultPackage không khớp")
+            for artifact in result.artifacts:
+                lan_artifacts.verified_result(job_id, artifact)
+            imported = ProjectManifestV1.from_dict(result.project)
+            repository.save_project(imported)
+            repository.save_cues(imported.project_id,
+                                 [SubtitleCueV1.from_dict(item) for item in result.cues])
+            for stage in result.stage_runs:
+                repository.save_stage_run(imported.project_id, StageRunV1.from_dict(stage))
+            completed = lan.update_job(job_id, {"status": "completed", "progress": 1.0,
+                                                "result": result.to_dict()})
+            return {"status": "completed", "job": completed.to_dict(),
+                    "project_id": imported.project_id,
+                    "source_video_path": imported.source_video_path,
+                    "artifacts": [item.to_dict() for item in result.artifacts]}
+        except ProtocolError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job không tồn tại") from error
 
     @app.patch("/api/v1/admin/jobs/{job_id}")
     async def update_lan_job(job_id: str, request: LanJobUpdateRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
@@ -579,6 +792,12 @@ def create_app(
             result = lan.update_job(job_id, data).to_dict()
             await broadcast_lan("job_updated", result, job_id=job_id)
             return result
+        except LanLeaseError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except LanStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Job không tồn tại") from error
 
@@ -586,15 +805,23 @@ def create_app(
     async def cancel_lan_job(job_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
         try:
-            return lan.cancel_job(job_id).to_dict()
+            result = lan.cancel_job(job_id).to_dict()
+            await broadcast_lan("job_cancelled", result, job_id=job_id)
+            return result
+        except LanStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Job không tồn tại") from error
 
     @app.post("/api/v1/admin/jobs/{job_id}/retry")
-    async def retry_lan_job(job_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    async def retry_lan_job(job_id: str, request: Optional[LanJobRetryRequest] = None,
+                            authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
         try:
-            return lan.retry_job(job_id).to_dict()
+            stage_plan = request.stage_plan if request and request.stage_plan is not None else None
+            result = lan.retry_job(job_id, stage_plan=stage_plan).to_dict()
+            await broadcast_lan("job_retried", result, job_id=job_id)
+            return result
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
@@ -605,7 +832,9 @@ def create_app(
         verify_auth(authorization)
         try:
             data = request.model_dump() if hasattr(request, "model_dump") else request.dict()
-            return lan.create_download_preview(data).to_dict()
+            result = lan.create_download_preview(data).to_dict()
+            await broadcast_lan("download_preview_created", result)
+            return result
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except KeyError as error:
@@ -620,7 +849,9 @@ def create_app(
     async def decide_download(request_id: str, request: DownloadDecisionRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
         try:
-            return lan.decide_download(request_id, request.approved).to_dict()
+            result = lan.decide_download(request_id, request.approved).to_dict()
+            await broadcast_lan("download_decided", result)
+            return result
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
@@ -631,6 +862,8 @@ def create_app(
         verify_auth(authorization)
         try:
             item = lan.claim_download(worker_id)
+            if item:
+                await broadcast_lan("download_claimed", item.to_dict())
             return {"download": item.to_dict() if item else None}
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
@@ -639,7 +872,9 @@ def create_app(
     async def update_lan_download(request_id: str, request: DownloadUpdateRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
         try:
-            return lan.update_download(request_id, {"status": request.status}).to_dict()
+            result = lan.update_download(request_id, {"status": request.status}).to_dict()
+            await broadcast_lan("download_updated", result)
+            return result
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
@@ -1448,12 +1683,15 @@ def create_app(
 
         max_dur = req.max_duration_seconds if req else None
         is_sync = req.sync if req else False
+        is_ocr_only = bool(req.ocr_only) if req else False
 
         if is_sync:
-            success = worker.run_pipeline_synchronous(project_id, max_duration_seconds=max_dur)
+            success = worker.run_pipeline_synchronous(
+                project_id, max_duration_seconds=max_dur, ocr_only=is_ocr_only
+            )
             if not success:
                 raise HTTPException(status_code=400, detail="Failed to run pipeline")
-            return {"status": "success", "project_id": project_id}
+            return {"status": "success", "project_id": project_id, "ocr_only": is_ocr_only}
 
         with running_lock:
             if project_id in running_project_ids:
@@ -1461,6 +1699,7 @@ def create_app(
                     "status": "running",
                     "project_id": project_id,
                     "max_duration_seconds": max_dur,
+                    "ocr_only": is_ocr_only,
                 }
             running_project_ids.add(project_id)
 
@@ -1479,7 +1718,9 @@ def create_app(
 
         def _bg_run():
             try:
-                worker.run_pipeline_synchronous(project_id, max_duration_seconds=max_dur)
+                worker.run_pipeline_synchronous(
+                    project_id, max_duration_seconds=max_dur, ocr_only=is_ocr_only
+                )
             except Exception as e:
                 repository.save_stage_run(
                     project_id,
@@ -1505,6 +1746,7 @@ def create_app(
             "status": "running",
             "project_id": project_id,
             "max_duration_seconds": max_dur,
+            "ocr_only": is_ocr_only,
         }
 
     @app.post("/api/v1/projects/{project_id}/pipeline/stop")
@@ -1624,6 +1866,7 @@ def create_app(
             translated_cues = translator.translate_cues(
                 cues, source_lang=manifest.source_language, target_lang=manifest.target_language
             )
+            translated_cues = normalize_sequential_cues(translated_cues)
             repository.save_cues(project_id, translated_cues)
             # Lấy bản ghi manifest mới nhất từ database để tránh ghi đè snapshot cũ làm mất cấu hình ROI/Style
             current_manifest = repository.get_project(project_id) or manifest
@@ -2132,9 +2375,14 @@ def create_app(
 
         pts_to_try = []
         if req.pts is not None and req.pts >= 0:
-            pts_to_try.append(req.pts)
+            cur_p = float(req.pts)
+            pts_to_try.append(cur_p)
+            for delta in [0.5, -0.5, 1.0, -1.0, 2.0, -2.0, 3.0]:
+                target_p = cur_p + delta
+                if 0.0 <= target_p < duration and target_p not in pts_to_try:
+                    pts_to_try.append(target_p)
 
-        for sample_t in [5.0, 15.0, 30.0, 60.0, 90.0, 120.0]:
+        for sample_t in [5.0, 10.0, 15.0, 25.0, 35.0, 45.0, 60.0]:
             if sample_t < duration and sample_t not in pts_to_try:
                 pts_to_try.append(sample_t)
 
@@ -2148,7 +2396,10 @@ def create_app(
         if engine is None:
             from rapidocr_onnxruntime import RapidOCR
             engine = RapidOCR(det_use_cuda=False, cls_use_cuda=False, rec_use_cuda=False)
-        detected_boxes = []
+
+        best_band = None
+        best_num_lines = 0
+        best_pts = 0.0
 
         for t in pts_to_try:
             cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
@@ -2156,54 +2407,143 @@ def create_app(
             if not ret or frame is None:
                 continue
             h, w = frame.shape[:2]
-            res, _ = engine(frame)
-            frame_boxes = []
-            for line in (res or []):
+            if h <= 0 or w <= 0:
+                continue
+
+            try:
+                res, _ = engine(frame)
+            except Exception:
+                res = None
+
+            if not res:
+                continue
+
+            # Lọc các text box có xác suất là phụ đề (nửa dưới màn hình, dạng ngang)
+            cand_boxes = []
+            for line in res:
                 box, text, score = line
-                xs = [p[0] for p in box]
-                ys = [p[1] for p in box]
-                norm_x = min(xs) / w
-                norm_y = min(ys) / h
-                norm_w = (max(xs) - min(xs)) / w
-                norm_h = (max(ys) - min(ys)) / h
-                if norm_y >= 0.60 and norm_w >= 0.10 and norm_h <= 0.20:
-                    frame_boxes.append((norm_x, norm_y, norm_w, norm_h))
-            if frame_boxes:
-                detected_boxes.extend(frame_boxes)
-                if req.pts is not None and abs(t - req.pts) < 0.1:
-                    detected_boxes = frame_boxes
-                    break
+                try:
+                    xs = [float(pt[0]) for pt in box]
+                    ys = [float(pt[1]) for pt in box]
+                    x1, y1 = min(xs), min(ys)
+                    x2, y2 = max(xs), max(ys)
+                except Exception:
+                    poly = np.array(box)
+                    x1, y1 = float(poly[:, 0].min()), float(poly[:, 1].min())
+                    x2, y2 = float(poly[:, 0].max()), float(poly[:, 1].max())
+                norm_y = y1 / h
+                norm_h = (y2 - y1) / h
+                norm_x = x1 / w
+                norm_w = (x2 - x1) / w
+
+                if 0.40 <= norm_y <= 0.92 and norm_w >= 0.08 and norm_h <= 0.10:
+                    cand_boxes.append({
+                        "x1": norm_x,
+                        "y1": norm_y,
+                        "x2": norm_x + norm_w,
+                        "y2": norm_y + norm_h,
+                        "cy": norm_y + norm_h / 2.0,
+                        "h": norm_h,
+                        "text": text,
+                        "score": score,
+                    })
+
+            if not cand_boxes:
+                continue
+
+            # Gom các text box vào các dòng ngang (line clustering với khoảng cách Y < 0.025)
+            cand_boxes.sort(key=lambda b: b["cy"])
+            lines = []
+            for b in cand_boxes:
+                placed = False
+                for l in lines:
+                    if abs(l["cy"] - b["cy"]) < 0.025:
+                        l["boxes"].append(b)
+                        l["cy"] = sum(x["cy"] for x in l["boxes"]) / len(l["boxes"])
+                        l["y1"] = min(l["y1"], b["y1"])
+                        l["y2"] = max(l["y2"], b["y2"])
+                        placed = True
+                        break
+                if not placed:
+                    lines.append({"cy": b["cy"], "y1": b["y1"], "y2": b["y2"], "boxes": [b]})
+
+            # Ưu tiên dải thoại đối thoại chuẩn (Y từ 0.52 đến 0.88)
+            dialogue_lines = [l for l in lines if 0.52 <= l["cy"] <= 0.88]
+            if not dialogue_lines:
+                dialogue_lines = lines
+
+            num_lines = len(dialogue_lines)
+            top_y = min(l["y1"] for l in dialogue_lines)
+            bot_y = max(l["y2"] for l in dialogue_lines)
+            center_y = (top_y + bot_y) / 2.0
+
+            # Tính chiều cao vừa khít theo số dòng phụ đề (1 dòng: 8%, 2 dòng: 12-13.5%, 3 dòng: 16-17.5%)
+            if num_lines <= 1:
+                tight_h = 0.080
+            elif num_lines == 2:
+                tight_h = min(0.135, max(0.120, (bot_y - top_y) + 0.028))
+            else:
+                tight_h = min(0.175, max(0.160, (bot_y - top_y) + 0.035))
+
+            tight_y = max(0.0, min(1.0 - tight_h, center_y - tight_h / 2.0))
+            tight_x = 0.03
+            tight_w = 0.94  # Che full ngang màn hình
+
+            best_band = {
+                "x": round(tight_x, 4),
+                "y": round(tight_y, 4),
+                "width": round(tight_w, 4),
+                "height": round(tight_h, 4),
+                "num_lines": num_lines,
+            }
+            best_num_lines = num_lines
+            best_pts = t
+
+            if req.pts is not None and abs(t - req.pts) <= 1.5:
+                break
 
         cap.release()
 
-        if not detected_boxes:
-            tight_x, tight_y, tight_w, tight_h = 0.08, 0.85, 0.84, 0.11
-        else:
-            min_y = min(b[1] for b in detected_boxes)
-            max_y = max(b[1] + b[3] for b in detected_boxes)
-            min_x = min(b[0] for b in detected_boxes)
-            max_x = max(b[0] + b[2] for b in detected_boxes)
+        is_portrait = False
+        try:
+            cap_probe = cv2.VideoCapture(str(video_path))
+            probe_w = cap_probe.get(cv2.CAP_PROP_FRAME_WIDTH) or 1
+            probe_h = cap_probe.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1
+            is_portrait = probe_h > probe_w
+            cap_probe.release()
+        except Exception:
+            pass
 
-            tight_y = max(0.0, min_y - 0.015)
-            tight_h = min(1.0 - tight_y, (max_y - min_y) + 0.030)
-            tight_x = max(0.0, min_x - 0.03)
-            tight_w = min(1.0 - tight_x, (max_x - min_x) + 0.06)
+        if not best_band:
+            default_y = 0.61 if is_portrait else 0.82
+            best_band = {
+                "x": 0.03,
+                "y": default_y,
+                "width": 0.94,
+                "height": 0.08,
+                "num_lines": 1,
+            }
 
         base_region = manifest.regions[0] if manifest.regions else RegionTrackV1(region_id="roi-default")
         updated_region = RegionTrackV1(
             region_id=base_region.region_id,
-            x=round(tight_x, 4),
-            y=round(tight_y, 4),
-            width=round(tight_w, 4),
-            height=round(tight_h, 4),
+            x=best_band["x"],
+            y=best_band["y"],
+            width=best_band["width"],
+            height=best_band["height"],
         )
         manifest.regions = [updated_region]
         repository.save_project(manifest)
 
+        line_desc = f"{best_band['num_lines']} dòng" if best_band.get('num_lines', 0) > 1 else "1 dòng"
+
         return {
             "status": "success",
             "region": updated_region.to_dict(),
-            "detected_count": len(detected_boxes),
+            "detected_count": 1,
+            "num_lines": best_band.get("num_lines", 1),
+            "line_description": line_desc,
+            "pts": round(best_pts, 2),
         }
 
     @app.post("/api/v1/settings/gemini-key")
@@ -2498,7 +2838,10 @@ def create_app(
                         f"Văn bản: {text}"
                     )
                     payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{req.gemini_model}:generateContent?key={key}"
+                    target_model = req.gemini_model or "gemini-2.5-flash"
+                    if target_model in {"gemini-3.8-flash", "3.8", "gemini-3.8"}:
+                        target_model = "gemini-2.5-flash"
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={key}"
                     req_obj = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
                     try:
                         with urllib.request.urlopen(req_obj, timeout=15) as resp:

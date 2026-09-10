@@ -10,12 +10,32 @@ import time
 import json
 import socket
 import threading
-from dataclasses import asdict, dataclass, field
+import uuid
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Dict, Optional
+
+from subtitle_localizer.service.lan_protocol import PROTOCOL_VERSION
 
 DISCOVERY_MAGIC = "subtitle-localizer-coordinator"
 DISCOVERY_VERSION = 1
 DISCOVERY_PORT = 45871
+LAN_PROTOCOL_VERSION = 2
+TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
+VALID_JOB_STATUSES = {"queued", "running", *TERMINAL_JOB_STATUSES}
+GPU_PREFERRED_STAGES = {"ocr", "export", "dub"}
+CPU_PREFERRED_STAGES = {"download", "translate"}
+LARGE_VIDEO_BYTES = 1024 * 1024 * 1024
+LARGE_VIDEO_MIN_VRAM_MB = 3000
+STANDARD_VIDEO_MIN_VRAM_MB = 1500
+STANDARD_VIDEO_MIN_DISK_BYTES = 10 * 1024 * 1024 * 1024
+
+
+class LanStateError(ValueError):
+    """The requested mutation conflicts with current coordinator state."""
+
+
+class LanLeaseError(LanStateError):
+    """A worker attempted to mutate a job using a stale lease."""
 
 
 class LanDiscoveryResponder:
@@ -80,6 +100,9 @@ class WorkerRecord:
     model_version: str = ""
     gpu_name: str = ""
     vram_mb: int = 0
+    vram_free_mb: Optional[int] = None
+    disk_free_bytes: Optional[int] = None
+    slots_available: Optional[int] = None
     capabilities: Dict[str, bool] = field(default_factory=dict)
     status: str = "online"
     last_seen: float = field(default_factory=time.time)
@@ -106,6 +129,19 @@ class LanJob:
     progress: float = 0.0
     metrics: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    attempt: int = 0
+    max_attempts: int = 3
+    lease_id: Optional[str] = None
+    lease_expires_at: Optional[float] = None
+    heartbeat_at: Optional[float] = None
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    current_stage: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+    artifacts: list[Dict[str, Any]] = field(default_factory=list)
+    protocol_version: Optional[str] = None
+    stage_plan: list[str] = field(default_factory=list)
+    package: Optional[Dict[str, Any]] = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -131,14 +167,20 @@ class DownloadApproval:
 
 
 class LanCoordinator:
-    def __init__(self, database: Any = None) -> None:
+    def __init__(self, database: Any = None, *, lease_seconds: float = 30.0) -> None:
         self._database = database
+        self.lease_seconds = max(1.0, float(lease_seconds))
         self._workers: Dict[str, WorkerRecord] = {}
         self._jobs: Dict[str, LanJob] = {}
         self._idempotency: Dict[str, str] = {}
         self._downloads: Dict[str, DownloadApproval] = {}
         self._lock = threading.RLock()
         self._load_persisted()
+
+    @staticmethod
+    def _load_record(record_type: Any, data: Dict[str, Any]) -> Any:
+        allowed = {item.name for item in fields(record_type)}
+        return record_type(**{key: value for key, value in data.items() if key in allowed})
 
     def _conn(self):
         return self._database.get_connection() if self._database is not None else None
@@ -149,11 +191,11 @@ class LanCoordinator:
             return
         try:
             for row in conn.execute("SELECT worker_json FROM lan_workers"):
-                data = json.loads(row[0]); self._workers[data["worker_id"]] = WorkerRecord(**data)
+                data = json.loads(row[0]); self._workers[data["worker_id"]] = self._load_record(WorkerRecord, data)
             for row in conn.execute("SELECT job_json FROM lan_jobs"):
-                data = json.loads(row[0]); job = LanJob(**data); self._jobs[job.job_id] = job; self._idempotency[job.idempotency_key] = job.job_id
+                data = json.loads(row[0]); job = self._load_record(LanJob, data); self._jobs[job.job_id] = job; self._idempotency[job.idempotency_key] = job.job_id
             for row in conn.execute("SELECT download_json FROM lan_downloads"):
-                data = json.loads(row[0]); item = DownloadApproval(**data); self._downloads[item.request_id] = item
+                data = json.loads(row[0]); item = self._load_record(DownloadApproval, data); self._downloads[item.request_id] = item
         except Exception:
             # A pre-v3 database is migrated before the coordinator is created.
             return
@@ -166,12 +208,139 @@ class LanCoordinator:
     def _persist_job(self, job: LanJob) -> None:
         conn = self._conn()
         if conn is not None:
-            conn.execute("INSERT OR REPLACE INTO lan_jobs(job_id, idempotency_key, job_json, updated_at) VALUES (?, ?, ?, ?)", (job.job_id, job.idempotency_key, json.dumps(asdict(job), ensure_ascii=False), time.time()))
+            conn.execute(
+                """INSERT OR REPLACE INTO lan_jobs(
+                    job_id, idempotency_key, job_json, updated_at, attempt, max_attempts,
+                    lease_id, lease_expires_at, heartbeat_at, started_at, finished_at,
+                    current_stage, result_json, artifacts_json, protocol_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (job.job_id, job.idempotency_key, json.dumps(asdict(job), ensure_ascii=False),
+                 time.time(), job.attempt, job.max_attempts, job.lease_id,
+                 job.lease_expires_at, job.heartbeat_at, job.started_at, job.finished_at,
+                 job.current_stage, json.dumps(job.result, ensure_ascii=False) if job.result is not None else None,
+                 json.dumps(job.artifacts, ensure_ascii=False), job.protocol_version),
+            )
 
     def _persist_download(self, item: DownloadApproval) -> None:
         conn = self._conn()
         if conn is not None:
             conn.execute("INSERT OR REPLACE INTO lan_downloads(request_id, download_json, updated_at) VALUES (?, ?, ?)", (item.request_id, json.dumps(asdict(item), ensure_ascii=False), time.time()))
+
+    @staticmethod
+    def _worker_supports(worker: WorkerRecord, job_type: str) -> bool:
+        capabilities = worker.capabilities
+        if not capabilities:
+            return True
+        if job_type in capabilities:
+            return bool(capabilities[job_type])
+        # Older workers reported hardware/features rather than explicit job types.
+        legacy_keys = {"cuda", "downloader"}
+        if job_type in {"ocr", "translate", "translation", "download"} and set(capabilities).issubset(legacy_keys):
+            return True
+        return False
+
+    @staticmethod
+    def _job_stages(job: LanJob) -> set[str]:
+        return set(job.stage_plan or [job.job_type])
+
+    @staticmethod
+    def _job_video_bytes(job: LanJob) -> int:
+        value = job.metrics.get("video_size_bytes", 0)
+        if value:
+            return max(0, int(value))
+        for artifact in (job.package or {}).get("artifacts", []):
+            if artifact.get("kind") == "source":
+                return max(0, int(artifact.get("size_bytes") or 0))
+        return 0
+
+    def _worker_has_resources(self, worker: WorkerRecord, job: LanJob) -> bool:
+        if worker.slots_available is not None and worker.slots_available <= 0:
+            return False
+        video_bytes = self._job_video_bytes(job)
+        required_disk = video_bytes * 3 if video_bytes >= LARGE_VIDEO_BYTES else STANDARD_VIDEO_MIN_DISK_BYTES
+        if worker.disk_free_bytes is not None and worker.disk_free_bytes > 0 and worker.disk_free_bytes < required_disk:
+            return False
+        gpu_stages = self._job_stages(job) & GPU_PREFERRED_STAGES
+        if not gpu_stages or not self._worker_has_cuda(worker):
+            return True
+        required_vram = LARGE_VIDEO_MIN_VRAM_MB if video_bytes >= LARGE_VIDEO_BYTES else STANDARD_VIDEO_MIN_VRAM_MB
+        reported_vram = worker.vram_free_mb if worker.vram_free_mb is not None else worker.vram_mb
+        return reported_vram <= 0 or reported_vram >= required_vram
+
+    @staticmethod
+    def _worker_has_cuda(worker: WorkerRecord) -> bool:
+        return bool(worker.capabilities.get("cuda"))
+
+    def _eligible_workers(self, job_type: str, job: Optional[LanJob] = None) -> list[WorkerRecord]:
+        now = time.time()
+        return [
+            worker for worker in self._workers.values()
+            if worker.status == "online" and (now - worker.last_seen) <= 30.0
+            and self._worker_supports(worker, job_type)
+            and (job is None or self._worker_has_resources(worker, job))
+        ]
+
+    def _select_worker(self, candidates: list[WorkerRecord], job: LanJob) -> Optional[WorkerRecord]:
+        if not candidates:
+            return None
+        stages = self._job_stages(job)
+        if stages & GPU_PREFERRED_STAGES:
+            cuda_workers = [worker for worker in candidates if self._worker_has_cuda(worker)]
+            if cuda_workers:
+                candidates = cuda_workers
+        elif stages & CPU_PREFERRED_STAGES:
+            cpu_workers = [worker for worker in candidates if not self._worker_has_cuda(worker)]
+            if cpu_workers:
+                candidates = cpu_workers
+        return min(candidates, key=lambda worker: worker.queue_depth)
+
+    def _assign_capable_worker(self, job: LanJob) -> None:
+        current = self._workers.get(job.worker_id)
+        if (current and current.status == "online" and (time.time() - current.last_seen) <= 30.0
+                and self._worker_supports(current, job.job_type)
+                and self._worker_has_resources(current, job)):
+            return
+        selected = self._select_worker(self._eligible_workers(job.job_type, job), job)
+        if selected:
+            job.worker_id = selected.worker_id
+
+    def _clear_worker_job(self, job: LanJob) -> None:
+        worker = self._workers.get(job.worker_id)
+        if worker and worker.active_job_id == job.job_id:
+            worker.active_job_id = None
+            self._persist_worker(worker)
+
+    def _expire_running_jobs(self, now: Optional[float] = None) -> list[LanJob]:
+        now = time.time() if now is None else now
+        changed: list[LanJob] = []
+        for job in self._jobs.values():
+            if job.status != "running" or job.lease_expires_at is None or job.lease_expires_at > now:
+                continue
+            self._clear_worker_job(job)
+            job.lease_id = None
+            job.lease_expires_at = None
+            job.heartbeat_at = None
+            job.updated_at = now
+            if job.attempt < job.max_attempts:
+                job.status = "queued"
+                job.error = "Worker lease expired; job requeued"
+                job.current_stage = None
+                self._assign_capable_worker(job)
+                worker = self._workers.get(job.worker_id)
+                if worker:
+                    worker.queue_depth += 1
+                    self._persist_worker(worker)
+            else:
+                job.status = "failed"
+                job.error = "Worker lease expired; maximum attempts reached"
+                job.finished_at = now
+            self._persist_job(job)
+            changed.append(job)
+        return changed
+
+    def reap_expired_jobs(self) -> list[LanJob]:
+        with self._lock:
+            return self._expire_running_jobs()
 
     def register_worker(self, payload: Dict[str, Any]) -> WorkerRecord:
         worker_id = str(payload.get("worker_id") or "").strip()
@@ -187,7 +356,13 @@ class LanCoordinator:
                 app_version=str(payload.get("app_version") or ""),
                 model_version=str(payload.get("model_version") or ""),
                 gpu_name=str(payload.get("gpu_name") or ""),
-                vram_mb=int(payload.get("vram_mb") or 0),
+                vram_mb=int(payload.get("vram_mb") or (current.vram_mb if current else 0)),
+                vram_free_mb=(int(payload["vram_free_mb"]) if payload.get("vram_free_mb") is not None
+                              else (current.vram_free_mb if current else None)),
+                disk_free_bytes=(int(payload["disk_free_bytes"]) if payload.get("disk_free_bytes") is not None
+                                 else (current.disk_free_bytes if current else None)),
+                slots_available=(int(payload["slots_available"]) if payload.get("slots_available") is not None
+                                 else (current.slots_available if current else None)),
                 capabilities=dict(payload.get("capabilities") or (current.capabilities if current else {})),
                 status="online",
                 active_job_id=current.active_job_id if current else None,
@@ -199,6 +374,7 @@ class LanCoordinator:
 
     def heartbeat(self, worker_id: str, payload: Optional[Dict[str, Any]] = None) -> WorkerRecord:
         with self._lock:
+            self._expire_running_jobs()
             worker = self._workers.get(worker_id)
             if worker is None:
                 raise KeyError(worker_id)
@@ -211,15 +387,57 @@ class LanCoordinator:
             if "queue_depth" in payload:
                 worker.queue_depth = max(0, int(payload["queue_depth"]))
             if "active_job_id" in payload:
-                worker.active_job_id = payload["active_job_id"]
+                active_job_id = payload["active_job_id"]
+                if active_job_id is not None and active_job_id not in self._jobs:
+                    raise LanStateError("active_job_id không tồn tại")
+                worker.active_job_id = active_job_id
             if "gpu_name" in payload:
                 worker.gpu_name = str(payload["gpu_name"])
             if "vram_mb" in payload:
                 worker.vram_mb = int(payload["vram_mb"])
+            if "vram_free_mb" in payload:
+                worker.vram_free_mb = int(payload["vram_free_mb"])
+            if "disk_free_bytes" in payload:
+                worker.disk_free_bytes = int(payload["disk_free_bytes"])
+            if "slots_available" in payload:
+                worker.slots_available = max(0, int(payload["slots_available"]))
+            if "capabilities" in payload and isinstance(payload["capabilities"], dict):
+                worker.capabilities = dict(payload["capabilities"])
             if "last_error" in payload:
                 worker.last_error = str(payload["last_error"]) if payload["last_error"] else None
+            active_job_id = str(payload.get("job_id") or worker.active_job_id or "")
+            if active_job_id:
+                job = self._jobs.get(active_job_id)
+                if job is None or job.worker_id != worker_id or job.status != "running":
+                    raise LanStateError("Job heartbeat không ở trạng thái running của worker")
+                supplied_lease = payload.get("lease_id")
+                if not supplied_lease:
+                    raise LanLeaseError("lease_id là bắt buộc khi heartbeat job đang chạy")
+                if supplied_lease != job.lease_id:
+                    raise LanLeaseError("Lease không còn hợp lệ")
+                now = time.time()
+                job.heartbeat_at = now
+                job.lease_expires_at = now + self.lease_seconds
+                job.updated_at = now
+                self._persist_job(job)
             self._persist_worker(worker)
             return worker
+
+    def heartbeat_job_lease(self, worker_id: str, job_id: str, *, lease_seconds: float = 30.0) -> LanJob:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.worker_id != worker_id:
+                raise KeyError(job_id)
+            if job.status == "cancelled":
+                return job
+            if job.status != "running":
+                raise LanStateError("Job không ở trạng thái running")
+            now = time.time()
+            job.heartbeat_at = now
+            job.lease_expires_at = now + max(5.0, float(lease_seconds))
+            job.updated_at = now
+            self._persist_job(job)
+            return job
 
     def set_worker_status(self, worker_id: str, status: str) -> WorkerRecord:
         if status not in {"online", "draining", "disabled"}:
@@ -245,95 +463,174 @@ class LanCoordinator:
             if existing_id:
                 return self._jobs[existing_id]
             job_id = str(payload.get("job_id") or f"lan-{int(time.time() * 1000)}")
+            job_type = str(payload.get("job_type") or "ocr").strip()
             worker_id = str(payload.get("worker_id") or "").strip()
-            if not worker_id:
-                candidates = [worker for worker in self._workers.values() if worker.status == "online" and (time.time() - worker.last_seen) <= 30.0]
-                if not candidates:
-                    raise KeyError("no-online-worker")
-                worker_id = min(candidates, key=lambda worker: worker.queue_depth).worker_id
-            if worker_id not in self._workers:
-                raise KeyError(worker_id)
+            max_attempts = int(payload.get("max_attempts") or 3)
+            if max_attempts < 1:
+                raise ValueError("max_attempts phải lớn hơn hoặc bằng 1")
             job = LanJob(
                 job_id=job_id,
                 project_id=str(payload.get("project_id") or "").strip(),
                 worker_id=worker_id,
-                job_type=str(payload.get("job_type") or "ocr"),
+                job_type=job_type,
                 idempotency_key=key,
                 profile=str(payload.get("profile") or "full_speed_quality"),
                 video_fingerprint=str(payload.get("video_fingerprint") or ""),
+                max_attempts=max_attempts,
+                metrics=dict(payload.get("metrics") or {}),
+                protocol_version=(str(payload.get("protocol_version") or PROTOCOL_VERSION)
+                                  if payload.get("package") is not None else None),
+                stage_plan=list(payload.get("stage_plan") or []),
+                package=dict(payload["package"]) if isinstance(payload.get("package"), dict) else None,
             )
             if not job.project_id:
                 raise ValueError("project_id không được để trống")
+            if not worker_id:
+                selected = self._select_worker(self._eligible_workers(job_type, job), job)
+                if selected is None:
+                    raise KeyError("no-capable-worker")
+                job.worker_id = selected.worker_id
+            worker = self._workers.get(job.worker_id)
+            if worker is None:
+                raise KeyError(job.worker_id)
+            if not self._worker_supports(worker, job.job_type):
+                raise LanStateError("Worker không hỗ trợ job_type yêu cầu")
+            if not self._worker_has_resources(worker, job):
+                raise LanStateError("Worker không đủ tài nguyên cho job yêu cầu")
             self._jobs[job.job_id] = job
             self._idempotency[key] = job.job_id
-            self._workers[worker_id].queue_depth += 1
-            self._persist_worker(self._workers[worker_id])
+            worker.queue_depth += 1
+            self._persist_worker(worker)
             self._persist_job(job)
             return job
 
     def update_job(self, job_id: str, payload: Dict[str, Any]) -> LanJob:
         with self._lock:
+            self._expire_running_jobs()
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(job_id)
-            if "status" in payload:
-                job.status = str(payload["status"])
+            supplied_lease = payload.get("lease_id")
+            worker_id = str(payload.get("worker_id") or "").strip()
+            if worker_id:
+                if worker_id != job.worker_id:
+                    raise LanLeaseError("Worker không sở hữu job này")
+                if job.status == "running" and not supplied_lease:
+                    raise LanLeaseError("lease_id là bắt buộc khi worker cập nhật job đang chạy")
+            if supplied_lease is not None and supplied_lease != job.lease_id:
+                raise LanLeaseError("Lease không còn hợp lệ")
+            previous_status = job.status
+            requested_status = str(payload["status"]) if "status" in payload else job.status
+            if requested_status not in VALID_JOB_STATUSES:
+                raise ValueError("Trạng thái job không hợp lệ")
+            if job.status in TERMINAL_JOB_STATUSES and requested_status != job.status:
+                raise LanStateError("Không thể thay đổi job đã kết thúc")
+            if requested_status == "running" and job.status not in {"queued", "running"}:
+                raise LanStateError("Chuyển trạng thái job không hợp lệ")
+            job.status = requested_status
             if "progress" in payload:
                 job.progress = max(0.0, min(1.0, float(payload["progress"])))
             if "metrics" in payload and isinstance(payload["metrics"], dict):
                 job.metrics = dict(payload["metrics"])
             if "error" in payload:
                 job.error = str(payload["error"]) if payload["error"] else None
-            job.updated_at = time.time()
+            if "current_stage" in payload:
+                job.current_stage = str(payload["current_stage"]) if payload["current_stage"] else None
+            if "result" in payload:
+                if payload["result"] is not None and not isinstance(payload["result"], dict):
+                    raise ValueError("result phải là object")
+                job.result = dict(payload["result"]) if payload["result"] is not None else None
+            if "artifacts" in payload:
+                if not isinstance(payload["artifacts"], list):
+                    raise ValueError("artifacts phải là danh sách")
+                job.artifacts = list(payload["artifacts"])
+            if "lease_expires_at" in payload:
+                job.lease_expires_at = (float(payload["lease_expires_at"])
+                                        if payload["lease_expires_at"] is not None else None)
+            now = time.time()
+            if job.status in TERMINAL_JOB_STATUSES:
+                job.finished_at = job.finished_at or now
+                job.lease_id = None
+                job.lease_expires_at = None
+                job.heartbeat_at = None
+                worker = self._workers.get(job.worker_id)
+                if previous_status == "queued" and worker:
+                    worker.queue_depth = max(0, worker.queue_depth - 1)
+                    self._persist_worker(worker)
+                self._clear_worker_job(job)
+            job.updated_at = now
             self._persist_job(job)
             return job
 
     def cancel_job(self, job_id: str) -> LanJob:
-        job = self.update_job(job_id, {"status": "cancelled"})
-        with self._lock:
-            worker = self._workers.get(job.worker_id)
-            if worker and worker.active_job_id == job_id:
-                worker.active_job_id = None
-                worker.queue_depth = max(0, worker.queue_depth - 1)
-                self._persist_worker(worker)
-        return job
+        return self.update_job(job_id, {"status": "cancelled"})
 
-    def retry_job(self, job_id: str) -> LanJob:
+    def retry_job(self, job_id: str, *, stage_plan: Optional[list[str]] = None) -> LanJob:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(job_id)
-            if job.status not in {"failed", "cancelled"}:
-                raise ValueError("Chỉ có thể retry job failed hoặc cancelled")
+            if job.status not in {"failed", "cancelled", "completed"}:
+                raise ValueError("Chỉ có thể retry job đã kết thúc")
+            if stage_plan is not None:
+                job.stage_plan = list(stage_plan)
+                if job.package is not None:
+                    job.package = {**job.package, "stage_plan": list(stage_plan)}
             current_worker = self._workers.get(job.worker_id)
-            previous_worker_id = job.worker_id
             if (current_worker is None or current_worker.status in {"disabled", "draining"}
-                    or (time.time() - current_worker.last_seen) > 30.0):
-                candidates = [worker for worker in self._workers.values()
-                              if worker.status == "online" and (time.time() - worker.last_seen) <= 30.0]
-                if candidates:
-                    job.worker_id = min(candidates, key=lambda worker: worker.queue_depth).worker_id
-            if job.worker_id != previous_worker_id:
-                target_worker = self._workers.get(job.worker_id)
-                if target_worker:
-                    target_worker.queue_depth += 1
-                    self._persist_worker(target_worker)
-            elif current_worker:
-                current_worker.queue_depth += 1
-                self._persist_worker(current_worker)
+                    or (time.time() - current_worker.last_seen) > 30.0
+                    or not self._worker_supports(current_worker, job.job_type)
+                    or not self._worker_has_resources(current_worker, job)):
+                selected = self._select_worker(self._eligible_workers(job.job_type, job), job)
+                if selected:
+                    job.worker_id = selected.worker_id
+            target_worker = self._workers.get(job.worker_id)
+            if target_worker is None or not self._worker_has_resources(target_worker, job):
+                raise LanStateError("Không có worker đủ tài nguyên để chạy lại job")
+            target_worker.queue_depth += 1
+            self._persist_worker(target_worker)
             job.status = "queued"
             job.progress = 0.0
             job.error = None
+            job.lease_id = None
+            job.lease_expires_at = None
+            job.heartbeat_at = None
+            job.started_at = None
+            job.finished_at = None
+            job.current_stage = None
+            job.result = None
             job.updated_at = time.time()
             self._persist_job(job)
             return job
 
     def list_jobs(self, status: Optional[str] = None) -> list[Dict[str, Any]]:
         with self._lock:
+            self._expire_running_jobs()
             jobs = self._jobs.values()
             if status:
                 jobs = [j for j in jobs if j.status == status]
             return [job.to_dict() for job in jobs]
+
+    def overview(self) -> Dict[str, Any]:
+        with self._lock:
+            self._expire_running_jobs()
+            workers = [worker.to_dict() for worker in self._workers.values()]
+            jobs = [job.to_dict() for job in self._jobs.values()]
+            downloads = [item.to_dict() for item in self._downloads.values()]
+            return {
+                "protocol_version": LAN_PROTOCOL_VERSION,
+                "workers": workers,
+                "jobs": jobs,
+                "downloads": downloads,
+                "counts": {
+                    "workers": len(workers),
+                    "online_workers": sum(1 for worker in workers if worker["is_online"] and worker["status"] == "online"),
+                    "queued_jobs": sum(1 for job in jobs if job["status"] == "queued"),
+                    "running_jobs": sum(1 for job in jobs if job["status"] == "running"),
+                    "failed_jobs": sum(1 for job in jobs if job["status"] == "failed"),
+                    "pending_downloads": sum(1 for item in downloads if item["status"] in {"preview_ready", "approved", "downloading"}),
+                },
+            }
 
     def get_job(self, job_id: str) -> LanJob:
         with self._lock:
@@ -344,17 +641,30 @@ class LanCoordinator:
     def claim_next_job(self, worker_id: str) -> Optional[LanJob]:
         """Atomically claim the oldest queued job assigned to a worker."""
         with self._lock:
+            self._expire_running_jobs()
             if worker_id not in self._workers:
                 raise KeyError(worker_id)
-            if self._workers[worker_id].status in {"draining", "disabled"}:
+            worker = self._workers[worker_id]
+            if worker.status in {"draining", "disabled"} or worker.active_job_id:
                 return None
-            queued = [job for job in self._jobs.values() if job.worker_id == worker_id and job.status == "queued"]
+            queued = [
+                job for job in self._jobs.values()
+                if job.worker_id == worker_id and job.status == "queued"
+                and self._worker_supports(worker, job.job_type)
+                and self._worker_has_resources(worker, job)
+            ]
             if not queued:
                 return None
             job = min(queued, key=lambda item: item.created_at)
+            now = time.time()
             job.status = "running"
-            job.updated_at = time.time()
-            worker = self._workers[worker_id]
+            job.attempt += 1
+            job.lease_id = uuid.uuid4().hex
+            job.lease_expires_at = now + self.lease_seconds
+            job.heartbeat_at = now
+            job.started_at = job.started_at or now
+            job.finished_at = None
+            job.updated_at = now
             worker.active_job_id = job.job_id
             worker.queue_depth = max(0, worker.queue_depth - 1)
             self._persist_job(job)

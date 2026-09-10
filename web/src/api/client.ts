@@ -209,7 +209,7 @@ export class StudioApiClient {
     return res.json();
   }
 
-  async runPipeline(projectId: string, options?: { max_duration_seconds?: number; sync?: boolean; ocr_only?: boolean }): Promise<{ status: string; project_id: string }> {
+  async runPipeline(projectId: string, options?: { max_duration_seconds?: number; sync?: boolean; ocr_only?: boolean }): Promise<{ status: string; project_id: string; ocr_only?: boolean }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/pipeline/run`, {
       method: 'POST',
       headers: this.headers(),
@@ -1638,6 +1638,9 @@ export interface ExtractionSettings {
   anti_noise_h_max?: number;
   anti_noise_swt_cov_max?: number;
   anti_noise_lum_min?: number;
+  enable_adaptive_rescue?: boolean;
+  adaptive_rescue_mid_y?: number;
+  adaptive_rescue_mid_h?: number;
   enable_stroke_dhash_cache?: boolean;
   stroke_dhash_threshold?: number;
 

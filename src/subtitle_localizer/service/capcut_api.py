@@ -28,6 +28,7 @@ import urllib.error
 import uuid
 
 from subtitle_localizer.domain.models import SubtitleCueV1
+from subtitle_localizer.reconstruction.builder import normalize_sequential_cues
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,7 @@ class CapCutSubtitleClient:
                     )
                 )
         cues.sort(key=lambda x: x.start_pts)
-        return cues
+        return normalize_sequential_cues(cues)
 
     def extract_subtitles_from_audio(
         self,

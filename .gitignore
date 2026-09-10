@@ -42,6 +42,8 @@ gemini_keys_pool.json
 groq_keys_pool.json
 /uploads/
 /e2e_results/
+/screenshots_admin_worker/
+screenshots/
 .serena/
 *.db
 *.db-shm

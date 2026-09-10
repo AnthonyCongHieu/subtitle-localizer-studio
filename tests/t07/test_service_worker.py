@@ -92,6 +92,14 @@ class ServiceAndWorkerTest(unittest.TestCase):
             video_fingerprint="fp_worker",
             source_language="zh",
             target_language="vi",
+            custom_pipeline_settings={
+                "ocr": {
+                    "mode": "local",
+                    "engine": "rapidocr",
+                    "primary_backend": "rapidocr",
+                    "enable_nvdec_hwaccel": False,
+                }
+            },
         )
         self.repo.save_project(manifest)
 
@@ -122,6 +130,14 @@ class ServiceAndWorkerTest(unittest.TestCase):
             video_fingerprint="fp_worker_ocr_only",
             source_language="zh",
             target_language="vi",
+            custom_pipeline_settings={
+                "ocr": {
+                    "mode": "local",
+                    "engine": "rapidocr",
+                    "primary_backend": "rapidocr",
+                    "enable_nvdec_hwaccel": False,
+                }
+            },
         )
         self.repo.save_project(manifest)
 
@@ -608,6 +624,13 @@ class ServiceAndWorkerTest(unittest.TestCase):
                 video_fingerprint="fp_preservation",
                 source_language="zh",
                 target_language="vi",
+                custom_pipeline_settings={
+                    "ocr": {
+                        "mode": "api",
+                        "api_provider": "capcut",
+                        "api_fusion_mode": "api_only",
+                    }
+                },
             )
         )
 

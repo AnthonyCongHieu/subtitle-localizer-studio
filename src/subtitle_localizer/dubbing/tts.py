@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from subtitle_localizer.domain.models import SubtitleCueV1
+from subtitle_localizer.reconstruction.builder import normalize_sequential_cues
 from subtitle_localizer.dubbing.capcut_tts import (
     CAPCUT_VOICE_CATALOG,
     CapCutTTSClient,
@@ -673,6 +674,67 @@ def time_stretch_pcm(
     return res_int.astype(np.float32) / 32768.0
 
 
+def available_voiceover_slot(cue: SubtitleCueV1, next_cue: SubtitleCueV1 | None, mode: str) -> float:
+    """Return the stretch target for a cue.
+
+    Single-voice narration uses the time until the next cue so CapCut's ~200ms
+    end padding cannot spill into the following line.
+    """
+    slot = max(0.0, float(cue.end_pts) - float(cue.start_pts))
+    if next_cue is None:
+        return slot
+    until_next = float(next_cue.start_pts) - float(cue.start_pts)
+    if mode != "multi" and until_next > 0.05:
+        return until_next
+    return slot
+
+
+def fade_trim_pcm(
+    samples: np.ndarray,
+    max_samples: int,
+    fade_ms: float = 20.0,
+    sample_rate: int = 44100,
+) -> np.ndarray:
+    """Clip PCM to max_samples and fade the tail to avoid a click."""
+    if max_samples <= 0:
+        return samples[:0]
+    if len(samples) <= max_samples:
+        return samples
+    trimmed = np.array(samples[:max_samples], dtype=np.float32, copy=True)
+    fade_samples = min(len(trimmed), int(sample_rate * max(0.0, fade_ms) / 1000.0))
+    if fade_samples > 1:
+        trimmed[-fade_samples:] *= np.linspace(1.0, 0.0, fade_samples, dtype=np.float32)
+    return trimmed
+
+
+def mix_voice_pcm(
+    master: np.ndarray,
+    pcm: np.ndarray,
+    start_sample: int,
+    *,
+    mode: str = "single",
+    next_start_sample: int | None = None,
+) -> np.ndarray:
+    """Place one cue onto the master buffer.
+
+    Multi-voice mode keeps additive mixing for genuine overlap. Single-voice
+    mode trims to the next cue start so two narrations cannot stack.
+    """
+    if len(pcm) == 0:
+        return master
+    start_sample = max(0, int(start_sample))
+    placed = np.asarray(pcm, dtype=np.float32)
+    if mode != "multi" and next_start_sample is not None:
+        placed = fade_trim_pcm(placed, max(0, int(next_start_sample) - start_sample))
+        if len(placed) == 0:
+            return master
+    end_sample = start_sample + len(placed)
+    if end_sample > len(master):
+        master = np.pad(master, (0, end_sample - len(master)), mode="constant")
+    master[start_sample:end_sample] += placed
+    return master
+
+
 async def _synthesize_edge_tts(
     text: str,
     voice: str = "vi-VN-NamMinhNeural",
@@ -710,6 +772,59 @@ async def _synthesize_edge_tts(
     return b""
 
 
+def parse_speaking_rate(rate: str | float | None) -> float:
+    """Chuyển '+30%', '-10%', '1.15' thành hệ số tốc độ đọc (0.5 -> 2.0)."""
+    if rate is None:
+        return 1.0
+    if isinstance(rate, (int, float)):
+        value = float(rate)
+        if value <= 0:
+            return 1.0
+        if value <= 2.5:
+            return max(0.5, min(2.0, value))
+        return max(0.5, min(2.0, value / 100.0))
+    raw = str(rate).strip().replace("%", "")
+    if not raw:
+        return 1.0
+    try:
+        if raw.startswith("+"):
+            return max(0.5, min(2.0, 1.0 + float(raw[1:] or 0) / 100.0))
+        if raw.startswith("-"):
+            return max(0.5, min(2.0, 1.0 - float(raw[1:] or 0) / 100.0))
+        value = float(raw)
+        if value <= 0:
+            return 1.0
+        if value <= 2.5:
+            return max(0.5, min(2.0, value))
+        return max(0.5, min(2.0, value / 100.0))
+    except ValueError:
+        return 1.0
+
+
+def apply_speaking_rate_to_audio(audio_data: bytes, rate: str | float | None, sample_rate: int = 44100) -> bytes:
+    """Áp tốc độ đọc lên MP3 (dùng cho Gemini TTS không có tham số rate gốc)."""
+    factor = parse_speaking_rate(rate)
+    if not audio_data or abs(factor - 1.0) < 0.02:
+        return audio_data
+    pcm = _decode_mp3_to_pcm(audio_data, sample_rate=sample_rate)
+    if len(pcm) == 0:
+        return audio_data
+    stretched = time_stretch_pcm(pcm, speed_factor=factor, sample_rate=sample_rate)
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as handle:
+        temp_path = Path(handle.name)
+    try:
+        _encode_pcm_to_mp3(stretched, temp_path, sample_rate=sample_rate)
+        encoded = temp_path.read_bytes()
+        return encoded or audio_data
+    except Exception:
+        return audio_data
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
 async def synthesize_text(
     text: str,
     voice: str = "vi-VN-NamMinhNeural",
@@ -746,6 +861,7 @@ async def synthesize_text(
         try:
             client = GeminiTTSClient()
             audio_data = await client.synthesize(clean_text, voice=voice, style=prompt_style)
+            audio_data = apply_speaking_rate_to_audio(audio_data, rate)
         except Exception as ex:
             logger.warning(
                 f"Gemini TTS gặp lỗi ({ex}). Tự động Fallback sang Microsoft Edge-TTS..."
@@ -933,6 +1049,7 @@ async def generate_timed_voiceover(
     - 'multi': Lồng tiếng phân vai nhiều người (thoại nam đọc giọng Nam, thoại nữ đọc giọng Nữ).
     Tự động lọc rác thoại và co giãn thời lượng (Slot Time-Stretching 1.0x -> 1.45x).
     """
+    cues = normalize_sequential_cues(list(cues))
     valid_cues: List[tuple[SubtitleCueV1, str]] = []
     for c in cues:
         raw_text = (c.translated_text or c.source_text).strip()
@@ -991,7 +1108,7 @@ async def generate_timed_voiceover(
     results = await asyncio.gather(*tasks)
     results.sort(key=lambda r: r[0])
 
-    for idx, cue, cleaned_text, mp3_res in results:
+    for result_index, (idx, cue, cleaned_text, mp3_res) in enumerate(results):
         if not mp3_res:
             logger.warning(f"Bỏ qua câu {cue.cue_id} do không nhận được audio")
             continue
@@ -1000,9 +1117,10 @@ async def generate_timed_voiceover(
         if len(pcm_samples) == 0:
             continue
 
+        next_cue = results[result_index + 1][1] if result_index + 1 < len(results) else None
         # Co giãn khớp slot thời gian (Slot Time-Stretching 1.0x -> 1.45x)
         speech_dur = len(pcm_samples) / sample_rate
-        slot_dur = max(0.0, cue.end_pts - cue.start_pts)
+        slot_dur = available_voiceover_slot(cue, next_cue, mode)
         speed_factor = calculate_slot_stretch(
             speech_dur, slot_dur, min_rate=1.0, max_rate=max_stretch_rate
         )
@@ -1021,17 +1139,15 @@ async def generate_timed_voiceover(
             # Lưu đồng thời theo mã cue_id để endpoint GET /api/v1/projects/{id}/cues/{cue_id}/audio phát tức thì
             _encode_pcm_to_mp3(pcm_samples, cues_out_dir / f"{cue.cue_id}.mp3", sample_rate=sample_rate)
 
-        # Tính vị trí mẫu bắt đầu trong master buffer
         start_sample = max(0, int(cue.start_pts * sample_rate))
-        end_sample = start_sample + len(pcm_samples)
-
-        # Mở rộng buffer nếu câu thoại vượt quá thời lượng ban đầu
-        if end_sample > len(master_buffer):
-            extra = end_sample - len(master_buffer)
-            master_buffer = np.pad(master_buffer, (0, extra), mode="constant")
-
-        # Đặt mẫu âm thanh vào timeline
-        master_buffer[start_sample:end_sample] += pcm_samples
+        next_start_sample = None if next_cue is None else max(0, int(next_cue.start_pts * sample_rate))
+        master_buffer = mix_voice_pcm(
+            master_buffer,
+            pcm_samples,
+            start_sample,
+            mode=mode,
+            next_start_sample=next_start_sample,
+        )
 
     # Chuẩn hóa chống vỡ tiếng (Anti-clipping soft peak normalization) khi có nhiều nhân vật nói đè lên nhau
     if len(master_buffer) > 0:

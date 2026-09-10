@@ -7,7 +7,10 @@ from pathlib import Path
 
 from subtitle_localizer.persistence.database import Database
 from subtitle_localizer.persistence.repository import ProjectRepository
-from subtitle_localizer.service.lan_worker import LanWorkerAgent, build_pipeline_job_handler, build_download_handler, collect_worker_capabilities
+from subtitle_localizer.service.lan_worker import (
+    LanWorkerAgent, build_download_handler, build_protocol_job_handler,
+    collect_worker_capabilities,
+)
 
 
 def main() -> int:
@@ -19,6 +22,9 @@ def main() -> int:
     parser.add_argument("--token", default=os.getenv("SL_WORKER_TOKEN", ""))
     parser.add_argument("--database", default=os.getenv("SL_DATABASE", "subtitle_localizer.db"))
     parser.add_argument("--interval", type=float, default=5.0)
+    parser.add_argument("--concurrency", type=int, default=1, help="Số job LAN chạy đồng thời")
+    parser.add_argument("--workspace", type=Path, default=Path("worker_workspace"), help="Thư mục workspace cho job")
+    parser.add_argument("--output", type=Path, default=Path("output"), help="Thư mục artifact đầu ra")
     args = parser.parse_args()
     # Worker ID and coordinator URL are discoverable on the LAN.  A token is
     # still accepted (and recommended when the coordinator enforces auth),
@@ -26,9 +32,16 @@ def main() -> int:
     database = Database(Path(args.database))
     database.migrate()
     repository = ProjectRepository(database)
-    agent = LanWorkerAgent(args.coordinator, args.worker_id, args.token, interval_seconds=args.interval)
+    agent = LanWorkerAgent(
+        args.coordinator, args.worker_id, args.token, interval_seconds=args.interval,
+        data_root=args.workspace, max_concurrent_jobs=args.concurrency,
+    )
+    registration = collect_worker_capabilities(args.workspace, max_concurrent_jobs=args.concurrency)
     try:
-        agent.run(build_pipeline_job_handler(repository), build_download_handler(repository), collect_worker_capabilities())
+        agent.run(
+            build_protocol_job_handler(repository, workspace_root=args.workspace, output_root=args.output),
+            build_download_handler(repository), registration,
+        )
     except KeyboardInterrupt:
         agent.stop()
     finally:

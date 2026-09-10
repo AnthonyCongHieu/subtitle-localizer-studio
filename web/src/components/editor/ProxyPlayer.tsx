@@ -131,6 +131,17 @@ export const ProxyPlayer: React.FC<ProxyPlayerProps> = ({
 
   // Dynamic Auto-Fit Box based on active cue text length - compact and snug for 16:9 widescreen
   const dynamicBox = useMemo(() => {
+    // Nếu câu phụ đề hiện tại có bounding box động đã được dò chuẩn từ video:
+    if (activeCue?.style?.box) {
+      const b = activeCue.style.box;
+      return {
+        left: roiLeft,
+        top: `${(b.y * 100).toFixed(1)}%`,
+        width: roiWidth,
+        height: `${Math.max(region ? region.height * 100 : 8.6, b.height * 100).toFixed(1)}%`,
+      };
+    }
+
     // Multi-line detection: newline present or text > 42 chars
     const isMultiLine =
       (activeCue?.translated_text || '').includes('\n') ||
@@ -346,7 +357,7 @@ export const ProxyPlayer: React.FC<ProxyPlayerProps> = ({
                   width: dynamicBox.width,
                   height: dynamicBox.height,
                 }}
-                className="absolute border-2 border-dashed border-indigo-500/70 bg-indigo-500/5 pointer-events-none rounded transition-all duration-150 flex flex-col justify-between p-1 z-10"
+                className="absolute border-2 border-dashed border-indigo-500/70 bg-indigo-500/5 pointer-events-none rounded flex flex-col justify-between p-1 z-10"
               >
                 <span className="text-[9px] font-mono bg-indigo-900/80 text-indigo-200 px-1 rounded w-fit uppercase font-semibold">
                   ROI: {dynamicBox.left}, {dynamicBox.top} (W: {dynamicBox.width})
@@ -360,13 +371,14 @@ export const ProxyPlayer: React.FC<ProxyPlayerProps> = ({
             {/* Subtitle Overlay & Live Blur Mask */}
             {previewMode === 'mask_replace' && activeCue && (
               <div
+                key={activeCue.cue_id}
                 style={{
                   left: dynamicBox.left,
                   top: dynamicBox.top,
                   width: dynamicBox.width,
                   height: dynamicBox.height,
                 }}
-                className="absolute backdrop-blur-lg bg-black/95 rounded flex items-center justify-center px-2 py-0.5 z-20 pointer-events-none shadow-2xl transition-all duration-150 border border-zinc-800/80"
+                className="absolute backdrop-blur-lg bg-black/95 rounded flex items-center justify-center px-2 py-0.5 z-20 pointer-events-none shadow-2xl border border-zinc-800/80"
               >
                 <p className={`text-amber-300 font-extrabold text-center leading-snug drop-shadow-[0_2px_4px_rgba(0,0,0,1)] select-none whitespace-pre-line px-1.5 tracking-wide ${
                   (activeCue.translated_text || '').length > 40

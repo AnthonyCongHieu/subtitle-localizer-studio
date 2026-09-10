@@ -123,6 +123,15 @@ class AntiNoiseFunnel:
             raise ValueError("Hashes must be non-negative")
         return (int(first) ^ int(second)).bit_count()
 
+    def inspect_crop(self, crop_bgr: np.ndarray) -> Tuple[bool, str]:
+        """Inspect one detected box using the production anti-noise gates."""
+        if crop_bgr is None or not isinstance(crop_bgr, np.ndarray) or crop_bgr.size == 0:
+            return False, "empty_crop"
+        h, w = crop_bgr.shape[:2]
+        if h < 10 or w < 16:
+            return False, "too_small"
+        return self.is_valid_candidate(crop_bgr, w, h)
+
     def is_valid_candidate(self, crop_bgr: np.ndarray, w: int, h: int) -> Tuple[bool, str]:
         if not self.check_geometry(w, h):
             return False, "geometry_rejected"
@@ -132,3 +141,7 @@ class AntiNoiseFunnel:
         if cov > self.swt_cov_max:
             return False, f"swt_cov_rejected_{cov:.2f}"
         return True, "valid_subtitle"
+
+
+class AntiNoiseFilter(AntiNoiseFunnel):
+    """Production name for adaptive-band candidate inspection."""

@@ -114,7 +114,43 @@ class LanCoordinatorTests(unittest.TestCase):
         self.assertIsNotNone(completed.finished_at)
         self.assertIsNone(coordinator.list_workers()[0]["active_job_id"])
 
-    def test_cancel_clears_worker_active_job(self) -> None:
+    def test_worker_update_requires_active_lease_and_rejects_stale_worker(self) -> None:
+        coordinator = LanCoordinator()
+        coordinator.register_worker({"worker_id": "first"})
+        coordinator.register_worker({"worker_id": "second"})
+        job = coordinator.create_job({"project_id": "p", "worker_id": "first", "idempotency_key": "fenced-update"})
+        first_claim = coordinator.claim_next_job("first")
+        with self.assertRaises(ValueError):
+            coordinator.update_job(job.job_id, {"worker_id": "first", "status": "completed"})
+        first_claim.lease_expires_at = 0
+        coordinator.reap_expired_jobs()
+        self.assertEqual(coordinator.get_job(job.job_id).worker_id, "first")
+        second_job = coordinator.retry_job(job.job_id) if coordinator.get_job(job.job_id).status == "failed" else coordinator.get_job(job.job_id)
+        if second_job.worker_id == "first":
+            coordinator.set_worker_status("first", "disabled")
+            coordinator.update_job(job.job_id, {"status": "failed"})
+            second_job = coordinator.retry_job(job.job_id)
+        claimed = coordinator.claim_next_job(second_job.worker_id)
+        with self.assertRaises(ValueError):
+            coordinator.update_job(job.job_id, {"worker_id": "first", "lease_id": first_claim.lease_id, "status": "completed"})
+        completed = coordinator.update_job(job.job_id, {"worker_id": claimed.worker_id, "lease_id": claimed.lease_id, "status": "completed"})
+        self.assertEqual(completed.status, "completed")
+
+    def test_worker_agent_includes_worker_and_lease_for_terminal_update(self) -> None:
+        calls = []
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return b'{}'
+        def opener(request, timeout=15):
+            calls.append(json.loads((request.data or b"{}").decode("utf-8")))
+            return Response()
+        agent = LanWorkerAgent("http://coordinator", "worker", "token", opener=opener)
+        agent.update_job("job", lease_id="lease", status="completed")
+        self.assertEqual(calls[0]["worker_id"], "worker")
+        self.assertEqual(calls[0]["lease_id"], "lease")
+
+
         coordinator = LanCoordinator()
         coordinator.register_worker({"worker_id": "w"})
         job = coordinator.create_job({"project_id": "p", "worker_id": "w", "idempotency_key": "cancel-active"})
