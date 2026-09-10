@@ -66,8 +66,9 @@ interface StoredStudioState {
   subtitleLineHeight?: number;
   viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin';
   downloaderTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings';
-  settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch';
+  settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch' | 'router';
 }
+
 
 function getStoredStudioState(): StoredStudioState | null {
   try {
@@ -99,9 +100,12 @@ export const App: React.FC = () => {
   const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>(
     () => savedState?.downloaderTab || 'search'
   );
-  const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch'>(
+  const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch' | 'router'>(
     () => savedState?.settingsTab || 'ocr'
   );
+
+
+
 
   // Quản lý Chuẩn Cấu Hình (Preset Profiles)
   const [presets, setPresets] = useState<PresetProfile[]>(() => getStoredPresets());
@@ -1057,6 +1061,52 @@ export const App: React.FC = () => {
     appLogger.success(`Đã nạp video từ máy tính: ${file.name}`, 'Video');
   };
 
+  // Xử lý nạp video và kết quả từ Admin Worker Job vào Studio Editor
+  const handleOpenJobInStudio = useCallback(
+    (projectId?: string, videoUrl?: string, initialCues?: SubtitleCueV1[]) => {
+      if (projectId) {
+        const existing = projects.find((p) => p.project_id === projectId);
+        if (existing) {
+          selectProject(existing);
+          if (initialCues && initialCues.length > 0) {
+            setCues(initialCues);
+          }
+          if (videoUrl) {
+            setVideoUrl(videoUrl);
+          }
+          setViewMode('studio');
+          appLogger.success(`Đã nạp dự án ${existing.title} vào Studio Editor`, 'Admin LAN');
+          return;
+        }
+      }
+
+      // Dự án mới từ Worker hoàn thành
+      const lanProj: ProjectManifestV1 = {
+        project_id: projectId || `proj-lan-${Date.now()}`,
+        title: `Dự án LAN: ${projectId || 'Video Hoàn Thành'}`,
+        source_video_path: videoUrl || '',
+        video_fingerprint: `fp-${Date.now()}`,
+        source_language: 'auto',
+        target_language: 'vi',
+        active_revision: 1,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      };
+
+      setProjects((prev) => [lanProj, ...prev]);
+      setActiveProject(lanProj);
+      if (videoUrl) {
+        setVideoUrl(videoUrl);
+      }
+      if (initialCues && initialCues.length > 0) {
+        setCues(initialCues);
+      }
+      setViewMode('studio');
+      appLogger.success('Đã đưa video và phụ đề hoàn thành vào Studio Editor!', 'Admin LAN');
+    },
+    [projects, selectProject]
+  );
+
   // Tự động lưu snapshot trạng thái làm việc vào localStorage để giữ nguyên khi F5
   useEffect(() => {
     saveStudioActiveState({
@@ -1512,7 +1562,10 @@ export const App: React.FC = () => {
       {/* ========================================================================= */}
       <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden relative">
         {viewMode === 'admin' ? (
-          <AdminLanView onBack={() => setViewMode('dashboard')} />
+          <AdminLanView
+            onBack={() => setViewMode('dashboard')}
+            onOpenInStudio={handleOpenJobInStudio}
+          />
         ) : viewMode === 'downloader' ? (
           <VideoDownloaderHub
             initialTab={downloaderTab || 'queue'}

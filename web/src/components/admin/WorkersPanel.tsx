@@ -1,4 +1,4 @@
-import { Ban, PauseCircle, PlayCircle } from 'lucide-react';
+import { Ban, PauseCircle, PlayCircle, Trash2 } from 'lucide-react';
 import { LanWorker } from '../../types/api';
 import { EmptyState, focusRing, formatTime, StatusBadge } from './LanUi';
 
@@ -6,6 +6,7 @@ type Props = {
   workers: LanWorker[];
   isPending: (key: string) => boolean;
   onStatus: (worker: LanWorker, status: 'online' | 'draining' | 'disabled') => void;
+  onDelete?: (worker: LanWorker) => void;
 };
 
 function Capabilities({ worker }: { worker: LanWorker }) {
@@ -14,11 +15,35 @@ function Capabilities({ worker }: { worker: LanWorker }) {
   return <div className="flex flex-wrap gap-1">{items.map(([name, value]) => <span key={name} className="rounded bg-indigo-950/60 px-1.5 py-0.5 text-[11px] text-indigo-300">{name}{value === true ? '' : `: ${String(value)}`}</span>)}</div>;
 }
 
-function WorkerActions({ worker, isPending, onStatus }: Props & { worker: LanWorker }) {
+function WorkerActions({ worker, isPending, onStatus, onDelete }: Props & { worker: LanWorker }) {
   const busy = isPending(`worker:${worker.worker_id}`);
   const base = `rounded-md px-2.5 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
-  if (worker.status === 'disabled') return <button disabled={busy} aria-label={`Bật worker ${worker.worker_id}`} onClick={() => onStatus(worker, 'online')} className={`${base} bg-emerald-800 hover:bg-emerald-700`}><PlayCircle className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />{busy ? 'Đang bật…' : 'Bật'}</button>;
-  return <div className="flex flex-wrap gap-1.5"><button disabled={busy} aria-label={`${worker.status === 'draining' ? 'Cho nhận job' : 'Drain'} worker ${worker.worker_id}`} onClick={() => onStatus(worker, worker.status === 'draining' ? 'online' : 'draining')} className={`${base} bg-slate-800 hover:bg-slate-700`}>{worker.status === 'draining' ? <PlayCircle className="mr-1 inline h-3.5 w-3.5" /> : <PauseCircle className="mr-1 inline h-3.5 w-3.5" />}{worker.status === 'draining' ? 'Nhận job' : 'Drain'}</button><button disabled={busy} aria-label={`Vô hiệu hóa worker ${worker.worker_id}`} onClick={() => onStatus(worker, 'disabled')} className={`${base} bg-rose-950 text-rose-300 hover:bg-rose-900`}><Ban className="h-3.5 w-3.5" aria-hidden="true" /><span className="sr-only">Vô hiệu hóa</span></button></div>;
+  const isOfflineOrDisabled = !worker.is_online || worker.status === 'disabled';
+
+  return <div className="flex flex-wrap items-center gap-1.5">
+    {worker.status === 'disabled' ? (
+      <button disabled={busy} aria-label={`Bật worker ${worker.worker_id}`} onClick={() => onStatus(worker, 'online')} className={`${base} bg-emerald-800 hover:bg-emerald-700`}>
+        <PlayCircle className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />{busy ? 'Đang bật…' : 'Bật'}
+      </button>
+    ) : (
+      <>
+        <button disabled={busy} aria-label={`${worker.status === 'draining' ? 'Cho nhận job' : 'Drain'} worker ${worker.worker_id}`} onClick={() => onStatus(worker, worker.status === 'draining' ? 'online' : 'draining')} className={`${base} bg-slate-800 hover:bg-slate-700`}>
+          {worker.status === 'draining' ? <PlayCircle className="mr-1 inline h-3.5 w-3.5" /> : <PauseCircle className="mr-1 inline h-3.5 w-3.5" />}
+          {worker.status === 'draining' ? 'Nhận job' : 'Drain'}
+        </button>
+        <button disabled={busy} aria-label={`Vô hiệu hóa worker ${worker.worker_id}`} onClick={() => onStatus(worker, 'disabled')} className={`${base} bg-rose-950 text-rose-300 hover:bg-rose-900`}>
+          <Ban className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="sr-only">Vô hiệu hóa</span>
+        </button>
+      </>
+    )}
+    {isOfflineOrDisabled && onDelete && (
+      <button disabled={busy} aria-label={`Xóa worker ${worker.worker_id}`} title="Xóa worker offline / mock" onClick={() => onDelete(worker)} className={`${base} bg-slate-800 text-rose-400 hover:bg-rose-950 hover:text-rose-200`}>
+        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        <span className="sr-only">Xóa</span>
+      </button>
+    )}
+  </div>;
 }
 
 export function WorkersPanel(props: Props) {

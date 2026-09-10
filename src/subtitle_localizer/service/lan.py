@@ -226,6 +226,16 @@ class LanCoordinator:
         if conn is not None:
             conn.execute("INSERT OR REPLACE INTO lan_downloads(request_id, download_json, updated_at) VALUES (?, ?, ?)", (item.request_id, json.dumps(asdict(item), ensure_ascii=False), time.time()))
 
+    def _delete_worker(self, worker_id: str) -> None:
+        conn = self._conn()
+        if conn is not None:
+            conn.execute("DELETE FROM lan_workers WHERE worker_id = ?", (worker_id,))
+
+    def _delete_job(self, job_id: str) -> None:
+        conn = self._conn()
+        if conn is not None:
+            conn.execute("DELETE FROM lan_jobs WHERE job_id = ?", (job_id,))
+
     @staticmethod
     def _worker_supports(worker: WorkerRecord, job_type: str) -> bool:
         capabilities = worker.capabilities
@@ -450,6 +460,23 @@ class LanCoordinator:
             self._persist_worker(worker)
             return worker
 
+    def delete_worker(self, worker_id: str) -> None:
+        """Xóa worker đã offline hoặc disabled và không còn job đang chạy."""
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if worker is None:
+                raise KeyError(worker_id)
+            if worker.status == "online" and (time.time() - worker.last_seen) <= 30.0:
+                raise ValueError("Không thể xóa worker đang online và hoạt động")
+            if worker.active_job_id:
+                raise LanStateError("Không thể xóa worker đang thực thi job")
+            # Nếu có job gán cho worker này chưa chạy, chuyển worker_id của job về None hoặc unassign
+            for job in self._jobs.values():
+                if job.worker_id == worker_id and job.status in {"queued", "running"}:
+                    raise LanStateError("Không thể xóa worker còn job chưa hoàn thành trong queue")
+            del self._workers[worker_id]
+            self._delete_worker(worker_id)
+
     def list_workers(self) -> list[Dict[str, Any]]:
         with self._lock:
             return [worker.to_dict() for worker in self._workers.values()]
@@ -602,6 +629,26 @@ class LanCoordinator:
             job.updated_at = time.time()
             self._persist_job(job)
             return job
+
+    def delete_job(self, job_id: str) -> None:
+        """Xóa job khỏi hàng đợi hoặc lịch sử."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(job_id)
+            if job.status == "running":
+                raise LanStateError("Không thể xóa job đang chạy. Hãy hủy job trước.")
+            # Giảm queue_depth của worker nếu job đang ở trạng thái queued
+            if job.status == "queued" and job.worker_id:
+                worker = self._workers.get(job.worker_id)
+                if worker:
+                    worker.queue_depth = max(0, worker.queue_depth - 1)
+                    self._persist_worker(worker)
+            self._clear_worker_job(job)
+            if job.idempotency_key in self._idempotency:
+                del self._idempotency[job.idempotency_key]
+            del self._jobs[job_id]
+            self._delete_job(job_id)
 
     def list_jobs(self, status: Optional[str] = None) -> list[Dict[str, Any]]:
         with self._lock:

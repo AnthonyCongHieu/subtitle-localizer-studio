@@ -1214,6 +1214,33 @@ export class StudioApiClient {
   async retryAdminJob(jobId: string): Promise<LanJob> {
     return this.adminRequest<LanJob>(`/admin/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' }, 'Không thể retry job');
   }
+
+  async deleteWorker(workerId: string): Promise<void> {
+    return this.adminRequest<void>(`/admin/workers/${encodeURIComponent(workerId)}`, { method: 'DELETE' }, 'Không thể xóa worker');
+  }
+
+  async createAdminJob(payload: {
+    project_id: string;
+    job_type: string;
+    idempotency_key: string;
+    worker_id?: string;
+    profile?: string;
+    video_fingerprint?: string;
+    max_attempts?: number;
+    protocol_version?: string;
+    stage_plan?: string[];
+    package?: Record<string, unknown>;
+    metrics?: Record<string, unknown>;
+  }): Promise<LanJob> {
+    return this.adminRequest<LanJob>('/admin/jobs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }, 'Không thể tạo job mới');
+  }
+
+  async deleteAdminJob(jobId: string): Promise<void> {
+    return this.adminRequest<void>(`/admin/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }, 'Không thể xóa job');
+  }
 }
 
 export interface DirectoryValidateResponse {

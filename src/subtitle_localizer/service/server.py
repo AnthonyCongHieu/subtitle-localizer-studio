@@ -613,6 +613,21 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
 
+    @app.delete("/api/v1/admin/workers/{worker_id}")
+    async def delete_admin_worker(worker_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            lan.delete_worker(worker_id)
+            await broadcast_lan("worker_deleted", {"worker_id": worker_id})
+            await broadcast_lan("lan_overview", lan.overview())
+            return {"status": "success", "worker_id": worker_id}
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except LanStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Worker không tồn tại") from error
+
     @app.get("/api/v1/admin/overview")
     async def lan_overview(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
         verify_auth(authorization)
@@ -824,6 +839,19 @@ def create_app(
             await broadcast_lan("job_retried", result, job_id=job_id)
             return result
         except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job không tồn tại") from error
+
+    @app.delete("/api/v1/admin/jobs/{job_id}")
+    async def delete_lan_job(job_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        verify_auth(authorization)
+        try:
+            lan.delete_job(job_id)
+            await broadcast_lan("job_deleted", {"job_id": job_id})
+            await broadcast_lan("lan_overview", lan.overview())
+            return {"status": "success", "job_id": job_id}
+        except LanStateError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Job không tồn tại") from error

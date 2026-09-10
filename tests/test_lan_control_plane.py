@@ -333,4 +333,13 @@ class LanApiTests(unittest.TestCase):
             updated = client.patch("/api/v1/admin/downloads/download-1", json={"status": "downloaded"}, headers=headers)
             self.assertEqual(updated.status_code, 200)
             self.assertEqual(updated.json()["status"], "downloaded")
+
+            # Kiểm thử xóa job
+            self.assertEqual(client.delete(f"/api/v1/admin/jobs/{job.json()['job_id']}", headers=headers).status_code, 200)
+            self.assertEqual(client.delete(f"/api/v1/admin/jobs/{job.json()['job_id']}", headers=headers).status_code, 404)
+
+            # Worker w1 đang online, không thể xóa trực tiếp nếu còn active
+            self.assertEqual(client.post("/api/v1/admin/workers/w1/status?status=disabled", headers=headers).status_code, 200)
+            self.assertEqual(client.delete("/api/v1/admin/workers/w1", headers=headers).status_code, 200)
+            self.assertEqual(client.delete("/api/v1/admin/workers/w1", headers=headers).status_code, 404)
             db.close()

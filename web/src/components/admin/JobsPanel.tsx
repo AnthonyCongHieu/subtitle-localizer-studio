@@ -1,9 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, RotateCcw, XCircle } from 'lucide-react';
+import { ChevronDown, ChevronRight, RotateCcw, Trash2, XCircle } from 'lucide-react';
 import { LanJob } from '../../types/api';
 import { EmptyState, focusRing, formatTime, StatusBadge } from './LanUi';
 
-type Props = { jobs: LanJob[]; isPending: (key: string) => boolean; onCancel: (job: LanJob) => void; onRetry: (job: LanJob) => void };
+type Props = {
+  jobs: LanJob[];
+  isPending: (key: string) => boolean;
+  onCancel: (job: LanJob) => void;
+  onRetry: (job: LanJob) => void;
+  onDelete?: (job: LanJob) => void;
+};
 
 function progressPercent(job: LanJob) {
   const value = Number(job.progress ?? 0);
@@ -15,12 +21,29 @@ function JobDetails({ job }: { job: LanJob }) {
   return <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4"><div><p className="text-slate-500">Stage / loại</p><p>{job.current_stage || job.stage || job.job_type || '—'}</p></div><div><p className="text-slate-500">Attempt</p><p>{job.attempt ?? '—'}{job.max_attempts ? ` / ${job.max_attempts}` : ''}</p></div><div><p className="text-slate-500">Lease</p><p className="break-all font-mono">{job.lease_id || '—'}</p><p className="text-slate-500">{formatTime(job.lease_expires_at)}</p></div><div><p className="text-slate-500">Cập nhật</p><p>{formatTime(job.updated_at)}</p></div>{job.error && <div className="sm:col-span-2 lg:col-span-4 rounded border border-rose-900/60 bg-rose-950/30 p-2 text-rose-300">Lỗi: {job.error}</div>}{metrics && <div className="sm:col-span-2 lg:col-span-4"><p className="mb-1 text-slate-500">Metrics</p><pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-slate-300">{metrics}</pre></div>}</div>;
 }
 
-function JobActions({ job, isPending, onCancel, onRetry }: Props & { job: LanJob }) {
+function JobActions({ job, isPending, onCancel, onRetry, onDelete }: Props & { job: LanJob }) {
   const busy = isPending(`job:${job.job_id}`);
   const base = `rounded-md px-2.5 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
-  if (['queued', 'running'].includes(job.status || '')) return <button disabled={busy} onClick={() => onCancel(job)} className={`${base} bg-rose-950 text-rose-300 hover:bg-rose-900`}><XCircle className="mr-1 inline h-3.5 w-3.5" />{busy ? 'Đang hủy…' : 'Hủy'}</button>;
-  if (['failed', 'cancelled'].includes(job.status || '')) return <button disabled={busy} onClick={() => onRetry(job)} className={`${base} bg-amber-800 text-amber-50 hover:bg-amber-700`}><RotateCcw className="mr-1 inline h-3.5 w-3.5" />{busy ? 'Đang retry…' : 'Retry'}</button>;
-  return <span className="text-slate-600">—</span>;
+  const isTerminal = ['failed', 'cancelled', 'completed'].includes(job.status || '');
+
+  return <div className="flex flex-wrap items-center gap-1.5">
+    {['queued', 'running'].includes(job.status || '') && (
+      <button disabled={busy} onClick={() => onCancel(job)} className={`${base} bg-rose-950 text-rose-300 hover:bg-rose-900`}>
+        <XCircle className="mr-1 inline h-3.5 w-3.5" />{busy ? 'Đang hủy…' : 'Hủy'}
+      </button>
+    )}
+    {['failed', 'cancelled'].includes(job.status || '') && (
+      <button disabled={busy} onClick={() => onRetry(job)} className={`${base} bg-amber-800 text-amber-50 hover:bg-amber-700`}>
+        <RotateCcw className="mr-1 inline h-3.5 w-3.5" />{busy ? 'Đang retry…' : 'Retry'}
+      </button>
+    )}
+    {isTerminal && onDelete && (
+      <button disabled={busy} aria-label={`Xóa job ${job.job_id}`} title="Xóa job khỏi danh sách" onClick={() => onDelete(job)} className={`${base} bg-slate-800 text-rose-400 hover:bg-rose-950 hover:text-rose-200`}>
+        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        <span className="sr-only">Xóa</span>
+      </button>
+    )}
+  </div>;
 }
 
 export function JobsPanel(props: Props) {
