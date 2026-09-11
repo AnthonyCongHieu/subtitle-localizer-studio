@@ -425,6 +425,36 @@ class ProjectSettingsAndRoiTest(unittest.TestCase):
         self.assertEqual(res_direct.status_code, 200)
         self.assertEqual(res_direct.content, b"MOCK_CUE_MP3")
 
+    def test_single_cue_invalid_splice_does_not_update_manifest(self) -> None:
+        from fastapi.testclient import TestClient
+
+        project_id = "proj-invalid-cue-dub"
+        self.repo.save_project(ProjectManifestV1(
+            project_id=project_id, title="Invalid cue dubbing", source_video_path="E:/dummy.mp4",
+            video_fingerprint="fp-invalid-cue", source_language="zh",
+        ))
+        self.repo.save_cues(project_id, [SubtitleCueV1(
+            cue_id="c1", start_pts=0.0, end_pts=1.0,
+            source_text="你好", translated_text="Xin chào",
+        )])
+
+        client = TestClient(self.app, raise_server_exceptions=False)
+        with patch(
+            "subtitle_localizer.dubbing.tts.splice_cue_voiceover",
+            side_effect=ValueError("Audio TTS câu phụ đề không hợp lệ hoặc chỉ chứa im lặng"),
+        ):
+            response = client.post(
+                f"/api/v1/projects/{project_id}/cues/c1/dub",
+                json={"mode": "single"},
+                headers={"Authorization": "Bearer test-token-123"},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        persisted = self.repo.get_project(project_id)
+        self.assertFalse(getattr(persisted, "has_voiceover", False))
+        self.assertIsNone(getattr(persisted, "voiceover_path", None))
+        self.assertFalse((self.output_root / project_id / f"voiceover_{project_id}.mp3").exists())
+
 
 
 

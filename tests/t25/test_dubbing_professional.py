@@ -53,7 +53,7 @@ class T25DubbingProfessionalTest(unittest.TestCase):
         self.assertTrue(is_skip_tts_role(identity["speaker_role"]))
 
     def test_same_gender_characters_get_different_voices(self) -> None:
-        female_pool = ["vi-VN-HoaiMyNeural", "BV562_streaming", "BV074_streaming"]
+        female_pool = ["vi-VN-HoaiMyNeural", "en-US-JennyNeural", "en-US-AriaNeural"]
         cue_a = SubtitleCueV1(
             cue_id="a",
             start_pts=0.0,

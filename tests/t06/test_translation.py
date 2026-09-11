@@ -69,6 +69,15 @@ class TranslationRuntimeTest(unittest.TestCase):
         self.assertEqual(settings.local_model, "qwen2.5:7b-instruct")
         self.assertEqual(settings.local_endpoint, "http://localhost:11434")
 
+    def test_local_default_and_batch_limit_match_benchmark_profile(self) -> None:
+        from subtitle_localizer.service.pipeline_settings import TranslationSettings
+        from subtitle_localizer.translation.real import RealTranslationProvider
+
+        self.assertEqual(TranslationSettings().local_model, "qwen2.5:14b")
+        provider = RealTranslationProvider()
+        self.assertEqual(provider._local_chunk_size(140, 35), 35)
+        self.assertEqual(provider._local_chunk_size(140, 0), 35)
+
     def test_real_translation_local_qwen_parse(self) -> None:
         from subtitle_localizer.translation.real import RealTranslationProvider
         provider = RealTranslationProvider()

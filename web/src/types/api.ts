@@ -22,6 +22,8 @@ export interface RegionTrackV1 {
   width: number;
   height: number;
   mask_enabled?: boolean;
+  /** dialogue | ignore | always_mask */
+  role?: string;
   valid_start_pts?: number;
   valid_end_pts?: number;
   keyframe_overrides?: Record<number, Record<string, number>>;

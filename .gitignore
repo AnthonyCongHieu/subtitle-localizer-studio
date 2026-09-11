@@ -102,3 +102,13 @@ yarn-error.log*
 !web/**/*.ts
 !web/**/*.tsx
 bin/
+
+# Temporary / Scratch scripts & files
+_*
+_tmp*
+.tmp*
+BENCHMARK_*
+GEMINI_*
+benchmark_results_*
+sample_*
+MASTER_AI_*

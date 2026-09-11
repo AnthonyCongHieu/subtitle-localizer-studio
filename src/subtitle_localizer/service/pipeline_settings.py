@@ -73,7 +73,13 @@ class ExtractionSettings(BaseModel):
     anti_noise_h_max: int = 130
     anti_noise_swt_cov_max: float = 0.40
     anti_noise_lum_min: int = 135
+    # vertical_short = ROI + phao cuu + chuyen vung; fixed_roi = chi OCR khung co dinh
+    scan_profile: str = "vertical_short"  # "vertical_short" | "fixed_roi"
     enable_adaptive_rescue: bool = True
+    # Persistent watermark / branding layer separation + cue-follow masking
+    enable_persistent_text_filter: bool = False
+    persistent_text_ratio: float = 0.55
+    enable_cue_follow_mask: bool = False
     adaptive_rescue_mid_y: float = 0.35
     adaptive_rescue_mid_h: float = 0.30
     enable_stroke_dhash_cache: bool = True
@@ -115,12 +121,18 @@ class TranslationSettings(BaseModel):
     provider: str = "gemini"
     target_language: str = "vi"  # "vi" | "en" | "zh" | "none"
     gemini_model: str = "gemini-2.5-flash"  # "gemini-2.5-flash" | "gemini-3.7-flash"
-    local_model: str = "qwen2.5:7b-instruct"  # "qwen2.5:7b-instruct" | "qwen2.5:3b-instruct" | "qwen2.5:14b-instruct"
+    # Benchmark sweet-spot on the RTX 5080: Qwen 2.5 14B (Pipeline V3/V4).
+    local_model: str = "qwen2.5:14b"  # "qwen2.5:14b" | "qwen2.5:7b-instruct" | "qwen2.5:3b-instruct"
     local_endpoint: str = "http://localhost:11434"  # Ollama / llama.cpp / OpenAI-compatible endpoint
     auto_fallback: bool = True
     batch_size: int = 35
     prompt_tone: str = "dramatic"  # "dramatic" | "daily" | "humorous" | "literal"
     use_glossary: bool = True
+    # auto: infer from dialogue. couple_anh_em: force anh-em for romance shorts.
+    # neutral: keep generic ban for docs / large casts / unclear relations.
+    addressing_mode: str = "auto"  # "auto" | "couple_anh_em" | "neutral"
+    # Optional per-project/series cast & relationship notes (video-agnostic).
+    character_context: str = ""
 
     @root_validator(pre=True)
     def normalize_retired_gemini_models(cls, values: Dict[str, Any]) -> Dict[str, Any]:
@@ -168,6 +180,7 @@ class RenderSettings(BaseModel):
     default_mask_style: str = "feather_tight"
     default_blur_strength: int = 24
     burn_subtitles: bool = True
+    enable_cue_follow_mask: bool = False
 
 
 class GlobalPipelineSettings(BaseModel):
@@ -365,3 +378,26 @@ def merge_pipeline_settings(
 
     parse_fn = getattr(GlobalPipelineSettings, "model_validate", getattr(GlobalPipelineSettings, "parse_obj", None))
     return parse_fn(base_dict)
+
+
+def resolve_ocr_scan_profile(ocr_settings: ExtractionSettings) -> ExtractionSettings:
+    """Apply scan_profile side-effects onto OCR flags.
+
+    - vertical_short: keep ROI scan + adaptive rescue + ROI tightening (phim doc)
+    - fixed_roi: only OCR inside the fixed frame; no rescue / no region shifting
+    """
+    profile = str(getattr(ocr_settings, "scan_profile", "vertical_short") or "vertical_short").strip().lower()
+    if profile in {"fixed", "fixed_roi", "khung_co_dinh", "static"}:
+        ocr_settings.scan_profile = "fixed_roi"
+        ocr_settings.enable_adaptive_rescue = False
+        ocr_settings.enable_roi_tightening = False
+        ocr_settings.enable_gap_rescue = False
+        ocr_settings.enable_persistent_text_filter = False
+        ocr_settings.enable_cue_follow_mask = False
+    else:
+        ocr_settings.scan_profile = "vertical_short"
+        ocr_settings.enable_adaptive_rescue = True
+        # keep caller/user tightening if explicitly set; default on for vertical shorts
+        if getattr(ocr_settings, "enable_roi_tightening", None) is None:
+            ocr_settings.enable_roi_tightening = True
+    return ocr_settings

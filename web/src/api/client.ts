@@ -307,6 +307,46 @@ export class StudioApiClient {
     return res.json();
   }
 
+  async cleanTranslation(projectId: string): Promise<{ status: string; project_id: string; cues_count: number; removed_voice_files: number }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/translation/clean`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(payload?.detail || 'Không thể xóa bản dịch');
+    }
+    return res.json();
+  }
+
+  async cleanVoiceover(projectId: string): Promise<{ status: string; project_id: string; removed_voice_files: number }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/dubbing/clean`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(payload?.detail || 'Không thể xóa voice lồng tiếng');
+    }
+    return res.json();
+  }
+
+  async cleanCueTranslation(projectId: string, cueId: string): Promise<{ status: string; cue: SubtitleCueV1; removed_voice_files: number }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/cues/${encodeURIComponent(cueId)}/translation/clean`, {
+      method: 'POST', headers: this.headers(),
+    });
+    if (!res.ok) { const payload = await res.json().catch(() => null); throw new Error(payload?.detail || 'Không thể clean dịch câu này'); }
+    return res.json();
+  }
+
+  async cleanCueVoiceover(projectId: string, cueId: string): Promise<{ status: string; cue_id: string; removed_voice_files: number }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/cues/${encodeURIComponent(cueId)}/dubbing/clean`, {
+      method: 'POST', headers: this.headers(),
+    });
+    if (!res.ok) { const payload = await res.json().catch(() => null); throw new Error(payload?.detail || 'Không thể clean voice câu này'); }
+    return res.json();
+  }
+
   async setGeminiKey(apiKey: string): Promise<{ status: string; configured: boolean }> {
     const res = await fetch(`${API_BASE}/settings/gemini-key`, {
       method: 'POST',
@@ -1693,6 +1733,8 @@ export interface ExtractionSettings {
   enable_gap_rescue: boolean;
   gap_rescue_max_frames?: number;
   enable_roi_tightening: boolean;
+  /** vertical_short = ROI + rescue; fixed_roi = OCR only inside fixed frame */
+  scan_profile?: 'vertical_short' | 'fixed_roi' | string;
   performance_profile?: OcrPerformanceProfile | string;
   include_advanced_preprocessing?: boolean;
 
@@ -1718,6 +1760,8 @@ export interface TranslationSettings {
   batch_size: number;
   prompt_tone: 'dramatic' | 'daily' | 'humorous' | 'literal';
   use_glossary: boolean;
+  addressing_mode?: 'auto' | 'couple_anh_em' | 'neutral';
+  character_context?: string;
 }
 
 

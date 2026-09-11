@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Crop,
   Eye,
@@ -198,6 +198,57 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   const [newPosTemplateName, setNewPosTemplateName] = useState('');
   const [editingPosTemplateId, setEditingPosTemplateId] = useState<string | null>(null);
   const [editingPosTemplateName, setEditingPosTemplateName] = useState('');
+
+  type ScanProfile = 'vertical_short' | 'fixed_roi';
+  const [scanProfile, setScanProfile] = useState<ScanProfile>(() => {
+    try {
+      const fromProject = (_activeProject as any)?.custom_pipeline_settings?.ocr?.scan_profile;
+      if (fromProject === 'fixed_roi' || fromProject === 'vertical_short') return fromProject;
+      const raw = localStorage.getItem('sub_studio_scan_profile');
+      if (raw === 'fixed_roi' || raw === 'vertical_short') return raw;
+    } catch {}
+    return 'vertical_short';
+  });
+
+  useEffect(() => {
+    try {
+      const fromProject = (_activeProject as any)?.custom_pipeline_settings?.ocr?.scan_profile;
+      if (fromProject === 'fixed_roi' || fromProject === 'vertical_short') {
+        setScanProfile(fromProject);
+      }
+    } catch {}
+  }, [_activeProject?.project_id, (_activeProject as any)?.custom_pipeline_settings?.ocr?.scan_profile]);
+
+  const saveScanProfile = (profile: ScanProfile) => {
+    setScanProfile(profile);
+    try {
+      localStorage.setItem('sub_studio_scan_profile', profile);
+    } catch {}
+    const ocrPatch =
+      profile === 'fixed_roi'
+        ? {
+            scan_profile: profile,
+            enable_adaptive_rescue: false,
+            enable_roi_tightening: false,
+            enable_gap_rescue: false,
+          }
+        : {
+            scan_profile: profile,
+            enable_adaptive_rescue: true,
+            enable_roi_tightening: true,
+            enable_gap_rescue: true,
+          };
+    if (_activeProject && _onUpdateActiveProject) {
+      const prev = _activeProject.custom_pipeline_settings || {};
+      const prevOcr = (prev as any).ocr || {};
+      _onUpdateActiveProject({
+        custom_pipeline_settings: {
+          ...prev,
+          ocr: { ...prevOcr, ...ocrPatch },
+        },
+      });
+    }
+  };
 
   const savePosTemplates = (templates: PositionTemplate[]) => {
     setPositionTemplates(templates);
@@ -472,6 +523,42 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   </div>
                 );
               })()}
+
+              {/* Chế độ quét OCR: phim dọc vs khung cố định */}
+              <div className="p-2 bg-slate-950/60 border border-slate-800/60 rounded-lg space-y-2">
+                <div className="space-y-0.5">
+                  <span className="text-[11px] font-semibold text-slate-200">Chế Độ Quét OCR</span>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    Chọn cách đọc chữ trong khung ROI hiện tại
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => saveScanProfile('vertical_short')}
+                    className={`px-2 py-2 rounded-lg border text-left transition cursor-pointer ${
+                      scanProfile === 'vertical_short'
+                        ? 'bg-indigo-600/30 border-indigo-500 text-white'
+                        : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold">Phim dọc</div>
+                    <div className="text-[9px] opacity-80 leading-snug">OCR trong khung + phao cứu khi sub lệch</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => saveScanProfile('fixed_roi')}
+                    className={`px-2 py-2 rounded-lg border text-left transition cursor-pointer ${
+                      scanProfile === 'fixed_roi'
+                        ? 'bg-indigo-600/30 border-indigo-500 text-white'
+                        : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold">Khung cố định</div>
+                    <div className="text-[9px] opacity-80 leading-snug">Chỉ OCR đúng khung, không cứu/lệch vùng</div>
+                  </button>
+                </div>
+              </div>
 
               {/* Công tắc 2: Xem trước lớp che trên video */}
               <div className="flex items-center justify-between gap-3 p-2 bg-slate-950/60 border border-slate-800/60 rounded-lg">

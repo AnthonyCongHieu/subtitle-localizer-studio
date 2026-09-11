@@ -5,6 +5,7 @@ from typing import List
 
 from subtitle_localizer.domain.models import OcrObservationV1, SubtitleCueV1
 from subtitle_localizer.reconstruction.consensus import (
+    _boundary_overlap_len,
     calculate_text_similarity,
     is_progressive_text_growth,
     majority_vote_text,
@@ -77,19 +78,45 @@ def _pick_better_translated(left: str, right: str, source_text: str) -> str:
     return best
 
 
+def _stitch_progressive_sources(left: str, right: str) -> str:
+    """Ghép typewriter (chọn bản dài) hoặc continuation chồng biên (stitch)."""
+    a, b = (left or "").strip(), (right or "").strip()
+    if not a:
+        return b
+    if not b:
+        return a
+    if a == b:
+        return a
+    if a in b:
+        return b
+    if b in a:
+        return a
+    if b.startswith(a) or a.endswith(b):
+        return b if len(b) >= len(a) else a
+    if a.startswith(b) or b.endswith(a):
+        return a if len(a) >= len(b) else b
+    overlap = _boundary_overlap_len(a, b)
+    if overlap >= 4 and a[-overlap:] == b[:overlap]:
+        return a + b[overlap:]
+    if overlap >= 4 and b[-overlap:] == a[:overlap]:
+        return b + a[overlap:]
+    return a if len(a) >= len(b) else b
+
+
 def _merge_adjacent_cues(left: SubtitleCueV1, right: SubtitleCueV1) -> SubtitleCueV1:
     left_source = left.source_text or ""
     right_source = right.source_text or ""
-    source_text = left_source if len(left_source) >= len(right_source) else right_source
-    left_translated = left.translated_text or ""
-    right_translated = right.translated_text or ""
-    translated_text = _pick_better_translated(left_translated, right_translated, source_text)
     left_s = (left_source or "").strip()
     right_s = (right_source or "").strip()
     if left_s and right_s and left_s != right_s and is_progressive_text_growth(left_s, right_s):
+        source_text = _stitch_progressive_sources(left_s, right_s)
         flag = "merged_progressive"
     else:
+        source_text = left_source if len(left_source) >= len(right_source) else right_source
         flag = "merged_duplicate"
+    left_translated = left.translated_text or ""
+    right_translated = right.translated_text or ""
+    translated_text = _pick_better_translated(left_translated, right_translated, source_text)
     flags = list(dict.fromkeys([*(left.quality_flags or []), *(right.quality_flags or []), flag]))
     return replace(
         left,
@@ -106,10 +133,14 @@ def normalize_sequential_cues(
     cues: List[SubtitleCueV1],
     *,
     similarity_threshold: float = 0.90,
-    max_merge_gap: float = 0.50,
+    max_merge_gap: float = 1.2,
     max_padding_overlap: float = 0.25,
 ) -> List[SubtitleCueV1]:
-    """Gộp câu trùng kề nhau và cắt phần đuôi ASR bị đệm (khoảng 200ms)."""
+    """Gộp câu trùng/progressive kề nhau và cắt phần đuôi ASR bị đệm (~200ms).
+
+    max_merge_gap mặc định khớp CueReconstructor (1.2s) để không bỏ sót
+    progressive typewriter khi sample_fps thấp.
+    """
     if not cues:
         return []
 

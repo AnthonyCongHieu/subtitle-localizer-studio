@@ -82,7 +82,7 @@ class ProgressiveHardsubMergeTest(unittest.TestCase):
         ]
         merged = normalize_sequential_cues(cues)
         self.assertEqual(len(merged), 1)
-        self.assertEqual(merged[0].source_text, "组长给他画了个大饼只要成功留下")
+        self.assertEqual(merged[0].source_text, "不过组长给他画了个大饼只要成功留下")
         self.assertIn("merged_progressive", merged[0].quality_flags)
 
     def test_build_cues_merges_progressive_ocr_frames(self) -> None:

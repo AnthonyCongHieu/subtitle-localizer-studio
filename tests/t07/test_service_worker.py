@@ -397,6 +397,164 @@ class ServiceAndWorkerTest(unittest.TestCase):
         self.assertEqual(res.content, b"fake_mp3_audio_data_content")
         self.assertEqual(res.headers.get("content-type"), "audio/mpeg")
 
+    def test_dubbing_rejects_invalid_audio_and_records_failed_stage(self) -> None:
+        from fastapi.testclient import TestClient
+
+        project_id = "voiceover-invalid-p1"
+        self.repo.save_project(ProjectManifestV1(
+            project_id=project_id, title="Invalid dubbing", source_video_path="E:/fake.mp4",
+            video_fingerprint="fp-invalid", source_language="zh", target_language="vi",
+        ))
+        self.repo.save_cues(project_id, [SubtitleCueV1(
+            cue_id="c1", start_pts=0.0, end_pts=1.0,
+            source_text="你好", translated_text="Xin chào",
+        )])
+
+        async def fake_generate(**kwargs):
+            output = Path(kwargs["output_path"])
+            output.write_bytes(b"non-empty-but-invalid-mp3")
+            return output
+
+        client = TestClient(self.app, raise_server_exceptions=False)
+        with patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover", side_effect=fake_generate), \
+             patch("subtitle_localizer.dubbing.tts.is_valid_speech_audio", return_value=False, create=True):
+            response = client.post(
+                f"/api/v1/projects/{project_id}/dubbing/run",
+                json={"mode": "single"},
+                headers={"Authorization": "Bearer test-token-123"},
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "TTS không tạo được file audio; dự án chưa hoàn tất")
+        output = self.output_root / project_id / f"voiceover_{project_id}.mp3"
+        self.assertFalse(output.exists())
+        stages = [s for s in self.repo.get_stage_runs(project_id) if s.stage_name == "dubbing"]
+        self.assertEqual(stages[-1].status, "failed")
+        self.assertIn("không giải mã được hoặc chỉ chứa im lặng", stages[-1].errors[0])
+        self.assertFalse(any(stage.status == "completed" for stage in stages))
+
+    def test_dubbing_valid_audio_completes_with_existing_response_contract(self) -> None:
+        from fastapi.testclient import TestClient
+
+        project_id = "voiceover-valid-p1"
+        self.repo.save_project(ProjectManifestV1(
+            project_id=project_id, title="Valid dubbing", source_video_path="E:/fake.mp4",
+            video_fingerprint="fp-valid", source_language="zh", target_language="vi",
+        ))
+        self.repo.save_cues(project_id, [SubtitleCueV1(
+            cue_id="c1", start_pts=0.0, end_pts=1.0,
+            source_text="你好", translated_text="Xin chào",
+        )])
+
+        async def fake_generate(**kwargs):
+            output = Path(kwargs["output_path"])
+            output.write_bytes(b"valid-speech-mp3")
+            return output
+
+        client = TestClient(self.app)
+        with patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover", side_effect=fake_generate), \
+             patch("subtitle_localizer.dubbing.tts.is_valid_speech_audio", return_value=True, create=True) as validate:
+            response = client.post(
+                f"/api/v1/projects/{project_id}/dubbing/run",
+                json={"mode": "single", "voice": "vi-VN-NamMinhNeural"},
+                headers={"Authorization": "Bearer test-token-123"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["project_id"], project_id)
+        self.assertEqual(payload["cues_count"], 1)
+        self.assertEqual(payload["audio_url"], f"/api/v1/projects/{project_id}/audio/voiceover")
+        validate.assert_called_once_with(b"valid-speech-mp3")
+        stages = [s for s in self.repo.get_stage_runs(project_id) if s.stage_name == "dubbing"]
+        self.assertEqual(stages[-1].status, "completed")
+
+    def test_project_runtime_rejects_silent_audio_and_records_failed_stage(self) -> None:
+        import asyncio
+        from subtitle_localizer.service.project_runtime import run_project_dubbing
+
+        project_id = "runtime-silent-p1"
+        self.repo.save_project(ProjectManifestV1(
+            project_id=project_id, title="Silent runtime dubbing", source_video_path="E:/fake.mp4",
+            video_fingerprint="fp-runtime-silent", source_language="zh", target_language="vi",
+        ))
+        self.repo.save_cues(project_id, [SubtitleCueV1(
+            cue_id="c1", start_pts=0.0, end_pts=1.0,
+            source_text="你好", translated_text="Xin chào",
+        )])
+
+        async def fake_generate(**kwargs):
+            output = Path(kwargs["output_path"])
+            output.write_bytes(b"decodable-but-silent-mp3")
+            return output
+
+        with patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover", side_effect=fake_generate), \
+             patch("subtitle_localizer.dubbing.tts.is_valid_speech_audio", return_value=False, create=True):
+            with self.assertRaisesRegex(RuntimeError, "contains only silence"):
+                asyncio.run(run_project_dubbing(self.repo, project_id, self.output_root))
+
+        persisted = self.repo.get_project(project_id)
+        self.assertFalse(getattr(persisted, "has_voiceover", False))
+        output = self.output_root / project_id / f"voiceover_{project_id}.mp3"
+        self.assertFalse(output.exists())
+        stages = [s for s in self.repo.get_stage_runs(project_id) if s.stage_name == "dubbing"]
+        self.assertEqual(stages[-1].status, "failed")
+        self.assertIn("contains only silence", stages[-1].errors[0])
+        self.assertFalse(any(stage.status == "completed" for stage in stages))
+
+    def test_project_runtime_generation_exception_records_failed_stage(self) -> None:
+        import asyncio
+        from subtitle_localizer.service.project_runtime import run_project_dubbing
+
+        project_id = "runtime-error-p1"
+        self.repo.save_project(ProjectManifestV1(
+            project_id=project_id, title="Runtime dubbing error", source_video_path="E:/fake.mp4",
+            video_fingerprint="fp-runtime-error", source_language="zh", target_language="vi",
+        ))
+        self.repo.save_cues(project_id, [SubtitleCueV1(
+            cue_id="c1", start_pts=0.0, end_pts=1.0,
+            source_text="你好", translated_text="Xin chào",
+        )])
+
+        with patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover", side_effect=RuntimeError("provider offline")), \
+             patch("subtitle_localizer.dubbing.tts.is_valid_speech_audio", create=True):
+            with self.assertRaisesRegex(RuntimeError, "provider offline"):
+                asyncio.run(run_project_dubbing(self.repo, project_id, self.output_root))
+
+        stages = [s for s in self.repo.get_stage_runs(project_id) if s.stage_name == "dubbing"]
+        self.assertEqual(stages[-1].status, "failed")
+        self.assertIn("provider offline", stages[-1].errors[0])
+        self.assertFalse(any(stage.status == "completed" for stage in stages))
+
+    def test_dubbing_generation_exception_records_failed_stage(self) -> None:
+        from fastapi.testclient import TestClient
+
+        project_id = "voiceover-error-p1"
+        self.repo.save_project(ProjectManifestV1(
+            project_id=project_id, title="Failed dubbing", source_video_path="E:/fake.mp4",
+            video_fingerprint="fp-error", source_language="zh", target_language="vi",
+        ))
+        self.repo.save_cues(project_id, [SubtitleCueV1(
+            cue_id="c1", start_pts=0.0, end_pts=1.0,
+            source_text="你好", translated_text="Xin chào",
+        )])
+
+        client = TestClient(self.app, raise_server_exceptions=False)
+        with patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover", side_effect=RuntimeError("provider offline")), \
+             patch("subtitle_localizer.dubbing.tts.is_valid_speech_audio", create=True):
+            response = client.post(
+                f"/api/v1/projects/{project_id}/dubbing/run",
+                json={"mode": "single"},
+                headers={"Authorization": "Bearer test-token-123"},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        stages = [s for s in self.repo.get_stage_runs(project_id) if s.stage_name == "dubbing"]
+        self.assertEqual(stages[-1].status, "failed")
+        self.assertIn("provider offline", stages[-1].errors[0])
+        self.assertFalse(any(stage.status == "completed" for stage in stages))
+
     def test_auto_detect_roi_endpoint_fallback(self) -> None:
         from fastapi.testclient import TestClient
         client = TestClient(self.app)

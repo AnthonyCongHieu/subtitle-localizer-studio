@@ -1,0 +1,25 @@
+﻿=====================================================================
+    HƯỚNG DẪN SỬ DỤNG NHANH CỤM DỊCH PHỤ ĐỀ AI LOCAL (RTX 5080)
+=====================================================================
+
+1. CÁCH DÙNG 1-CLICK DỄ NHẤT (CHO MÁY PC6):
+   - Kéo và thả bất kỳ file phụ đề .srt tiếng Trung nào vào file:
+     👉 DICH_PHU_DE_1CLICK.bat
+   - Chọn [1] (Nhanh) hoặc [2] (Điện ảnh cao cấp).
+   - Hệ thống sẽ tự động gọi sang máy trạm RTX 5080 (192.168.1.219) dịch và
+     tạo ra ngay cạnh file gốc 2 file:
+       + file_goc.vi.srt (File phụ đề tiếng Việt chuẩn để xem video)
+       + file_goc.vi.bilingual.txt (File song ngữ đối chiếu dễ đọc bằng mắt)
+
+2. TẬP DỮ LIỆU ĐỐI CHUẨN GEMINI FLASH ĐÃ NẠP:
+   - GEMINI_10CLIPS_CONSOLIDATED_GROUND_TRUTH.json (2,041 câu, 181 câu thoại vàng)
+
+3. KẾT QUẢ KHẢO NGHIỆM ĐÃ ĐỒNG BỘ:
+   - BENCHMARK_10CLIPS_RESULTS_qwen2.5_14b.json (Qwen 14B: 4.09 câu/giây, 0% rò rỉ chữ Hán)
+   - BENCHMARK_10CLIPS_RESULTS_qwen2.5_32b-instruct-q3_K_M.json (Qwen 32B: 1.04 câu/giây, chuẩn điện ảnh)
+   - MASTER_AI_SUBTITLE_ARCHITECTURE_AND_BENCHMARK_REPORT.txt (Báo cáo nghiên cứu đầy đủ)
+
+4. CÔNG CỤ DÀNH CHO CODER / LẬP TRÌNH VIÊN TRÊN PC6:
+   - Python: python translate_srt_client.py file.srt --model qwen2.5:14b
+   - REST API: POST http://192.168.1.219:11434/api/chat
+=====================================================================

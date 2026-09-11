@@ -662,6 +662,8 @@ class BackgroundWorker:
 
             # Hợp nhất cấu hình toàn cục với cấu hình ghi đè riêng của tập này (nếu có)
             pipeline_settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
+            from subtitle_localizer.service.pipeline_settings import resolve_ocr_scan_profile
+            pipeline_settings.ocr = resolve_ocr_scan_profile(pipeline_settings.ocr)
 
             cues: List[SubtitleCueV1] = []
             cloud_cues: List[SubtitleCueV1] = []
@@ -1280,7 +1282,11 @@ class BackgroundWorker:
             # Stage 3.8: Segment-Scoped Dynamic Box Auto-Discovery & Optical Verification
             # Tự động dò tìm bounding box chuẩn xác theo từng phân đoạn âm thanh / câu phụ đề
             # và xác minh quang học (Optical Verification) với hình ảnh thực tế trên video
-            if cues and Path(video_path).exists():
+            enable_region_shift = (
+                str(getattr(pipeline_settings.ocr, "scan_profile", "vertical_short") or "vertical_short") != "fixed_roi"
+                and bool(getattr(pipeline_settings.ocr, "enable_adaptive_rescue", True))
+            )
+            if cues and Path(video_path).exists() and enable_region_shift:
                 stage_box = StageRunV1(
                     stage_name="dynamic_box_discovery",
                     status="running",
@@ -1359,11 +1365,36 @@ class BackgroundWorker:
                     cues = translator.translate_cues(
                         cues, source_lang=effective_source_lang, target_lang=manifest.target_language
                     )
-                    untranslated = [
-                        cue for cue in cues
-                        if cue.source_text.strip()
-                        and (not cue.translated_text.strip() or cue.translated_text.strip() == cue.source_text.strip())
-                    ]
+                    # Normalize first so echo-cleaner can blank shifted residue, then retry holes.
+                    cues = normalize_sequential_cues(cues)
+                    if hasattr(translator, "retry_untranslated_cues"):
+                        try:
+                            translator.retry_untranslated_cues(
+                                cues,
+                                source_lang=effective_source_lang,
+                                target_lang=manifest.target_language,
+                            )
+                            cues = normalize_sequential_cues(cues)
+                        except Exception as retry_exc:
+                            logger.warning("Post-normalize translation retry failed: %s", retry_exc)
+
+                    if hasattr(translator, "list_untranslated_indices"):
+                        untranslated = [
+                            cues[i]
+                            for i in translator.list_untranslated_indices(
+                                cues,
+                                target_lang=manifest.target_language,
+                            )
+                        ]
+                    else:
+                        untranslated = [
+                            cue for cue in cues
+                            if cue.source_text.strip()
+                            and (
+                                not cue.translated_text.strip()
+                                or cue.translated_text.strip() == cue.source_text.strip()
+                            )
+                        ]
                     if untranslated:
                         raise RuntimeError(
                             f"Local translation incomplete: {len(untranslated)}/{len(cues)} cues untranslated; "

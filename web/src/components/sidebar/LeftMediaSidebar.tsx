@@ -311,6 +311,56 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
     }
   };
 
+  const handleCleanCueTranslation = async (cue: SubtitleCueV1, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!activeProject || !window.confirm('Xóa bản dịch của câu này? Văn bản OCR gốc vẫn được giữ.')) return;
+    try {
+      const result = await apiClient.cleanCueTranslation(activeProject.project_id, cue.cue_id);
+      onUpdateCue?.(result.cue);
+      onRefreshCues?.();
+      onRefreshProject?.();
+      appLogger.success('Đã clean bản dịch câu này', 'Dịch thuật');
+    } catch (err: any) {
+      appLogger.error(`Clean dịch thất bại: ${err?.message || 'Thất bại'}`, 'Dịch thuật');
+    }
+  };
+
+  const handleCleanCueVoice = async (cue: SubtitleCueV1, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!activeProject || !window.confirm('Xóa voice của câu này? Voice master sẽ cần tạo lại.')) return;
+    try {
+      await apiClient.cleanCueVoiceover(activeProject.project_id, cue.cue_id);
+      onRefreshCues?.();
+      onRefreshProject?.();
+      appLogger.success('Đã clean voice câu này', 'Lồng tiếng');
+    } catch (err: any) {
+      appLogger.error(`Clean voice thất bại: ${err?.message || 'Thất bại'}`, 'Lồng tiếng');
+    }
+  };
+
+  const handleCleanAllTranslation = async () => {
+    if (!activeProject || !window.confirm('Xóa toàn bộ bản dịch và voice phát sinh của tập này? OCR gốc vẫn được giữ.')) return;
+    try {
+      await apiClient.cleanTranslation(activeProject.project_id);
+      onRefreshCues?.();
+      onRefreshProject?.();
+      appLogger.success('Đã clean toàn bộ bản dịch của tập', 'Dịch thuật');
+    } catch (err: any) {
+      appLogger.error(`Clean dịch tổng thất bại: ${err?.message || 'Thất bại'}`, 'Dịch thuật');
+    }
+  };
+
+  const handleCleanAllVoice = async () => {
+    if (!activeProject || !window.confirm('Xóa toàn bộ voice lồng tiếng của tập này? Bản dịch vẫn được giữ.')) return;
+    try {
+      await apiClient.cleanVoiceover(activeProject.project_id);
+      onRefreshProject?.();
+      appLogger.success('Đã clean toàn bộ voice của tập', 'Lồng tiếng');
+    } catch (err: any) {
+      appLogger.error(`Clean voice tổng thất bại: ${err?.message || 'Thất bại'}`, 'Lồng tiếng');
+    }
+  };
+
   const handleDubAllVideo = async () => {
     if (!activeProject) return;
     setIsDubbingAll(true);
@@ -981,6 +1031,26 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 <span className="text-[10px]">CapCut</span>
               </button>
             </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleCleanAllTranslation}
+                disabled={!activeProject || cues.length === 0}
+                className="flex-1 px-2 py-1 rounded-lg bg-rose-950/50 hover:bg-rose-900/70 border border-rose-800 text-rose-200 text-[10px] font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Clean tổng bản dịch và voice phát sinh, giữ OCR"
+              >
+                <Trash2 className="inline w-3 h-3 mr-1 text-rose-400" />Clean dịch tổng
+              </button>
+              <button
+                type="button"
+                onClick={handleCleanAllVoice}
+                disabled={!activeProject}
+                className="flex-1 px-2 py-1 rounded-lg bg-orange-950/50 hover:bg-orange-900/70 border border-orange-800 text-orange-200 text-[10px] font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Clean tổng voice lồng tiếng, giữ bản dịch"
+              >
+                <Trash2 className="inline w-3 h-3 mr-1 text-orange-400" />Clean voice tổng
+              </button>
+            </div>
           </div>
 
 
@@ -1182,6 +1252,15 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                         <RefreshCw className={`w-2.5 h-2.5 ${retranslatingCueId === cue.cue_id ? 'animate-spin text-indigo-400' : 'text-slate-400'}`} />
                         <span>Dịch lại</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleCleanCueTranslation(cue, e)}
+                        className="px-1.5 py-0.5 rounded bg-rose-950/50 hover:bg-rose-900/70 border border-rose-800 text-rose-200 text-[10px] flex items-center gap-1 transition cursor-pointer"
+                        title="Xóa bản dịch câu này, giữ nguyên OCR"
+                      >
+                        <Trash2 className="w-2.5 h-2.5 text-rose-400" />
+                        <span>Clean dịch</span>
+                      </button>
 
                       <button
                         type="button"
@@ -1239,6 +1318,15 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                           <Mic className="w-2.5 h-2.5 text-amber-400" />
                         )}
                         <span>Lồng tiếng</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleCleanCueVoice(cue, e)}
+                        className="px-1.5 py-0.5 rounded bg-orange-950/50 hover:bg-orange-900/70 border border-orange-800 text-orange-200 text-[10px] flex items-center gap-1 transition cursor-pointer"
+                        title="Xóa voice câu này và voice master"
+                      >
+                        <Trash2 className="w-2.5 h-2.5 text-orange-400" />
+                        <span>Clean voice</span>
                       </button>
                     </div>
                   </div>

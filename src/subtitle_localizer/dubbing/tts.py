@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import random
 import re
 import subprocess
 import tempfile
+import unicodedata
+import weakref
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -539,25 +543,16 @@ def is_edge_voice(voice: Optional[str]) -> bool:
 
 
 def resolve_tts_provider(voice: Optional[str], preferred_provider: Optional[str] = None) -> str:
-    """
-    Xác định TTS Provider tối ưu nhất từ thông tin giọng đọc và provider mong muốn.
-    Tôn trọng preferred_provider nếu client gửi lên rõ ràng, trừ khi phát hiện mâu thuẫn rõ ràng với voice.
-    """
+    """Ưu tiên provider được cấu hình; chỉ suy luận từ voice khi chưa chỉ định."""
     pref = (preferred_provider or "").strip().lower()
-    v = (voice or "").strip()
+    if pref in ("capcut", "gemini", "edge"):
+        return pref
 
-    # 1. Phát hiện mâu thuẫn hoặc nhận diện chính xác theo catalog
+    v = (voice or "").strip()
     if is_gemini_voice(v):
         return "gemini"
     if is_capcut_voice(v):
         return "capcut"
-    if is_edge_voice(v):
-        return "edge"
-
-    # 2. Nếu giọng chưa nằm trong catalog đã biết (custom voice), tôn trọng provider chỉ định
-    if pref in ("capcut", "gemini", "edge"):
-        return pref
-
     return "edge"
 
 
@@ -599,6 +594,57 @@ def clean_subtitle_text(text: str) -> str:
         return ""
 
     return s
+
+
+
+def _cjk_ratio_text(text: str) -> float:
+    cleaned = "".join(ch for ch in (text or "") if not ch.isspace())
+    if not cleaned:
+        return 0.0
+    cjk = sum(1 for ch in cleaned if "一" <= ch <= "鿿")
+    return cjk / len(cleaned)
+
+
+def resolve_tts_spoken_text(
+    cue,
+    *,
+    prefer_translated: bool = True,
+) -> str:
+    """Pick TTS text that matches Vietnamese dubbing language.
+
+    Ignores stale CJK/English spoken_text leftovers from earlier failed adapts.
+    """
+    style = cue.style if isinstance(getattr(cue, "style", None), dict) else {}
+    translated = clean_subtitle_text(str(getattr(cue, "translated_text", "") or ""))
+    source = clean_subtitle_text(str(getattr(cue, "source_text", "") or ""))
+    spoken = clean_subtitle_text(str(style.get("spoken_text") or ""))
+
+    def _usable_vi(text: str) -> bool:
+        if not text:
+            return False
+        if _cjk_ratio_text(text) >= 0.3:
+            return False
+        return True
+
+    if spoken and _usable_vi(spoken):
+        return spoken
+    if prefer_translated and _usable_vi(translated):
+        return translated
+    if _usable_vi(source):
+        return source
+    return translated or ""
+
+def normalize_tts_text(text: str) -> str:
+    """Làm sạch subtitle, chuẩn hóa Unicode và loại ký tự không hợp lệ trong XML 1.0."""
+    cleaned = clean_subtitle_text(unicodedata.normalize("NFC", str(text or "")))
+    return "".join(
+        char
+        for char in cleaned
+        if char in "\t\n\r"
+        or 0x20 <= ord(char) <= 0xD7FF
+        or 0xE000 <= ord(char) <= 0xFFFD
+        or 0x10000 <= ord(char) <= 0x10FFFF
+    ).strip()
 
 
 def calculate_slot_stretch(
@@ -738,6 +784,36 @@ def mix_voice_pcm(
     return master
 
 
+# CapCut returns transient 1000/system-busy when parallel task creation is too
+# aggressive. Keep its cloud queue single-flight; Edge/Gemini remain concurrent.
+_PROVIDER_CONCURRENCY_LIMITS = {"edge": 1, "capcut": 1, "gemini": 4}
+_PROVIDER_PACING_SECONDS = {"edge": 0.10, "capcut": 0.50, "gemini": 0.0}
+_PROVIDER_SEMAPHORES: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[str, asyncio.Semaphore]]" = weakref.WeakKeyDictionary()
+
+
+def _provider_semaphore(provider: str) -> asyncio.Semaphore:
+    """Return the event-loop-local limiter for real calls to one TTS provider."""
+    loop = asyncio.get_running_loop()
+    semaphores = _PROVIDER_SEMAPHORES.get(loop)
+    if semaphores is None:
+        semaphores = {
+            name: asyncio.Semaphore(limit)
+            for name, limit in _PROVIDER_CONCURRENCY_LIMITS.items()
+        }
+        _PROVIDER_SEMAPHORES[loop] = semaphores
+    return semaphores[provider]
+
+
+async def _run_provider_call(provider: str, operation: Any) -> Any:
+    """Run a provider operation under its global per-event-loop concurrency cap."""
+    async with _provider_semaphore(provider):
+        result = await operation()
+        pacing = _PROVIDER_PACING_SECONDS[provider]
+        if pacing > 0:
+            await asyncio.sleep(pacing)
+        return result
+
+
 async def _synthesize_edge_tts(
     text: str,
     voice: str = "vi-VN-NamMinhNeural",
@@ -755,24 +831,89 @@ async def _synthesize_edge_tts(
     if actual_voice not in ("vi-VN-NamMinhNeural", "vi-VN-HoaiMyNeural") and not ("-" in actual_voice and "Neural" in actual_voice):
         actual_voice = "vi-VN-NamMinhNeural"
 
-    for attempt in range(max_retries):
+    attempts = max(1, int(max_retries))
+    for attempt in range(attempts):
         try:
             communicate = edge_tts.Communicate(clean_text, actual_voice, rate=rate)
             audio_chunks = bytearray()
             async for chunk in communicate.stream():
                 if chunk.get("type") == "audio":
-                    audio_chunks.extend(chunk.get("data", b""))
+                    data = chunk.get("data", b"")
+                    if not isinstance(data, (bytes, bytearray)):
+                        raise RuntimeError("Edge-TTS trả về chunk âm thanh không hợp lệ")
+                    audio_chunks.extend(data)
 
             if len(audio_chunks) > 0:
                 return bytes(audio_chunks)
             raise RuntimeError("Edge-TTS trả về luồng âm thanh rỗng")
-        except Exception as e:
-            if attempt == max_retries - 1:
-                logger.warning(f"Thử lại Edge-TTS thất bại sau {max_retries} lần: {e}")
+        except (ValueError, TypeError) as error:
+            logger.warning(
+                "Edge-TTS từ chối tham số voice=%s rate=%s: %s: %s",
+                actual_voice, rate, type(error).__name__, error,
+            )
+            return b""
+        except Exception as error:
+            if attempt == attempts - 1:
+                logger.warning(
+                    "Edge-TTS thất bại sau %d lần (voice=%s, rate=%s, %s): %s",
+                    attempts, actual_voice, rate, type(error).__name__, error,
+                )
                 return b""
-            await asyncio.sleep(0.5 * (attempt + 1))
+            delay = (0.75 * (2 ** attempt)) + random.uniform(0.0, 0.35)
+            await asyncio.sleep(delay)
 
     return b""
+
+
+async def _synthesize_windows_sapi(text: str) -> bytes:
+    """Generate local WAV/MP3 through Windows SAPI when cloud TTS is down."""
+    import base64
+
+    if os.name != "nt":
+        return b""
+    clean_text = normalize_tts_text(text)
+    if not clean_text:
+        return b""
+    with tempfile.TemporaryDirectory(prefix="subtitle-sapi-") as temp_dir:
+        root = Path(temp_dir)
+        encoded_file = root / "text.b64"
+        wav_file = root / "speech.wav"
+        mp3_file = root / "speech.mp3"
+        encoded_file.write_text(
+            base64.b64encode(clean_text.encode("utf-8")).decode("ascii"),
+            encoding="ascii",
+        )
+        script = (
+            "$ErrorActionPreference='Stop';"
+            "Add-Type -AssemblyName System.Speech;"
+            "$b=[IO.File]::ReadAllText($args[0]);"
+            "$t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b));"
+            "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+            "$s.SetOutputToWaveFile($args[1]);$s.Speak($t);$s.Dispose();"
+        )
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script,
+                 str(encoded_file), str(wav_file)],
+                capture_output=True,
+                timeout=45,
+                check=False,
+            )
+            if result.returncode != 0 or not wav_file.exists() or wav_file.stat().st_size == 0:
+                return b""
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(wav_file), str(mp3_file)],
+                capture_output=True,
+                timeout=45,
+                check=False,
+            )
+            if result.returncode != 0 or not mp3_file.exists():
+                return b""
+            return mp3_file.read_bytes()
+        except (OSError, subprocess.SubprocessError):
+            return b""
 
 
 def parse_speaking_rate(rate: str | float | None) -> float:
@@ -841,44 +982,63 @@ async def synthesize_text(
     Sinh file âm thanh từ văn bản hỗ trợ Multi-Provider (Edge-TTS, CapCut, Gemini).
     Tự động kích hoạt Fallback sang Edge-TTS nếu Provider ngoài gặp sự cố mạng/quota.
     """
-    clean_text = text.strip()
+    clean_text = normalize_tts_text(text)
     if not clean_text:
         return b""
 
-    # Tự động giải quyết Provider chính xác từ tên giọng đọc và provider chỉ định
     prov = resolve_tts_provider(voice, preferred_provider=provider)
-
+    voice = normalize_voice_for_provider(voice, prov)
     audio_data: bytes = b""
+    primary_error: Exception | None = None
 
-    if prov == "capcut":
-        try:
-            client = CapCutTTSClient()
-            audio_data = await client.synthesize(clean_text, voice=voice, rate=rate)
-        except Exception as ex:
-            logger.warning(
-                f"CapCut TTS gặp lỗi ({ex}). Tự động Fallback sang Microsoft Edge-TTS..."
+    try:
+        if prov == "capcut":
+            async def _capcut_call() -> bytes:
+                client = CapCutTTSClient()
+                return await client.synthesize(clean_text, voice=voice, rate=rate)
+
+            audio_data = await _run_provider_call("capcut", _capcut_call)
+        elif prov == "gemini":
+            async def _gemini_call() -> bytes:
+                client = GeminiTTSClient()
+                generated = await client.synthesize(clean_text, voice=voice, style=prompt_style)
+                return apply_speaking_rate_to_audio(generated, rate)
+
+            audio_data = await _run_provider_call("gemini", _gemini_call)
+        else:
+            async def _edge_call() -> bytes:
+                return await _synthesize_edge_tts(
+                    clean_text, voice=voice, rate=rate, max_retries=max_retries
+                )
+
+            audio_data = await _run_provider_call("edge", _edge_call)
+    except Exception as error:
+        primary_error = error
+
+    if prov != "edge" and not audio_data:
+        reason = (
+            f"{type(primary_error).__name__}: {primary_error}"
+            if primary_error is not None
+            else "provider trả về audio rỗng"
+        )
+        logger.warning(
+            "%s TTS thất bại (%s). Fallback một lần sang Microsoft Edge-TTS...",
+            prov.capitalize(), reason,
+        )
+
+        async def _edge_fallback() -> bytes:
+            return await _synthesize_edge_tts(
+                clean_text,
+                voice="vi-VN-NamMinhNeural",
+                rate=rate,
+                max_retries=max_retries,
             )
-            audio_data = await _synthesize_edge_tts(clean_text, voice="vi-VN-NamMinhNeural", rate=rate, max_retries=max_retries)
 
-    elif prov == "gemini":
-        try:
-            client = GeminiTTSClient()
-            audio_data = await client.synthesize(clean_text, voice=voice, style=prompt_style)
-            audio_data = apply_speaking_rate_to_audio(audio_data, rate)
-        except Exception as ex:
-            logger.warning(
-                f"Gemini TTS gặp lỗi ({ex}). Tự động Fallback sang Microsoft Edge-TTS..."
-            )
-            audio_data = await _synthesize_edge_tts(clean_text, voice="vi-VN-NamMinhNeural", rate=rate, max_retries=max_retries)
+        audio_data = await _run_provider_call("edge", _edge_fallback)
 
-    else:
-        # Mặc định Edge-TTS
-        audio_data = await _synthesize_edge_tts(clean_text, voice=voice, rate=rate, max_retries=max_retries)
-
-    # Nếu sau tất cả vẫn chưa có audio và provider không phải edge, thử fallback edge một lần cuối
-    if not audio_data and prov != "edge":
-        logger.warning(f"Không nhận được audio từ {prov}. Fallback khẩn cấp sang Edge-TTS...")
-        audio_data = await _synthesize_edge_tts(clean_text, voice="vi-VN-NamMinhNeural", rate=rate, max_retries=max_retries)
+    if not audio_data:
+        logger.warning("Không nhận được audio từ %s/Edge-TTS; thử Windows SAPI cục bộ.", prov)
+        audio_data = await _synthesize_windows_sapi(clean_text)
 
     if audio_data and output_path:
         out = Path(output_path)
@@ -921,6 +1081,68 @@ def _decode_mp3_to_pcm(mp3_data: bytes, sample_rate: int = 44100) -> np.ndarray:
 
     int_samples = np.frombuffer(raw_pcm, dtype=np.int16)
     return int_samples.astype(np.float32) / 32768.0
+
+
+def validate_non_silent_pcm(
+    samples: Any,
+    *,
+    silence_threshold: float = 1e-4,
+) -> np.ndarray:
+    """Return finite mono float32 PCM, or raise when it is empty or silent."""
+    try:
+        pcm = np.asarray(samples, dtype=np.float32).reshape(-1)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Dữ liệu PCM không hợp lệ.") from error
+    if pcm.size == 0:
+        raise ValueError("Dữ liệu PCM rỗng.")
+    if not bool(np.all(np.isfinite(pcm))):
+        raise ValueError("Dữ liệu PCM chứa mẫu không hữu hạn.")
+    peak = float(np.max(np.abs(pcm)))
+    if peak <= max(0.0, float(silence_threshold)):
+        raise ValueError("Dữ liệu PCM chỉ chứa im lặng.")
+    return pcm
+
+
+def decode_and_validate_audio(
+    audio_data: bytes,
+    *,
+    sample_rate: int = 44100,
+    silence_threshold: float = 1e-4,
+) -> np.ndarray:
+    """Decode MP3/audio bytes and return validated, non-silent mono PCM."""
+    if not isinstance(audio_data, (bytes, bytearray)) or not audio_data:
+        raise ValueError("Dữ liệu âm thanh rỗng hoặc không hợp lệ.")
+    try:
+        pcm = _decode_mp3_to_pcm(bytes(audio_data), sample_rate=sample_rate)
+    except Exception as error:
+        raise ValueError("Không thể giải mã dữ liệu âm thanh sang PCM.") from error
+    try:
+        return validate_non_silent_pcm(pcm, silence_threshold=silence_threshold)
+    except ValueError as error:
+        raise ValueError(f"Âm thanh giải mã không hợp lệ: {error}") from error
+
+
+def is_valid_speech_audio(
+    audio_or_pcm: Any,
+    *,
+    sample_rate: int = 44100,
+    silence_threshold: float = 1e-4,
+) -> bool:
+    """Return whether encoded audio bytes or PCM contain finite audible speech data."""
+    try:
+        if isinstance(audio_or_pcm, (bytes, bytearray)):
+            decode_and_validate_audio(
+                bytes(audio_or_pcm),
+                sample_rate=sample_rate,
+                silence_threshold=silence_threshold,
+            )
+        else:
+            validate_non_silent_pcm(
+                audio_or_pcm, silence_threshold=silence_threshold
+            )
+    except (TypeError, ValueError, OSError, subprocess.SubprocessError):
+        return False
+    return True
 
 
 def _encode_pcm_to_mp3(
@@ -1099,6 +1321,10 @@ def adapt_spoken_text_for_slot(
     }
     if not original:
         return "", meta
+    # Do not invent spaced-CJK spoken_text for Vietnamese TTS pipelines.
+    if _cjk_ratio_text(original) >= 0.3:
+        meta["timing_warning"] = "hard"
+        return "", meta
 
     rate = max(0.5, min(2.0, float(base_rate or 1.0)))
     soft = max(1.0, float(soft_stretch or 1.2))
@@ -1267,11 +1493,61 @@ def detect_speaker_identity(cue: SubtitleCueV1, text: str) -> Dict[str, str]:
     }
 
 
-def default_voice_pools() -> Dict[str, List[str]]:
-    """Pool giọng theo giới tính lấy từ catalog Edge/CapCut/Gemini hiện có."""
+_PROVIDER_DEFAULT_VOICES: Dict[str, Dict[str, str]] = {
+    "edge": {
+        "male": "vi-VN-NamMinhNeural",
+        "female": "vi-VN-HoaiMyNeural",
+    },
+    "capcut": {
+        "male": "BV075_streaming",
+        "female": "BV074_streaming",
+    },
+    "gemini": {
+        "male": "Puck",
+        "female": "Kore",
+    },
+}
+
+
+def _voice_matches_provider(voice: Optional[str], provider: str) -> bool:
+    if not voice:
+        return False
+    if provider == "capcut":
+        return is_capcut_voice(voice)
+    if provider == "gemini":
+        return is_gemini_voice(voice)
+    return is_edge_voice(voice)
+
+
+def _voice_gender(voice: Optional[str]) -> str:
+    value = str(voice or "").strip().lower()
+    for item in list(EDGE_VOICE_CATALOG) + list(CAPCUT_VOICE_CATALOG) + list(GEMINI_VOICE_CATALOG):
+        if str(item.get("voice_id") or "").strip().lower() == value:
+            gender = str(item.get("gender") or "").lower()
+            return gender if gender in ("male", "female") else "male"
+    return "female" if any(token in value for token in ("female", "hoaimy", "kore", "nu")) else "male"
+
+
+def normalize_voice_for_provider(voice: Optional[str], provider: str, gender: Optional[str] = None) -> str:
+    provider_n = resolve_tts_provider(None, preferred_provider=provider)
+    value = str(voice or "").strip()
+    if _voice_matches_provider(value, provider_n):
+        return value
+    selected_gender = gender if gender in ("male", "female") else _voice_gender(value)
+    return _PROVIDER_DEFAULT_VOICES[provider_n][selected_gender]
+
+
+def default_voice_pools(provider: str = "edge") -> Dict[str, List[str]]:
+    """Pool giọng theo giới tính, chỉ lấy từ provider đang được cấu hình."""
+    provider_n = resolve_tts_provider(None, preferred_provider=provider)
+    catalogs = {
+        "edge": EDGE_VOICE_CATALOG,
+        "capcut": CAPCUT_VOICE_CATALOG,
+        "gemini": GEMINI_VOICE_CATALOG,
+    }
     male: List[str] = []
     female: List[str] = []
-    for item in list(EDGE_VOICE_CATALOG) + list(CAPCUT_VOICE_CATALOG) + list(GEMINI_VOICE_CATALOG):
+    for item in catalogs[provider_n]:
         vid = str(item.get("voice_id") or "").strip()
         gender = str(item.get("gender") or "").strip().lower()
         if not vid:
@@ -1280,11 +1556,12 @@ def default_voice_pools() -> Dict[str, List[str]]:
             female.append(vid)
         elif gender == "male" and vid not in male:
             male.append(vid)
-    if "vi-VN-NamMinhNeural" not in male:
-        male.insert(0, "vi-VN-NamMinhNeural")
-    if "vi-VN-HoaiMyNeural" not in female:
-        female.insert(0, "vi-VN-HoaiMyNeural")
-    return {"male": male or ["vi-VN-NamMinhNeural"], "female": female or ["vi-VN-HoaiMyNeural"]}
+    defaults = _PROVIDER_DEFAULT_VOICES[provider_n]
+    if defaults["male"] not in male:
+        male.insert(0, defaults["male"])
+    if defaults["female"] not in female:
+        female.insert(0, defaults["female"])
+    return {"male": male, "female": female}
 
 
 def assign_voice_for_cue(
@@ -1294,6 +1571,7 @@ def assign_voice_for_cue(
     voice: str,
     voice_male: str,
     voice_female: str,
+    provider: str = "edge",
     female_pool: List[str] | None = None,
     male_pool: List[str] | None = None,
     text: str | None = None,
@@ -1303,10 +1581,10 @@ def assign_voice_for_cue(
     spoken = text if text is not None else (cue.translated_text or cue.source_text or "")
     style = cue.style if isinstance(getattr(cue, "style", None), dict) else {}
     override = str(style.get("voice_id") or "").strip()
-    if override:
+    if override and _voice_matches_provider(override, provider):
         return override
     if mode_n != "multi":
-        return voice
+        return normalize_voice_for_provider(voice, provider)
 
     identity = detect_speaker_identity(cue, spoken)
     if is_skip_tts_role(identity["speaker_role"]):
@@ -1314,17 +1592,27 @@ def assign_voice_for_cue(
 
     gender = identity["speaker"]
     speaker_id = identity["speaker_id"]
-    pools = default_voice_pools()
-    males = list(male_pool or pools["male"])
-    females = list(female_pool or pools["female"])
-    if voice_male and voice_male not in males:
-        males.insert(0, voice_male)
-    elif voice_male:
-        males = [voice_male] + [v for v in males if v != voice_male]
-    if voice_female and voice_female not in females:
-        females.insert(0, voice_female)
-    elif voice_female:
-        females = [voice_female] + [v for v in females if v != voice_female]
+    pools = default_voice_pools(provider)
+    normalized_male = normalize_voice_for_provider(voice_male, provider, "male")
+    normalized_female = normalize_voice_for_provider(voice_female, provider, "female")
+    males = [
+        candidate
+        for candidate in list(male_pool or pools["male"])
+        if _voice_matches_provider(candidate, provider)
+    ]
+    females = [
+        candidate
+        for candidate in list(female_pool or pools["female"])
+        if _voice_matches_provider(candidate, provider)
+    ]
+    if normalized_male and normalized_male not in males:
+        males.insert(0, normalized_male)
+    elif normalized_male:
+        males = [normalized_male] + [v for v in males if v != normalized_male]
+    if normalized_female and normalized_female not in females:
+        females.insert(0, normalized_female)
+    elif normalized_female:
+        females = [normalized_female] + [v for v in females if v != normalized_female]
 
     if gender == "female":
         pool = females or [voice_female or voice]
@@ -1332,10 +1620,10 @@ def assign_voice_for_cue(
         pool = males or [voice_male or voice]
     else:
         # unknown: prefer configured single voice, else male pool first
-        return voice or (males[0] if males else voice_female)
+        return normalize_voice_for_provider(voice, provider) or (males[0] if males else normalized_female)
 
     if not pool:
-        return voice_female if gender == "female" else voice_male
+        return normalized_female if gender == "female" else normalized_male
     return pool[_stable_index(speaker_id, len(pool))]
 
 
@@ -1347,6 +1635,7 @@ def resolve_cue_voice(
     voice: str,
     voice_male: str,
     voice_female: str,
+    provider: str = "edge",
     female_pool: List[str] | None = None,
     male_pool: List[str] | None = None,
 ) -> str:
@@ -1356,6 +1645,7 @@ def resolve_cue_voice(
         voice=voice,
         voice_male=voice_male,
         voice_female=voice_female,
+        provider=provider,
         female_pool=female_pool,
         male_pool=male_pool,
         text=text,
@@ -1467,6 +1757,10 @@ async def generate_timed_voiceover(
     - 'multi': Lồng tiếng phân vai nhiều người (thoại nam đọc giọng Nam, thoại nữ đọc giọng Nữ).
     Tự động lọc rác thoại và co giãn thời lượng (Slot Time-Stretching 1.0x -> 1.45x).
     """
+    provider = resolve_tts_provider(voice, preferred_provider=provider)
+    voice = normalize_voice_for_provider(voice, provider)
+    voice_male = normalize_voice_for_provider(voice_male, provider, "male")
+    voice_female = normalize_voice_for_provider(voice_female, provider, "female")
     cues = normalize_sequential_cues(list(cues))
     mode = normalize_dubbing_mode(mode)
     # Stabilize same-gender casting before TTS (explicit ids preserved)
@@ -1474,10 +1768,9 @@ async def generate_timed_voiceover(
     base_rate = parse_speaking_rate(rate)
     valid_cues: List[tuple[SubtitleCueV1, str]] = []
     for idx_c, c in enumerate(cues):
-        raw_text = (c.translated_text or c.source_text).strip()
-        # Prefer dedicated spoken_text when present (duration-adapted dubbing script)
         style = c.style if isinstance(getattr(c, "style", None), dict) else {}
-        spoken_raw = str(style.get("spoken_text") or raw_text).strip()
+        # Prefer VI translated / usable spoken_text; never feed stale CJK spoken_text to VI TTS.
+        spoken_raw = resolve_tts_spoken_text(c, prefer_translated=True)
         cleaned = clean_subtitle_text(spoken_raw)
         if not cleaned:
             continue
@@ -1501,8 +1794,12 @@ async def generate_timed_voiceover(
                 slot_mode = "single"
         slot_dur = available_voiceover_slot(c, next_cue, slot_mode)
         # Only auto-adapt when spoken_text was not manually provided
-        manual_spoken = bool(str(style.get("spoken_text") or "").strip())
+        existing_spoken = clean_subtitle_text(str(style.get("spoken_text") or ""))
+        manual_spoken = bool(existing_spoken) and _cjk_ratio_text(existing_spoken) < 0.3
         if not manual_spoken:
+            # Drop unusable stale spoken_text so adapt persists VI script.
+            if existing_spoken and isinstance(c.style, dict):
+                c.style.pop("spoken_text", None)
             adapted, adapt_meta = adapt_spoken_text_for_slot(
                 cleaned,
                 slot_sec=slot_dur,
@@ -1542,8 +1839,8 @@ async def generate_timed_voiceover(
     if cues_out_dir:
         cues_out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Tổng hợp âm thanh song song có kiểm soát (Concurrency Semaphore) để tăng tốc độ 4x
-    sem = asyncio.Semaphore(max(1, min(batch_size, 4)))
+    # Giới hạn batch ngoài limiter theo provider để không tạo quá nhiều coroutine đang chờ.
+    batch_sem = asyncio.Semaphore(max(1, int(batch_size)))
     completed_count = 0
     total_valid = len(valid_cues)
 
@@ -1560,6 +1857,7 @@ async def generate_timed_voiceover(
             voice=voice,
             voice_male=voice_male,
             voice_female=voice_female,
+            provider=provider,
         )
         if not target_v:
             completed_count += 1
@@ -1569,7 +1867,7 @@ async def generate_timed_voiceover(
                 except Exception:
                     pass
             return i, c, text, b""
-        async with sem:
+        async with batch_sem:
             audio_bytes = await synthesize_text(
                 text,
                 voice=target_v,
@@ -1589,14 +1887,18 @@ async def generate_timed_voiceover(
     results = await asyncio.gather(*tasks)
     results.sort(key=lambda r: r[0])
 
+    successful_cues = 0
     for result_index, (idx, cue, cleaned_text, mp3_res) in enumerate(results):
         if not mp3_res:
             logger.warning(f"Bỏ qua câu {cue.cue_id} do không nhận được audio")
             continue
 
-        pcm_samples = _decode_mp3_to_pcm(mp3_res, sample_rate=sample_rate)
-        if len(pcm_samples) == 0:
+        try:
+            pcm_samples = decode_and_validate_audio(mp3_res, sample_rate=sample_rate)
+        except ValueError as error:
+            logger.warning("Bỏ qua câu %s do audio không hợp lệ: %s", cue.cue_id, error)
             continue
+        successful_cues += 1
 
         next_cue = results[result_index + 1][1] if result_index + 1 < len(results) else None
         # Co giãn khớp slot thời gian (Slot Time-Stretching 1.0x -> 1.45x)
@@ -1643,11 +1945,17 @@ async def generate_timed_voiceover(
             allow_overlap=allow_overlap,
         )
 
-    # Chuẩn hóa chống vỡ tiếng (Anti-clipping soft peak normalization) khi có nhiều nhân vật nói đè lên nhau
-    if len(master_buffer) > 0:
-        max_peak = float(np.max(np.abs(master_buffer)))
-        if max_peak > 0.98:
-            master_buffer = (master_buffer / max_peak) * 0.95
+    if successful_cues == 0:
+        raise ValueError("Không có câu TTS nào tạo được âm thanh hợp lệ; không xuất master im lặng.")
+
+    # Chặn master rỗng/im lặng trước encode, rồi chuẩn hóa chống vỡ tiếng khi có thoại chồng.
+    try:
+        master_buffer = validate_non_silent_pcm(master_buffer)
+    except ValueError as error:
+        raise ValueError(f"Master voiceover không hợp lệ trước khi mã hóa: {error}") from error
+    max_peak = float(np.max(np.abs(master_buffer)))
+    if max_peak > 0.98:
+        master_buffer = (master_buffer / max_peak) * 0.95
 
     # Xuất ra file MP3 đồng bộ
     out = _encode_pcm_to_mp3(master_buffer, output_path, sample_rate=sample_rate)
@@ -1756,13 +2064,17 @@ async def splice_cue_voiceover(
     """
     out_path = Path(output_path).resolve()
     mode = normalize_dubbing_mode(mode)
+    provider = resolve_tts_provider(voice, preferred_provider=provider)
+    voice = normalize_voice_for_provider(voice, provider)
+    voice_male = normalize_voice_for_provider(voice_male, provider, "male")
+    voice_female = normalize_voice_for_provider(voice_female, provider, "female")
     # Keep casting consistent with full-timeline turn-taking when possible
     try:
         assign_turn_taking_speaker_ids(list(cues), mode=mode)
     except Exception:
         pass
     style = target_cue.style if isinstance(getattr(target_cue, "style", None), dict) else {}
-    raw_text = str(style.get("spoken_text") or target_cue.translated_text or target_cue.source_text).strip()
+    raw_text = resolve_tts_spoken_text(target_cue, prefer_translated=True)
     cleaned_text = clean_subtitle_text(raw_text)
     if not cleaned_text:
         raise ValueError(f"Câu phụ đề {target_cue.cue_id} không có nội dung văn bản hợp lệ để lồng tiếng.")
@@ -1780,8 +2092,11 @@ async def splice_cue_voiceover(
     # Duration-budget spoken adaptation for single-cue redub
     base_rate = parse_speaking_rate(rate)
     slot_dur = max(0.05, float(target_cue.end_pts) - float(target_cue.start_pts))
-    manual_spoken = bool(str(style.get("spoken_text") or "").strip())
+    existing_spoken = clean_subtitle_text(str(style.get("spoken_text") or ""))
+    manual_spoken = bool(existing_spoken) and _cjk_ratio_text(existing_spoken) < 0.3
     if not manual_spoken:
+        if existing_spoken and isinstance(target_cue.style, dict):
+            target_cue.style.pop("spoken_text", None)
         adapted, adapt_meta = adapt_spoken_text_for_slot(
             cleaned_text,
             slot_sec=slot_dur,
@@ -1802,6 +2117,7 @@ async def splice_cue_voiceover(
         voice=voice,
         voice_male=voice_male,
         voice_female=voice_female,
+        provider=provider,
     ) or voice
 
     logger.info(f"Đang sinh giọng TTS câu đơn {target_cue.cue_id} [{selected_voice}] mode={mode} qua [{provider}]...")
@@ -1815,14 +2131,15 @@ async def splice_cue_voiceover(
     if not mp3_res:
         raise ValueError(f"Không nhận được dữ liệu âm thanh từ dịch vụ TTS cho câu {target_cue.cue_id}.")
 
+    try:
+        pcm_samples = decode_and_validate_audio(mp3_res, sample_rate=sample_rate)
+    except ValueError as error:
+        raise ValueError(f"Âm thanh câu phụ đề không hợp lệ: {error}") from error
+
     if cue_output_path:
         c_path = Path(cue_output_path).resolve()
         c_path.parent.mkdir(parents=True, exist_ok=True)
         c_path.write_bytes(mp3_res)
-
-    pcm_samples = _decode_mp3_to_pcm(mp3_res, sample_rate=sample_rate)
-    if len(pcm_samples) == 0:
-        raise ValueError("Không thể giải mã âm thanh câu phụ đề sang PCM.")
 
     # Co giãn khớp slot thời gian (1.0x -> 1.45x)
     speech_dur = len(pcm_samples) / sample_rate
@@ -1833,12 +2150,17 @@ async def splice_cue_voiceover(
     if speed_factor > 1.02:
         pcm_samples = time_stretch_pcm(pcm_samples, speed_factor=speed_factor, sample_rate=sample_rate)
 
-    # Nạp master buffer hiện có hoặc tạo mới
-    if out_path.exists() and out_path.stat().st_size > 1024:
+    # Nạp master buffer hiện có hoặc tạo mới. Master đã tồn tại phải giải mã được
+    # và có tín hiệu; không âm thầm ghi đè một file hỏng/im lặng.
+    if out_path.exists():
+        if out_path.stat().st_size == 0:
+            raise ValueError("Master voiceover hiện có rỗng; từ chối splice để tránh mất dữ liệu.")
         try:
-            master_buffer = _decode_mp3_to_pcm(out_path.read_bytes(), sample_rate=sample_rate)
-        except Exception:
-            master_buffer = np.array([], dtype=np.float32)
+            master_buffer = decode_and_validate_audio(
+                out_path.read_bytes(), sample_rate=sample_rate
+            )
+        except ValueError as error:
+            raise ValueError(f"Master voiceover hiện có không hợp lệ: {error}") from error
     else:
         master_buffer = np.array([], dtype=np.float32)
 
@@ -1862,6 +2184,15 @@ async def splice_cue_voiceover(
     # Vá âm thanh mới vào vị trí start_sample
     end_sample = start_sample + len(pcm_samples)
     master_buffer[start_sample:end_sample] = pcm_samples
+
+    # Chặn master im lặng/non-finite trước khi mã hóa.
+    try:
+        master_buffer = validate_non_silent_pcm(master_buffer)
+    except ValueError as error:
+        raise ValueError(f"Master voiceover không hợp lệ sau khi splice: {error}") from error
+    max_peak = float(np.max(np.abs(master_buffer)))
+    if max_peak > 0.98:
+        master_buffer = (master_buffer / max_peak) * 0.95
 
     # Mã hóa và lưu lại file MP3 master
     _encode_pcm_to_mp3(master_buffer, out_path, sample_rate=sample_rate)

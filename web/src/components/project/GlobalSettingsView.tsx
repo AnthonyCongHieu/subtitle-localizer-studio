@@ -199,6 +199,8 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
       diff_threshold: 2.5,
       enable_gap_rescue: true,
       enable_roi_tightening: true,
+      scan_profile: 'vertical_short',
+      enable_adaptive_rescue: true,
       vlm_provider: 'gemini',
       vlm_prompt_style: 'accurate_dialogue',
       demux_fallback_to_ocr: true,
@@ -220,12 +222,14 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
       provider: 'gemini',
       target_language: 'vi',
       gemini_model: 'gemini-2.5-flash',
-      local_model: 'qwen2.5:7b-instruct',
+      local_model: 'qwen2.5:14b',
       local_endpoint: 'http://localhost:11434',
       auto_fallback: true,
       batch_size: 35,
       prompt_tone: 'dramatic',
       use_glossary: true,
+      addressing_mode: 'auto',
+      character_context: '',
     },
 
     dubbing: {
@@ -362,7 +366,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     try {
       const res = await apiClient.testLocalLlmConnection({
         endpoint: settings.translation.local_endpoint || 'http://localhost:11434',
-        model: settings.translation.local_model || 'qwen2.5:7b-instruct',
+        model: settings.translation.local_model || 'qwen2.5:14b',
       });
       setLocalLlmTestResult(res);
     } catch (err: any) {
@@ -1046,7 +1050,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
         target_lang: 'vi',
         provider: settings.translation.provider,
         gemini_model: settings.translation.gemini_model,
-        local_model: settings.translation.local_model || 'qwen2.5:7b-instruct',
+        local_model: settings.translation.local_model || 'qwen2.5:14b',
         local_endpoint: settings.translation.local_endpoint || 'http://localhost:11434',
         auto_fallback: settings.translation.auto_fallback ?? true,
         prompt_tone: settings.translation.prompt_tone,
@@ -2117,8 +2121,55 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                           />
                         </div>
 
-                        <div className="space-y-2 pt-1 border-t border-slate-800/50">
-                          <label className="flex items-center gap-2.5 cursor-pointer text-xs">
+                                                <div className="space-y-2 pt-1 border-t border-slate-800/50">
+                          <div>
+                            <div className="text-[11px] font-semibold text-slate-200 mb-1.5">Chế độ quét OCR</div>
+                            <div className="grid grid-cols-2 gap-1.5 mb-2">
+                              <button
+                                type="button"
+                                onClick={() => setSettings({
+                                  ...settings,
+                                  ocr: {
+                                    ...settings.ocr,
+                                    scan_profile: 'vertical_short',
+                                    enable_adaptive_rescue: true,
+                                    enable_roi_tightening: true,
+                                    enable_gap_rescue: true,
+                                  },
+                                })}
+                                className={`px-2 py-2 rounded-lg border text-left cursor-pointer ${
+                                  settings.ocr.scan_profile !== 'fixed_roi'
+                                    ? 'bg-cyan-600/20 border-cyan-500 text-white'
+                                    : 'bg-slate-900 border-slate-700 text-slate-300'
+                                }`}
+                              >
+                                <div className="text-[11px] font-bold">Phim dọc</div>
+                                <div className="text-[9px] opacity-80">Khung + phao cứu khi sub lệch</div>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSettings({
+                                  ...settings,
+                                  ocr: {
+                                    ...settings.ocr,
+                                    scan_profile: 'fixed_roi',
+                                    enable_adaptive_rescue: false,
+                                    enable_roi_tightening: false,
+                                    enable_gap_rescue: false,
+                                  },
+                                })}
+                                className={`px-2 py-2 rounded-lg border text-left cursor-pointer ${
+                                  settings.ocr.scan_profile === 'fixed_roi'
+                                    ? 'bg-cyan-600/20 border-cyan-500 text-white'
+                                    : 'bg-slate-900 border-slate-700 text-slate-300'
+                                }`}
+                              >
+                                <div className="text-[11px] font-bold">Khung cố định</div>
+                                <div className="text-[9px] opacity-80">Chỉ OCR đúng khung, không cứu</div>
+                              </button>
+                            </div>
+                          </div>
+<label className="flex items-center gap-2.5 cursor-pointer text-xs">
                             <input
                               type="checkbox"
                               checked={settings.ocr.enable_roi_tightening ?? true}
@@ -2964,7 +3015,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                       <div>
                         <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block mb-1.5">Model</label>
                         <select
-                          value={settings.translation.local_model || 'qwen2.5:7b-instruct'}
+                          value={settings.translation.local_model || 'qwen2.5:14b'}
                           onChange={(e) =>
                             setSettings({
                               ...settings,
@@ -2973,7 +3024,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                           }
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-cyan-500/60 transition"
                         >
-                          <option value="qwen2.5:7b-instruct">qwen2.5:7b — Khuyên dùng (VRAM ~4.5 GB)</option>
+                          <option value="qwen2.5:14b">qwen2.5:14b — Khuyên dùng (benchmark sweet-spot)</option>
                           <option value="qwen2.5:3b-instruct">qwen2.5:3b — Siêu nhẹ (VRAM ~2.2 GB)</option>
                           <option value="qwen2.5:14b-instruct">qwen2.5:14b — Cao cấp (Cần GPU lớn)</option>
                         </select>
@@ -3098,9 +3149,45 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                         </span>
                       </label>
                     </div>
-
                     {/* Auto-failover toggle */}
-                    <div className="flex items-end">
+
+                      <div className="flex flex-col gap-2 p-3 rounded-lg bg-slate-950/50 border border-slate-800">
+                        <label className="text-[11px] text-slate-300 font-medium">Chế độ xưng hô (mọi video)</label>
+                        <select
+                          value={settings.translation.addressing_mode || 'auto'}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              translation: {
+                                ...settings.translation,
+                                addressing_mode: e.target.value as any,
+                              },
+                            })
+                          }
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200"
+                        >
+                          <option value="auto">Auto (suy luận anh/em)</option>
+                          <option value="couple_anh_em">Couple anh-em (ép phim tình cảm)</option>
+                          <option value="neutral">Neutral (cho phép bạn)</option>
+                        </select>
+                        <label className="text-[11px] text-slate-300 font-medium">Ngữ cảnh nhân vật / quan hệ (tuỳ project)</label>
+                        <textarea
+                          value={settings.translation.character_context || ''}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              translation: {
+                                ...settings.translation,
+                                character_context: e.target.value,
+                              },
+                            })
+                          }
+                          rows={3}
+                          placeholder="VD: Nữ chính nói với chồng/bạn trai; giữ anh-em. Không hardcode một video."
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200"
+                        />
+                      </div>
+<div className="flex items-end">
                       <label className="flex items-center gap-2.5 cursor-pointer w-full p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition text-xs">
                         <input
                           type="checkbox"

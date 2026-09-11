@@ -27,12 +27,24 @@ def _longest_common_substring_len(s1: str, s2: str) -> int:
     return best
 
 
-def is_progressive_text_growth(s1: str, s2: str, *, min_core: int = 6) -> bool:
-    """Nhận diện hard-sub OCR mọc dần / hoàn thiện cùng một dòng trên màn hình.
+def _boundary_overlap_len(a: str, b: str) -> int:
+    """Độ dài chồng lấp biên: suffix(a) == prefix(b) hoặc ngược lại."""
+    if not a or not b:
+        return 0
+    max_k = min(len(a), len(b))
+    best = 0
+    for k in range(1, max_k + 1):
+        if a[-k:] == b[:k] or b[-k:] == a[:k]:
+            best = k
+    return best
 
-    Chuẩn ngành (Subtitle Edit / hardsub OCR): nếu bản ngắn là prefix/suffix/
-    containment hoặc chia sẻ core đủ dài với bản dài trong cùng event → gộp.
-    Giữ ngưỡng min_core để không gộp thoại ngắn khác nhau (vd. 回戏班 vs 让我回戏班吧).
+
+def is_progressive_text_growth(s1: str, s2: str, *, min_core: int = 6) -> bool:
+    """Nhận diện hard-sub OCR mọc dần / nửa câu → câu đủ / continuation cùng event.
+
+    - Typewriter prefix/suffix: cho phép cả chuỗi ngắn (< min_core), ví dụ 不是→不是一个.
+    - Mid-containment ngắn (回戏班 ⊂ 让我回戏班吧) vẫn bị loại để không gộp thoại khác.
+    - Shared-core continuation: suffix/prefix chồng biên đủ dài (需要面对的内容…).
     """
     t1, t2 = (s1 or "").strip(), (s2 or "").strip()
     if not t1 or not t2:
@@ -41,17 +53,27 @@ def is_progressive_text_growth(s1: str, s2: str, *, min_core: int = 6) -> bool:
         return True
 
     shorter, longer = (t1, t2) if len(t1) <= len(t2) else (t2, t1)
-    if len(shorter) < min_core:
-        return False
 
+    # Typewriter prefix growth (不是→不是一个): cho phép từ độ dài 2.
+    if longer.startswith(shorter):
+        return len(shorter) >= 2 and len(longer) > len(shorter)
+
+    # Suffix growth: chặt hơn để tránh 吧⊂…吧 / 不是⊂是不是 / 去⊂我去.
+    if longer.endswith(shorter):
+        return len(shorter) >= max(4, min_core - 2) and len(longer) >= len(shorter) + 2
+
+    # Mid-containment chỉ khi bản ngắn đủ dài (tránh gộp thoại ngắn khác nghĩa).
     if shorter in longer:
-        return True
-    if longer.startswith(shorter) or longer.endswith(shorter):
+        return len(shorter) >= min_core and len(longer) > len(shorter)
+
+    # Continuation nửa câu: chồng biên (A kết thúc bằng phần đầu của B).
+    overlap = _boundary_overlap_len(t1, t2)
+    if overlap >= max(4, int(round(min(len(t1), len(t2)) * 0.45))):
         return True
 
     core = _longest_common_substring_len(shorter, longer)
     # Core phải phủ phần lớn bản ngắn; bản dài hơn phải thực sự "mọc".
-    if core < max(min_core, int(round(len(shorter) * 0.65))):
+    if core < max(min_core, int(round(len(shorter) * 0.55))):
         return False
     return len(longer) >= len(shorter) + 1
 

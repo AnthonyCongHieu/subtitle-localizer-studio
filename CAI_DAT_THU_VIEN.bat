@@ -43,6 +43,23 @@ if %errorlevel% neq 0 (
 )
 "%PY%" -m pip install -e "%ROOT%"
 
+:: 1b. GPU OCR runtime (NVIDIA only)
+echo.
+echo [*] Kiem tra NVIDIA GPU cho OCR CUDA...
+where nvidia-smi >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [OK] Tim thay nvidia-smi. Cai onnxruntime-gpu + CUDA 13 redistributables...
+    "%PY%" -m pip uninstall -y onnxruntime >nul 2>&1
+    "%PY%" -m pip install -r "%ROOT%requirements-gpu.txt"
+    if %errorlevel% neq 0 (
+        echo [!] Cai GPU runtime that bai. Local OCR se dung CPU.
+    ) else (
+        echo [OK] GPU OCR runtime da cai.
+    )
+) else (
+    echo [!] Khong thay nvidia-smi. Bo qua GPU OCR runtime.
+)
+
 :: 2. Node.js
 echo.
 echo [*] Kiem tra npm...
@@ -64,3 +81,4 @@ echo ===========================================================================
 echo.
 pause
 endlocal
+

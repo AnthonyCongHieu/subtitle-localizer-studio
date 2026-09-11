@@ -159,13 +159,29 @@ def _has_verified_han_edge(longer: str, shorter: str) -> bool:
 def _prepare_windows_cuda_dlls() -> List[Any]:
     if sys.platform != "win32":
         return []
-    directories = []
-    for package in ("cuda_runtime", "cuda_nvrtc", "cublas", "cufft", "cudnn"):
+    directories: List[Path] = []
+    # ORT 1.30+ on Windows expects CUDA 13 redistributables under nvidia/cu13,
+    # while older stacks and cuDNN wheels still use nvidia/<lib>/bin.
+    package_specs = (
+        ("nvidia-cublas", ("nvidia/cu13/bin/x86_64", "nvidia/cublas/bin")),
+        ("nvidia-cuda-runtime", ("nvidia/cu13/bin/x86_64", "nvidia/cuda_runtime/bin")),
+        ("nvidia-cuda-nvrtc", ("nvidia/cu13/bin/x86_64", "nvidia/cuda_nvrtc/bin")),
+        ("nvidia-cufft", ("nvidia/cu13/bin/x86_64", "nvidia/cufft/bin")),
+        ("nvidia-cudnn-cu13", ("nvidia/cudnn/bin", "nvidia/cu13/bin/x86_64")),
+        ("nvidia-nvjitlink", ("nvidia/cu13/bin/x86_64", "nvidia/nvjitlink/bin")),
+        ("nvidia-cuda-runtime-cu12", ("nvidia/cuda_runtime/bin",)),
+        ("nvidia-cuda-nvrtc-cu12", ("nvidia/cuda_nvrtc/bin",)),
+        ("nvidia-cublas-cu12", ("nvidia/cublas/bin",)),
+        ("nvidia-cufft-cu12", ("nvidia/cufft/bin",)),
+        ("nvidia-cudnn-cu12", ("nvidia/cudnn/bin",)),
+    )
+    for dist_name, relative_dirs in package_specs:
         try:
-            distribution = metadata.distribution(f"nvidia-{package.replace('_', '-')}-cu12")
+            distribution = metadata.distribution(dist_name)
         except metadata.PackageNotFoundError:
             continue
-        directories.append(Path(distribution.locate_file(f"nvidia/{package}/bin")))
+        for relative in relative_dirs:
+            directories.append(Path(distribution.locate_file(relative)))
     if os.environ.get("CUDA_PATH"):
         directories.append(Path(os.environ["CUDA_PATH"]) / "bin")
     handles = []

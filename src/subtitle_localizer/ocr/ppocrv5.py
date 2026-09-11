@@ -13,6 +13,7 @@ import numpy as np
 
 from subtitle_localizer.domain.models import ModelDescriptorV1, OcrObservationV1
 from subtitle_localizer.ocr.base import OcrProvider
+from subtitle_localizer.ocr.rapid import _prepare_windows_cuda_dlls
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,12 @@ class PPOCRv5Provider(OcrProvider):
             self.character_dict = self._load_dictionary_file(self.character_dict_path or self._default_dict_path())
         import onnxruntime as ort
 
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            _prepare_windows_cuda_dlls()
+            try:
+                ort.preload_dlls(directory="")
+            except Exception:
+                pass
         available = ort.get_available_providers()
         providers = self.execution_providers or (
             ["CUDAExecutionProvider", "CPUExecutionProvider"]

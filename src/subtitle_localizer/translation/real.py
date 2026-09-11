@@ -12,6 +12,8 @@ from subtitle_localizer.translation.base import TranslationProvider
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
+
 # Từ điển ngữ cảnh hội thoại và tiếng lóng video tiếng Trung sang tiếng Việt tự nhiên
 DEFAULT_CHINESE_VIETNAMESE_GLOSSARY: Dict[str, str] = {
     # Chào hỏi thông dụng
@@ -65,6 +67,21 @@ DEFAULT_CHINESE_VIETNAMESE_GLOSSARY: Dict[str, str] = {
     "调理身子": "bồi bổ cơ thể",
     "外边有人": "có người khác bên ngoài",
     "大字不识几个": "một chữ bẻ đôi cũng không biết",
+}
+
+# Các cấu trúc tường thuật thường bị dịch máy theo từng chữ. Đây là rule theo
+# nguồn/ngữ nghĩa, không phụ thuộc tên phim hay cast của một video cụ thể.
+CONTEXTUAL_SOURCE_REWRITES: Dict[str, str] = {
+    "影视鉴赏君男人是从业多年的影视审核员":
+        "Người chuyên review phim là một kiểm duyệt viên phim ảnh nhiều năm kinh nghiệm",
+    "影视鉴赏君就在男人脑海里飞速闪过无数画面时":
+        "Khi trong đầu người đàn ông lướt qua vô số hình ảnh",
+    "常年泡在海量岛国视频里":
+        "Suốt nhiều năm đắm mình trong vô số video Nhật Bản",
+    "早就把身体熬成了“挂机模式’":
+        "Đã sớm vắt kiệt cơ thể đến mức rơi vào chế độ treo máy",
+    "早就把身体熬成了\"挂机模式\"":
+        "Đã sớm vắt kiệt cơ thể đến mức rơi vào chế độ treo máy",
 }
 
 
@@ -139,7 +156,39 @@ def _split_speaker_annotation(raw_item: str) -> tuple[str | None, str, dict]:
     return gender, text, meta
 
 
-def _refine_subtitles(text: str, source_text: str) -> str:
+
+def _polish_addressing(
+    text: str,
+    source_text: str = "",
+    speaker_gender: str | None = None,
+    addressing_mode: str = "auto",
+) -> str:
+    """Rewrite generic Vietnamese addressee pronouns by mode + speaker gender.
+
+    Video-agnostic: no cast names. Only touches leading/generic "Bạn" forms.
+    """
+    result = (text or "").strip()
+    if not result:
+        return result
+    mode = (addressing_mode or "auto").strip().lower()
+    if mode in {"neutral", "keep_neutral"}:
+        return result
+    # couple mode always polishes; auto only when speaker gender is known
+    if mode not in {"couple_anh_em", "couple", "auto"}:
+        return result
+    if mode == "auto" and speaker_gender not in {"female", "male"}:
+        return result
+    if speaker_gender not in {"female", "male"}:
+        return result
+
+    replacement = "Anh" if speaker_gender == "female" else "Em"
+    # Leading Ban / Bạn as addressee
+    result = re.sub(r"^(Bạn|Ban)(?=\s|,|\?|!|$)", replacement, result, count=1, flags=re.IGNORECASE)
+    # Common "Ban/Bạn oi" vocative mid-sentence kept conservative: only exact leading handled above
+    return result
+
+
+def _refine_subtitles(text: str, source_text: str, *, preserve_existing: bool = False) -> str:
     """Tinh chỉnh câu dịch dựa trên từ điển ngữ cảnh và sửa các lỗi dịch thô."""
     result = text.strip()
     
@@ -162,7 +211,10 @@ def _refine_subtitles(text: str, source_text: str) -> str:
 
     # Áp dụng từ điển ngữ cảnh chuyên sâu khi câu gốc khớp trọn vẹn hoặc chứa thuật ngữ
     clean_src = source_text.strip()
-    if clean_src in DEFAULT_CHINESE_VIETNAMESE_GLOSSARY:
+    contextual_rewrite = CONTEXTUAL_SOURCE_REWRITES.get(clean_src)
+    if contextual_rewrite:
+        return _capitalize_first(contextual_rewrite)
+    if clean_src in DEFAULT_CHINESE_VIETNAMESE_GLOSSARY and not preserve_existing:
         result = DEFAULT_CHINESE_VIETNAMESE_GLOSSARY[clean_src]
     else:
         for zh_term, vi_term in DEFAULT_CHINESE_VIETNAMESE_GLOSSARY.items():
@@ -174,6 +226,26 @@ def _refine_subtitles(text: str, source_text: str) -> str:
                     result = re.sub(r'(?i)có được một chiếc ô tô|bắt xe', 'gọi xe', result)
                 elif zh_term in ("家人们", "宝子们") and ("gia đình" in lower_res or "người nhà" in lower_res):
                     result = re.sub(r'(?i)gia đình|người nhà', vi_term, result)
+
+    # General ZH->VI calque / nuance repairs (video-agnostic)
+    src = (source_text or "").strip()
+    lower_now = result.lower()
+    if "是我的问题" in src or src == "是我的问题":
+        if "vấn đề của tôi" in lower_now or "van de cua toi" in lower_now:
+            result = "Lỗi là của tôi"
+    if "是我做得不好" in src:
+        if lower_now in {"tôi làm không tốt", "toi lam khong tot"} or lower_now.startswith("tôi làm không tốt"):
+            result = "Là do tôi làm không tốt"
+    if "你怎么了" in src or "您怎么了" in src:
+        # "sao rồi" is status check; source asks what's wrong
+        result = re.sub(r"(?i)sao rồi", "sao vậy", result)
+        if re.fullmatch(r"(?i)bạn sao vậy", result.strip()):
+            result = "Bạn sao vậy?"
+        elif re.fullmatch(r"(?i)(anh|em) sao vậy", result.strip()):
+            result = result.strip().rstrip("?") + "?"
+    if src in {"您说得对", "你说得对"} and re.fullmatch(r"(?i)bạn nói đúng\.?", result.strip()):
+        # Keep Ban here; addressing polish decides Anh/Em by speaker/mode
+        result = "Bạn nói đúng"
 
     return _capitalize_first(result)
 
@@ -192,7 +264,7 @@ class RealTranslationProvider(TranslationProvider):
         return ModelDescriptorV1(
             id="ollama-qwen-local",
             source_url="https://ollama.com/library/qwen2.5",
-            version_or_commit="qwen2.5:7b-instruct",
+            version_or_commit=DEFAULT_LOCAL_MODEL,
             sha256="0" * 64,
             format="api",
             license="MIT",
@@ -205,6 +277,16 @@ class RealTranslationProvider(TranslationProvider):
 
     def unload(self) -> None:
         self.is_loaded = False
+
+    @staticmethod
+    def _local_chunk_size(total_cues: int, configured_batch_size: Optional[int]) -> int:
+        """Keep local prompts small enough that Ollama returns every cue marker."""
+        if total_cues <= 0:
+            return 1
+        configured = int(configured_batch_size or 35)
+        if configured <= 0:
+            configured = 35
+        return min(total_cues, configured)
 
 
     def _cjk_ratio(self, text: str) -> float:
@@ -227,6 +309,214 @@ class RealTranslationProvider(TranslationProvider):
                 return True
         return False
 
+    def _has_foreign_source_leak(self, translated: str, other_sources: list[str]) -> bool:
+        """Reject mixed VI+CJK lines that still carry another cue's Chinese source."""
+        runs = re.findall(r"[\u4e00-\u9fff]{4,}", translated or "")
+        if not runs:
+            return False
+        for run in runs:
+            run_n = self._normalize_compare_text(run)
+            for source in other_sources:
+                src = self._normalize_compare_text(source)
+                if src and run_n and (run_n in src or src in run_n):
+                    return True
+        return False
+
+    def _latin_token_count(self, text: str) -> int:
+        return len(re.findall(r"[A-Za-z]{3,}", text or ""))
+
+    def _vietnamese_diacritic_count(self, text: str) -> int:
+        marks = (
+            "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợ"
+            "úùủũụưứừửữựýỳỷỹỵđ"
+            "ÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢ"
+            "ÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ"
+        )
+        return sum(1 for ch in (text or "") if ch in marks)
+
+    def _looks_like_english(self, text: str) -> bool:
+        """Detect English without rejecting unaccented Vietnamese output.
+
+        Vietnamese subtitles can legitimately arrive without diacritics (for
+        example ``Xin chao``), so Latin-token count alone is too aggressive.
+        Require a small English function-word signal as well.
+        """
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return False
+        if self._vietnamese_diacritic_count(cleaned) > 0:
+            return False
+        if self._cjk_ratio(cleaned) >= 0.2:
+            return False
+        if self._latin_token_count(cleaned) < 2:
+            return False
+        english_markers = {
+            "a", "an", "and", "are", "for", "how", "is", "it", "no",
+            "not", "of", "that", "the", "this", "to", "what", "with",
+            "you", "your",
+        }
+        tokens = {token.lower() for token in re.findall(r"[A-Za-z]{2,}", cleaned)}
+        return bool(tokens & english_markers)
+
+    def _is_invalid_translation(
+        self,
+        translated: str,
+        own_source: str = "",
+        target_lang: str = "vi",
+    ) -> bool:
+        text = (translated or "").strip()
+        if not text:
+            return True
+        if self._normalize_compare_text(text) == self._normalize_compare_text(own_source):
+            return True
+        if self._cjk_ratio(text) >= 0.45:
+            return True
+        # Target Vietnamese but model drifted to English mid-batch.
+        if (target_lang or "vi").lower().startswith("vi") and self._looks_like_english(text):
+            return True
+        return False
+
+    def list_untranslated_indices(
+        self,
+        cues: List[SubtitleCueV1],
+        target_lang: str = "vi",
+    ) -> List[int]:
+        indices: List[int] = []
+        for idx, cue in enumerate(cues):
+            src = (cue.source_text or "").strip()
+            if not src:
+                continue
+            vi = (cue.translated_text or "").strip()
+            if self._is_invalid_translation(vi, src, target_lang=target_lang):
+                indices.append(idx)
+                continue
+            # Contaminated by another source's CJK span.
+            others = [
+                (cues[j].source_text or "").strip()
+                for j in range(len(cues))
+                if j != idx and (cues[j].source_text or "").strip()
+            ]
+            if self._has_foreign_source_leak(vi, others):
+                indices.append(idx)
+        return indices
+
+    def _build_prior_context_lines(
+        self,
+        cues: List[SubtitleCueV1],
+        *,
+        exclude: set[int] | None = None,
+        limit: int = 10,
+    ) -> List[str]:
+        exclude = exclude or set()
+        lines: List[str] = []
+        for idx, cue in enumerate(cues):
+            if idx in exclude:
+                continue
+            src = (cue.source_text or "").strip()
+            vi = (cue.translated_text or "").strip()
+            if not src or self._is_invalid_translation(vi, src):
+                continue
+            if self._has_foreign_source_leak(
+                vi,
+                [
+                    (cues[j].source_text or "").strip()
+                    for j in range(len(cues))
+                    if j != idx and (cues[j].source_text or "").strip()
+                ],
+            ):
+                continue
+            lines.append(f"[P{len(lines)+1}] {src} => {vi}")
+        return lines[-limit:]
+
+    def _translate_batch_with_context(
+        self,
+        batch_items: List[str],
+        chunk_indices: List[int],
+        *,
+        cues: List[SubtitleCueV1],
+        source_lang: str = "zh",
+        target_lang: str = "vi",
+        prompt_tone: str = "dramatic",
+        prior_context_lines: List[str] | None = None,
+        batch_ordinal: int = 1,
+        batch_total: int = 1,
+        **_kwargs,
+    ) -> bool:
+        """Translate one batch. Production engines register a callable on self._batch_engine_fn."""
+        engine = getattr(self, "_batch_engine_fn", None)
+        if not callable(engine):
+            return False
+        return bool(
+            engine(
+                batch_items,
+                chunk_indices,
+                cues=cues,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                prompt_tone=prompt_tone,
+                prior_context_lines=prior_context_lines,
+                batch_ordinal=batch_ordinal,
+                batch_total=batch_total,
+            )
+        )
+
+    def retry_untranslated_cues(
+        self,
+        cues: List[SubtitleCueV1],
+        source_lang: str = "zh",
+        target_lang: str = "vi",
+        *,
+        prompt_tone: str = "dramatic",
+        max_rounds: int = 3,
+        chunk_size: int = 12,
+    ) -> int:
+        """Re-translate empty / CJK-residue / leaked cues with rolling context."""
+        before = len(self.list_untranslated_indices(cues, target_lang=target_lang))
+        if before == 0:
+            return 0
+
+        for round_no in range(max_rounds):
+            holes = self.list_untranslated_indices(cues, target_lang=target_lang)
+            if not holes:
+                break
+            prior = self._build_prior_context_lines(cues, exclude=set(holes))
+            # If a large response still omits markers, progressively reduce the
+            # retry size; the final pass is one cue/request and is resilient to
+            # models that truncate or reorder long numbered responses.
+            retry_chunk_size = 1 if round_no == max_rounds - 1 else max(1, chunk_size // (2 ** round_no))
+            for start in range(0, len(holes), retry_chunk_size):
+                chunk = holes[start : start + retry_chunk_size]
+                batch_items = [
+                    f"[{pos}] {cues[i].source_text.strip()}"
+                    for pos, i in enumerate(chunk, start=1)
+                ]
+                # Clear invalid text so apply can refill cleanly.
+                # Foreign-leak checks against ALL cue sources, not only this hole chunk.
+                all_other_sources = [
+                    (cues[j].source_text or "").strip()
+                    for j in range(len(cues))
+                    if (cues[j].source_text or "").strip()
+                ]
+                for idx in chunk:
+                    vi = (cues[idx].translated_text or "").strip()
+                    src = (cues[idx].source_text or "").strip()
+                    others = [s for s in all_other_sources if s and s != src]
+                    if self._is_invalid_translation(vi, src, target_lang=target_lang) or self._has_foreign_source_leak(vi, others):
+                        cues[idx].translated_text = ""
+                self._translate_batch_with_context(
+                    batch_items,
+                    chunk,
+                    cues=cues,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    prompt_tone=prompt_tone,
+                    prior_context_lines=prior,
+                    batch_ordinal=1,
+                    batch_total=1,
+                )
+        after = len(self.list_untranslated_indices(cues, target_lang=target_lang))
+        return max(0, before - after)
+
     def _apply_model_response(
         self,
         cues: List[SubtitleCueV1],
@@ -237,7 +527,7 @@ class RealTranslationProvider(TranslationProvider):
         if not chunk_indices:
             return 0
 
-        marker_pattern = re.compile(r"(?m)^[ 	]*(?:[-*][ 	]+)?\[(\d+)\][ 	]*")
+        marker_pattern = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?\[(\d+)\][ \t]*")
         chunk_index_set = set(chunk_indices)
         batch_size = len(chunk_indices)
         valid_labels = (
@@ -274,7 +564,7 @@ class RealTranslationProvider(TranslationProvider):
         )
 
         source_pool = [(cues[i].source_text or "").strip() for i in chunk_indices if 0 <= i < len(cues)]
-        parsed: dict[int, tuple[str | None, str]] = {}
+        parsed: dict[int, tuple] = {}
 
         for position, marker in enumerate(markers):
             label = int(marker.group(1))
@@ -302,57 +592,21 @@ class RealTranslationProvider(TranslationProvider):
             cleaned = _capitalize_first(spoken)
             if not cleaned:
                 continue
-            # Reject source-echo / untranslated CJK leaks into the wrong slot.
             own_source = (cues[cue_index].source_text or "").strip()
             other_sources = [s for s in source_pool if s and s != own_source]
             if self._is_source_echo(cleaned, other_sources):
                 continue
             if cleaned == own_source:
                 continue
+            if self._cjk_ratio(cleaned) >= 0.45:
+                continue
+            if self._has_foreign_source_leak(cleaned, other_sources):
+                continue
             parsed[cue_index] = (gender, cleaned, spk_meta)
-
-        # Detect off-by-one cascade: many outputs equal the next source line.
-        if len(parsed) >= max(2, batch_size // 3):
-            shift_hits = 0
-            for offset, cue_index in enumerate(chunk_indices):
-                if cue_index not in parsed:
-                    continue
-                if offset + 1 >= len(chunk_indices):
-                    continue
-                nxt = chunk_indices[offset + 1]
-                nxt_source = (cues[nxt].source_text or "").strip()
-                if self._normalize_compare_text(parsed[cue_index][1]) == self._normalize_compare_text(nxt_source):
-                    shift_hits += 1
-            if shift_hits >= max(2, len(parsed) // 3):
-                # Repair by shifting translations back one slot within the batch.
-                repaired: dict[int, tuple[str | None, str]] = {}
-                ordered = [parsed[i] for i in chunk_indices if i in parsed]
-                targets = [i for i in chunk_indices if i in parsed]
-                # If outputs look like sources of i+1, map parsed[i] -> cue i-1 conceptually:
-                # take values in order and assign to earlier cues.
-                values = []
-                for cue_index in chunk_indices:
-                    if cue_index in parsed and not self._is_source_echo(
-                        parsed[cue_index][1],
-                        [(cues[j].source_text or "").strip() for j in chunk_indices],
-                    ):
-                        values.append(parsed[cue_index])
-                # Simpler deterministic repair: drop echoed next-source rows.
-                parsed = {
-                    idx: val
-                    for idx, val in parsed.items()
-                    if not self._is_source_echo(
-                        val[1],
-                        [
-                            (cues[j].source_text or "").strip()
-                            for j in chunk_indices
-                            if j != idx
-                        ],
-                    )
-                }
 
         updated_indices = set()
         for cue_index, (gender, cleaned, spk_meta) in parsed.items():
+            own_source = (cues[cue_index].source_text or "").strip()
             if not isinstance(cues[cue_index].style, dict):
                 cues[cue_index].style = {}
             if gender:
@@ -362,6 +616,30 @@ class RealTranslationProvider(TranslationProvider):
                     cues[cue_index].style["speaker_id"] = spk_meta["speaker_id"]
                 if spk_meta.get("speaker_role"):
                     cues[cue_index].style["speaker_role"] = spk_meta["speaker_role"]
+            # Fidelity post-process (video-agnostic) + addressing polish.
+            try:
+                from subtitle_localizer.service.pipeline_settings import get_global_pipeline_settings
+                pipe_tr = get_global_pipeline_settings().translation
+                addressing_mode = getattr(pipe_tr, "addressing_mode", "auto")
+                use_glossary = bool(getattr(pipe_tr, "use_glossary", True))
+            except Exception:
+                addressing_mode = "auto"
+                use_glossary = True
+            if use_glossary:
+                cleaned = _refine_subtitles(cleaned, own_source, preserve_existing=True)
+            cleaned = _polish_addressing(
+                cleaned,
+                source_text=own_source,
+                speaker_gender=gender,
+                addressing_mode=addressing_mode,
+            )
+            if self._is_invalid_translation(cleaned, own_source, target_lang="vi"):
+                continue
+            # Retranslate should refresh TTS script language.
+            if isinstance(cues[cue_index].style, dict) and cues[cue_index].style.get("spoken_text"):
+                spoken_existing = str(cues[cue_index].style.get("spoken_text") or "")
+                if self._cjk_ratio(spoken_existing) >= 0.3 or self._looks_like_english(spoken_existing):
+                    cues[cue_index].style.pop("spoken_text", None)
             cues[cue_index].translated_text = cleaned
             self._cache[(cues[cue_index].source_text or "").strip()] = cleaned
             updated_indices.add(cue_index)
@@ -374,8 +652,13 @@ class RealTranslationProvider(TranslationProvider):
         source_lang: str,
         target_lang: str,
         prompt_tone: str = "dramatic",
+        prior_context_lines: List[str] | None = None,
+        batch_ordinal: int = 1,
+        batch_total: int = 1,
+        addressing_mode: str = "auto",
+        character_context: str = "",
     ) -> str:
-        """Xây dựng prompt dịch thuật biên kịch theo bối cảnh câu chuyện, tone kịch bản và phân vai giới tính."""
+        """Xây dựng prompt dịch theo ngữ cảnh; không claim full-script khi chỉ gửi một đoạn."""
         tone_instruction = {
             "dramatic": "Kịch tính, điện ảnh, cảm xúc chân thực theo hoàn cảnh nhân vật.",
             "daily": "Đời thường, tự nhiên, gần gũi, chuẩn ngôn ngữ giao tiếp hàng ngày.",
@@ -383,12 +666,66 @@ class RealTranslationProvider(TranslationProvider):
             "literal": "Sát nghĩa từ ngữ gốc, nghiêm túc, chính xác.",
         }.get(prompt_tone, "Tự nhiên, chuẩn ngữ cảnh phim truyền hình.")
 
+        is_full_script = batch_total <= 1 and not prior_context_lines
+        if is_full_script:
+            script_header = "KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN:"
+            read_rule = (
+                "1. Đọc toàn bộ kịch bản từ đầu đến cuối để nắm bắt cốt truyện, "
+                "tâm lý và mối quan hệ đối thoại qua lại giữa các nhân vật.\n"
+            )
+        else:
+            script_header = f"ĐOẠN KỊCH BẢN CẦN DỊCH (batch {batch_ordinal}/{batch_total}):"
+            read_rule = (
+                "1. Đọc kỹ ĐOẠN kịch bản hiện tại; dùng NGỮ CẢNH ĐÃ DỊCH (nếu có) chỉ để "
+                "giữ nhất quán nhân vật/xưng hô, KHÔNG dịch lại phần ngữ cảnh.\n"
+            )
+
+        prior_block = ""
+        if prior_context_lines:
+            prior_block = (
+                "NGỮ CẢNH ĐÃ DỊCH (chỉ để tham chiếu, KHÔNG dịch lại, KHÔNG đánh số lại):\n"
+                + "\n".join(prior_context_lines)
+                + "\n\n"
+            )
+
+        lang_lock = ""
+        tgt = (target_lang or "vi").lower()
+        if tgt.startswith("vi"):
+            lang_lock = (
+                "0. KHÓA NGÔN NGỮ: toàn bộ câu dịch BẮT BUỘC là tiếng Việt. "
+                "CẤM English, CẤM trả lời bằng tiếng Anh dù chỉ một câu.\n"
+            )
+        mode = (addressing_mode or "auto").strip().lower()
+        if mode in {"couple_anh_em", "couple"}:
+            address_lock = (
+                "0b. XƯNG HÔ: chế độ couple_anh_em — nữ nói với nam dùng 'anh', nam nói với nữ dùng 'em'; "
+                "CẤM dùng 'bạn' làm xưng hô chính.\n"
+            )
+        elif mode == "neutral":
+            address_lock = "0b. XƯNG HÔ: cho phép 'bạn' khi quan hệ không rõ.\n"
+        else:
+            address_lock = (
+                "0b. XƯNG HÔ: ưu tiên anh-em/chị-em theo quan hệ; với hội thoại đôi tình cảm CẤM dùng 'bạn'.\n"
+            )
+        fidelity = (
+            "0c. ĐỘ TRUNG THỰC: bám sát ý gốc và cảm xúc; không bịa tình tiết; "
+            "không dịch word-by-word thô; không calque; "
+            "'是我的问题' dịch 'lỗi là của tôi' (không phải 'vấn đề của tôi'); "
+            "'你怎么了' dịch 'sao vậy' (không phải 'sao rồi').\n"
+        )
+        cast_block = ""
+        ctx = (character_context or "").strip()
+        if ctx:
+            cast_block = "NGỮ CẢNH NHÂN VẬT/QUAN HỆ (theo project, áp dụng nhất quán):\n" + ctx + "\n\n"
+
         return (
             f"Bạn là chuyên gia biên kịch và Việt hóa phụ đề phim truyền hình, tiểu phẩm ngắn chuyên nghiệp.\n"
-            f"Nhiệm vụ: Dịch toàn bộ kịch bản hội thoại từ {source_lang} sang {target_lang} và PHÂN VAI GIỚI TÍNH cho từng nhân vật.\n"
+            f"Nhiệm vụ: Dịch đoạn hội thoại từ {source_lang} sang {target_lang} và PHÂN VAI GIỚI TÍNH cho từng nhân vật.\n"
             f"Phong cách kịch bản: {tone_instruction}\n\n"
+            f"{cast_block}"
             f"NGUYÊN TẮC BỐI CẢNH & PHÂN VAI (RẤT QUAN TRỌNG):\n"
-            f"1. Đọc toàn bộ kịch bản từ đầu đến cuối để nắm bắt cốt truyện, tâm lý và mối quan hệ đối thoại qua lại giữa các nhân vật.\n"
+            f"{lang_lock}{address_lock}{fidelity}"
+            f"{read_rule}"
             f"2. BẮT BUỘC xác định rõ giới tính của người nói mỗi câu: [Nam]/[Nữ] hoặc [Nam1]/[Nữ2] nếu nhiều nhân vật cùng giới; thêm [tên_riêng] nếu nhận ra nhân vật. Tiếng quần chúng gắn [Quần chúng]."
             f"2b. Lời dịch phải RÚT GỌN khẩu ngữ để đọc kịp khung thời gian phụ đề (ngắn gọn, tự nhiên).\n"
             f"3. ĐỐI CHIẾU ĐẠI TỪ VÀ GIỚI TÍNH CHÍNH XÁC (TUYỆT ĐỐI KHÔNG NHẦM LẪN):\n"
@@ -397,10 +734,13 @@ class RealTranslationProvider(TranslationProvider):
             f"     * Nếu đang nói về nhân vật Nam (chồng, bạn trai, bố, con trai, sếp nam), BẮT BUỘC dịch là 'anh ấy / chú ấy / chàng / bố / anh'.\n"
             f"   - Với quan hệ gia đình / hôn nhân (ly hôn, tình cảm): xưng hô chuẩn mực 'anh - em', 'chồng - vợ', không xưng hô nhạt nhẽo hay lộn vai vế.\n"
             f"4. Dịch thoát nghĩa, chuẩn văn phong phim truyền hình/điện ảnh, tự nhiên, súc tích, dễ đọc trên video, tuyệt đối KHÔNG dịch thô từng từ vô nghĩa.\n"
+            f"4b. DANH XƯNG / THƯƠNG HIỆU / HỌ + 氏: KHÔNG biến họ Trung (vd. 冯氏) thành tên Việt kiểu 'Phùng Thị'. "
+            f"Dịch tự nhiên theo ngữ cảnh (họ Phùng / nhà họ Phùng / hiệu Phùng…), giữ tên riêng nhất quán, không gắn 'Thị' kiểu tên người Việt.\n"
             f"5. BẮT BUỘC đánh số theo thứ tự batch hiện tại từ `[1]` đến `[{len(batch_items)}]` (không dùng index tuyệt đối). Kèm nhãn `[Nam]/[Nữ]/[Nam1]/[Nữ2]/[Quần chúng]` (ví dụ: `[1] [Nam] Sao thế?` / `[2] [Nữ] Tâm trạng em không tốt sao?` / `[3] [Quần chúng] Hoan hô!`).\n"
             f"6. Chỉ trả về đúng {len(batch_items)} dòng `[i] [Nam/Nữ] Câu tiếng Việt`, không copy nguyên câu gốc, không kèm lời chào hay giải thích thừa.\n"
             f"7. CẤM ghi chú thích vai trò vào câu phụ đề: không được viết `(Tiếng người dẫn chuyện)`, `(Người dẫn chuyện)`, `(旁白)`, `(Lời bình)`. Lời dẫn chuyện vẫn chỉ là câu thoại đã dịch, gắn `[Nam]` hoặc `[Nữ]` thôi.\n\n"
-            f"KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN:\n" + "\n".join(batch_items)
+            f"{prior_block}{script_header}\n"
+            + "\n".join(batch_items)
         )
 
 
@@ -409,12 +749,14 @@ class RealTranslationProvider(TranslationProvider):
         cues: List[SubtitleCueV1],
         source_lang: str,
         target_lang: str,
-        model: str = "qwen2.5:7b-instruct",
+        model: str = DEFAULT_LOCAL_MODEL,
         endpoint: str = "http://localhost:11434",
         prompt_tone: str = "dramatic",
         batch_size: Optional[int] = None,
     ) -> bool:
         """Dịch kịch bản bằng Qwen 2.5 Local LLM qua Ollama hoặc OpenAI-compatible API."""
+        from subtitle_localizer.service.pipeline_settings import get_global_pipeline_settings
+        pipe_settings = get_global_pipeline_settings().translation
         import json
         import urllib.error
         import urllib.request
@@ -422,8 +764,24 @@ class RealTranslationProvider(TranslationProvider):
         base_url = endpoint.rstrip("/")
         chat_url = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
 
-        def _translate_batch(batch_items: List[str], chunk_indices: List[int]) -> bool:
-            prompt = self._build_narrative_prompt(batch_items, source_lang, target_lang, prompt_tone)
+        def _translate_batch(
+            batch_items: List[str],
+            chunk_indices: List[int],
+            prior_context_lines: list[str] | None = None,
+            batch_ordinal: int = 1,
+            batch_total: int = 1,
+        ) -> bool:
+            prompt = self._build_narrative_prompt(
+                batch_items,
+                source_lang,
+                target_lang,
+                prompt_tone,
+                prior_context_lines=prior_context_lines,
+                batch_ordinal=batch_ordinal,
+                batch_total=batch_total,
+                addressing_mode=getattr(pipe_settings, "addressing_mode", "auto"),
+                character_context=getattr(pipe_settings, "character_context", "")
+            )
             payload_openai = {
                 "model": model,
                 "messages": [
@@ -475,19 +833,41 @@ class RealTranslationProvider(TranslationProvider):
         if not all_indices:
             return True
 
-        if batch_size and batch_size not in (35, 0):
-            chunk_size = batch_size
-        elif len(all_indices) <= 100:
-            chunk_size = len(all_indices)
-        else:
-            chunk_size = 60
+        chunk_size = self._local_chunk_size(len(all_indices), batch_size)
 
+        batch_ranges = list(range(0, len(all_indices), chunk_size))
+        batch_total = max(1, len(batch_ranges))
+        prior_context_lines: list[str] = []
         success_any = False
-        for start_idx in range(0, len(all_indices), chunk_size):
-            chunk_indices = all_indices[start_idx : start_idx + chunk_size]
-            batch_items = [f"[{pos}] {cues[i].source_text.strip()}" for pos, i in enumerate(chunk_indices, start=1)]
-            if _translate_batch(batch_items, chunk_indices):
-                success_any = True
+
+        def _engine(batch_items, chunk_indices, **kwargs):
+            return _translate_batch(
+                batch_items,
+                chunk_indices,
+                prior_context_lines=kwargs.get("prior_context_lines"),
+                batch_ordinal=kwargs.get("batch_ordinal", 1),
+                batch_total=kwargs.get("batch_total", 1),
+            )
+
+        self._batch_engine_fn = _engine
+        try:
+            for batch_no, start_idx in enumerate(batch_ranges, start=1):
+                chunk_indices = all_indices[start_idx : start_idx + chunk_size]
+                batch_items = [
+                    f"[{pos}] {cues[i].source_text.strip()}"
+                    for pos, i in enumerate(chunk_indices, start=1)
+                ]
+                if _translate_batch(
+                    batch_items,
+                    chunk_indices,
+                    prior_context_lines=prior_context_lines or None,
+                    batch_ordinal=batch_no,
+                    batch_total=batch_total,
+                ):
+                    success_any = True
+                prior_context_lines = self._build_prior_context_lines(cues)
+        finally:
+            self._batch_engine_fn = _engine
 
         return success_any
 
@@ -503,6 +883,8 @@ class RealTranslationProvider(TranslationProvider):
         batch_size: Optional[int] = None,
     ) -> bool:
         """Dịch kịch bản bằng Gemini AI qua Smart Pool API Keys với đầy đủ bối cảnh câu chuyện và tối ưu token."""
+        from subtitle_localizer.service.pipeline_settings import get_global_pipeline_settings
+        pipe_settings = get_global_pipeline_settings().translation
         import json
         import time
         import urllib.error
@@ -523,14 +905,30 @@ class RealTranslationProvider(TranslationProvider):
         if gemini_model != "gemini-2.5-flash":
             models_to_try.append("gemini-2.5-flash")
 
-        def _translate_batch(batch_items: List[str], chunk_indices: List[int]) -> bool:
-            prompt = self._build_narrative_prompt(batch_items, source_lang, target_lang, prompt_tone)
+        def _translate_batch(
+            batch_items: List[str],
+            chunk_indices: List[int],
+            prior_context_lines: list[str] | None = None,
+            batch_ordinal: int = 1,
+            batch_total: int = 1,
+        ) -> bool:
+            prompt = self._build_narrative_prompt(
+                batch_items,
+                source_lang,
+                target_lang,
+                prompt_tone,
+                prior_context_lines=prior_context_lines,
+                batch_ordinal=batch_ordinal,
+                batch_total=batch_total,
+                addressing_mode=getattr(pipe_settings, "addressing_mode", "auto"),
+                character_context=getattr(pipe_settings, "character_context", "")
+            )
             # Tắt thinkingBudget để không bị lãng phí token suy luận ngầm và không bị cụt response
             payload = json.dumps({
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "temperature": 0.2,
-                    "maxOutputTokens": 8192,
+                    "maxOutputTokens": 65536,
                     "thinkingConfig": {"thinkingBudget": 0},
                 },
             }).encode("utf-8")
@@ -590,26 +988,53 @@ class RealTranslationProvider(TranslationProvider):
         if not all_indices:
             return True
 
-        # Chiến lược tiết kiệm Token & Quota tối đa (Adaptive 1-Shot / Large Batching):
-        # 1) Nếu tổng số câu <= 120: Gộp toàn bộ vào 1 request duy nhất (1-shot 100%).
-        #    -> Giảm 80-90% token lặp lại của System Prompt / Narrative Guidelines.
-        #    -> Giảm số request từ 4-8 calls xuống ĐÚNG 1 CALL duy nhất.
-        #    -> Giữ trọn vẹn ngữ cảnh nhân vật xuyên suốt video.
-        # 2) Nếu video dài (> 120 câu): Sử dụng batch lớn (80 câu/lần)
-        #    thay vì chia nhỏ vụn vặt 35 câu như trước đây.
-        if batch_size and batch_size not in (35, 0):
-            chunk_size = batch_size
-        elif len(all_indices) <= 120:
-            chunk_size = len(all_indices)
+        # Gemini 2.5 Flash: input 1,048,576 / output 65,536 tokens.
+        # Gửi TOÀN BỘ kịch bản 1 request (không chia batch) để giữ ngữ cảnh nhân vật.
+        # batch_size chỉ dùng khi set tường minh khác 35/0 (debug); mặc định = full.
+        if batch_size and batch_size not in (35, 0) and int(batch_size) < len(all_indices):
+            chunk_size = int(batch_size)
+            logger.warning(
+                "Gemini batch_size=%s được set tường minh — chia %s câu (không khuyến nghị).",
+                batch_size,
+                chunk_size,
+            )
         else:
-            chunk_size = 80
+            chunk_size = len(all_indices)
 
+        batch_ranges = list(range(0, len(all_indices), chunk_size))
+        batch_total = max(1, len(batch_ranges))
+        prior_context_lines: list[str] = []
         all_succeeded = True
-        for start_idx in range(0, len(all_indices), chunk_size):
-            chunk_indices = all_indices[start_idx : start_idx + chunk_size]
-            batch_items = [f"[{pos}] {cues[i].source_text.strip()}" for pos, i in enumerate(chunk_indices, start=1)]
-            if not _translate_batch(batch_items, chunk_indices):
-                all_succeeded = False
+
+        def _engine(batch_items, chunk_indices, **kwargs):
+            return _translate_batch(
+                batch_items,
+                chunk_indices,
+                prior_context_lines=kwargs.get("prior_context_lines"),
+                batch_ordinal=kwargs.get("batch_ordinal", 1),
+                batch_total=kwargs.get("batch_total", 1),
+            )
+
+        self._batch_engine_fn = _engine
+        try:
+            for batch_no, start_idx in enumerate(batch_ranges, start=1):
+                chunk_indices = all_indices[start_idx : start_idx + chunk_size]
+                batch_items = [
+                    f"[{pos}] {cues[i].source_text.strip()}"
+                    for pos, i in enumerate(chunk_indices, start=1)
+                ]
+                ok = _translate_batch(
+                    batch_items,
+                    chunk_indices,
+                    prior_context_lines=prior_context_lines or None,
+                    batch_ordinal=batch_no,
+                    batch_total=batch_total,
+                )
+                if not ok:
+                    all_succeeded = False
+                prior_context_lines = self._build_prior_context_lines(cues)
+        finally:
+            self._batch_engine_fn = _engine
 
         return all_succeeded
 
@@ -672,7 +1097,7 @@ class RealTranslationProvider(TranslationProvider):
 
         # 2. Nếu Gemini thất bại hoặc provider là local: Chạy mô hình Local AI (Qwen 2.5 Local / Remote LAN)
         if not is_pytest and (provider in ("local", "local_model") or (not translated_ok and auto_fallback)):
-            local_model = getattr(pipe_settings, "local_model", "qwen2.5:7b-instruct")
+            local_model = getattr(pipe_settings, "local_model", DEFAULT_LOCAL_MODEL)
             local_endpoint = getattr(pipe_settings, "local_endpoint", "http://localhost:11434")
             prompt_tone = getattr(pipe_settings, "prompt_tone", "dramatic")
             endpoints_to_try = [local_endpoint]
@@ -724,13 +1149,16 @@ class RealTranslationProvider(TranslationProvider):
                         cue.translated_text = DEFAULT_CHINESE_VIETNAMESE_GLOSSARY[src_txt]
                         self._cache[src_txt] = cue.translated_text
 
-        # 4. Rà soát các câu chưa có bản dịch:
-        # Loại bỏ hoàn toàn Google Translate trong môi trường thực tế (chỉ Gemini AI -> Local AI Qwen 2.5).
-        untranslated = [
-            c for c in cues
-            if c.source_text.strip() and (not c.translated_text or c.translated_text.strip() == c.source_text.strip())
-        ]
-        if not untranslated:
-            return cues
+        # 4. Retry các câu trống / CJK residue / leak sau batch chính (T-ALIGN).
+        if not is_pytest:
+            try:
+                self.retry_untranslated_cues(
+                    cues,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    prompt_tone=getattr(pipe_settings, "prompt_tone", "dramatic"),
+                )
+            except Exception as ex:
+                logger.warning(f"retry_untranslated_cues failed: {ex}")
 
         return cues

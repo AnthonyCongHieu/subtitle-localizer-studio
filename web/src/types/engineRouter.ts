@@ -78,7 +78,7 @@ export const BUILTIN_ROUTER_ENGINES: EngineNodeConfig[] = [
     name: 'Qwen 2.5 7B Instruct (Ollama Local)',
     serviceType: 'translation',
     protocol: 'ollama',
-    model: 'qwen2.5:7b-instruct',
+    model: 'qwen2.5:14b',
     baseUrl: 'http://localhost:11434',
     status: 'ready',
     statusMessage: 'GPU NVIDIA RTX 3050 Cục bộ',

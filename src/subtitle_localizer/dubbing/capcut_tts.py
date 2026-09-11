@@ -14,8 +14,10 @@ import base64
 import hashlib
 import json
 import logging
+import random
 import secrets
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import urllib.request
@@ -238,6 +240,53 @@ CAPCUT_VOICE_CATALOG: List[Dict[str, Any]] = _load_capcut_catalog()
 _RESOURCE_ID_MAP: Dict[str, str] = {
     v["voice_id"]: v["resource_id"] for v in CAPCUT_VOICE_CATALOG if "resource_id" in v
 }
+_VOICE_INFO_MAP: Dict[str, Dict[str, Any]] = {
+    str(v.get("voice_id") or ""): v for v in CAPCUT_VOICE_CATALOG if v.get("voice_id")
+}
+
+_SSML_LOCALES: Dict[str, str] = {
+    "vi": "vi-VN",
+    "en": "en-US",
+    "zh": "zh-CN",
+    "ja": "ja-JP",
+    "th": "th-TH",
+    "id": "id-ID",
+    "fr": "fr-FR",
+    "es": "es-ES",
+    "de": "de-DE",
+    "pt": "pt-BR",
+    "ko": "ko-KR",
+}
+
+
+class CapCutTTSRequestError(RuntimeError):
+    """Lỗi provider xác định, không nên retry cùng một request."""
+
+
+def _is_success_ret(value: Any) -> bool:
+    """Chấp nhận mã thành công dạng số hoặc chuỗi, nhưng không coi thiếu mã là thành công."""
+    return value is not None and str(value).strip() == "0"
+
+
+def _sanitize_xml_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFC", str(text or ""))
+    return "".join(
+        char
+        for char in normalized
+        if char in "\t\n\r"
+        or 0x20 <= ord(char) <= 0xD7FF
+        or 0xE000 <= ord(char) <= 0xFFFD
+        or 0x10000 <= ord(char) <= 0x10FFFF
+    )
+
+
+def _ssml_locale(language: Any) -> str:
+    raw = str(language or "").strip()
+    if not raw:
+        return "en-US"
+    if "-" in raw:
+        return raw
+    return _SSML_LOCALES.get(raw.lower(), "en-US")
 
 
 def _compact_json(obj: Any) -> str:
@@ -333,19 +382,25 @@ class CapCutTTSClient:
         self.endpoint = (endpoint or BASE_URL).rstrip("/")
         self.device = device or dict(DEFAULT_DEVICE)
 
-    def resolve_voice_info(self, voice: str) -> Tuple[str, str]:
-        """Chuẩn hóa voice_type và resource_id tương ứng."""
-        v = voice.strip()
-        if v in _RESOURCE_ID_MAP:
-            return v, _RESOURCE_ID_MAP[v]
+    def resolve_voice_info(self, voice: str) -> Tuple[str, str, str]:
+        """Chuẩn hóa voice_type, resource_id và locale ngôn ngữ tương ứng."""
+        v = str(voice or "").strip()
+        if v in _VOICE_INFO_MAP:
+            item = _VOICE_INFO_MAP[v]
+            return v, str(item["resource_id"]), _ssml_locale(item.get("lang"))
         # Thử tìm theo display_name
         v_lower = v.lower()
         for item in CAPCUT_VOICE_CATALOG:
-            if item["display_name"].lower() == v_lower:
-                return item["voice_id"], item["resource_id"]
+            if str(item.get("display_name") or "").lower() == v_lower:
+                return str(item["voice_id"]), str(item["resource_id"]), _ssml_locale(item.get("lang"))
         # Mặc định về Thanh Niên Tự Tin nếu không khớp
         default_v = "BV075_streaming"
-        return default_v, _RESOURCE_ID_MAP.get(default_v, "7102355803792740865")
+        item = _VOICE_INFO_MAP.get(default_v, {})
+        return (
+            default_v,
+            str(item.get("resource_id") or "7102355803792740865"),
+            _ssml_locale(item.get("lang") or "vi"),
+        )
 
     def build_tts_request(
         self,
@@ -354,7 +409,7 @@ class CapCutTTSClient:
         rate: str = "1.0",
     ) -> Tuple[str, Dict[str, str], str]:
         """Tạo URL, Headers và Request Body JSON cho tác vụ tạo giọng đọc mới."""
-        voice_type, resource_id = self.resolve_voice_info(voice)
+        voice_type, resource_id, ssml_locale = self.resolve_voice_info(voice)
         clean_rate = str(rate).replace("%", "").strip()
         try:
             # Chuyển đổi +10% -> 1.1 hoặc 1.0
@@ -376,9 +431,9 @@ class CapCutTTSClient:
             "scenario": "video_editor",
         }
 
-        escaped = _escape_xml(text.strip())
+        escaped = _escape_xml(_sanitize_xml_text(text).strip())
         ssml = (
-            '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">\n'
+            f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{ssml_locale}">\n'
             f'    <voice name="{voice_type}" mock_tone_info="" platform="sami" '
             f'resource_id="{resource_id}" emotion="" emotion_scale="0" style="" role="" '
             f'moyin_emotion="" is_clone_tone="false" need_subtitle_timestamp="false">\n'
@@ -520,7 +575,30 @@ class CapCutTTSClient:
         }
         return url, headers, body_text
 
-    async def synthesize(
+    @staticmethod
+    def _provider_error(response: Dict[str, Any], prefix: str) -> CapCutTTSRequestError:
+        code = next(
+            (
+                value
+                for key in ("err_code", "error_code", "ret")
+                if (value := response.get(key)) is not None
+            ),
+            "unknown",
+        )
+        message = response.get("err_msg") or response.get("errmsg") or response.get("message") or response
+        return CapCutTTSRequestError(f"{prefix} ({code}): {message}")
+
+    @staticmethod
+    def _is_retryable_error(error: Exception) -> bool:
+        if isinstance(error, CapCutTTSRequestError):
+            message = str(error).lower()
+            # CapCut code 1000 / "system busy" is transient capacity pressure.
+            # Code 810 and invalid-text errors are deterministic and should not
+            # be retried: they need a different text/provider.
+            return "system busy" in message or "(1000)" in message or "err_code=1000" in message
+        return isinstance(error, (TimeoutError, OSError, json.JSONDecodeError, urllib.error.URLError))
+
+    async def _synthesize_once(
         self,
         text: str,
         voice: str = "BV075_streaming",
@@ -553,15 +631,17 @@ class CapCutTTSClient:
                 return json.loads(raw.decode("utf-8"))
 
         create_res = await asyncio.to_thread(_post_sync, url_new, headers_new, body_new)
-        if create_res.get("ret") != "0":
-            raise RuntimeError(f"CapCut TTS tạo task thất bại: {create_res.get('errmsg', create_res)}")
+        if not _is_success_ret(create_res.get("ret")):
+            raise self._provider_error(create_res, "CapCut TTS tạo task thất bại")
 
         tasks = (create_res.get("data") or {}).get("tasks") or []
         if not tasks:
-            raise RuntimeError(f"CapCut TTS không trả về task hợp lệ: {create_res}")
+            raise CapCutTTSRequestError(f"CapCut TTS không trả về task hợp lệ: {create_res}")
+        if not isinstance(tasks[0], dict) or not tasks[0].get("id") or not tasks[0].get("token"):
+            raise CapCutTTSRequestError(f"CapCut TTS trả về task thiếu id/token: {tasks[0]}")
 
-        task_id = tasks[0]["id"]
-        token = tasks[0]["token"]
+        task_id = str(tasks[0]["id"])
+        token = str(tasks[0]["token"])
 
         # 2. Vòng lặp thăm dò (polling) kết quả
         start_time = time.time()
@@ -571,12 +651,14 @@ class CapCutTTSClient:
             await asyncio.sleep(poll_interval)
             url_query, headers_query, body_query = self.build_query_request(task_id, token)
             query_res = await asyncio.to_thread(_post_sync, url_query, headers_query, body_query)
+            if not _is_success_ret(query_res.get("ret")):
+                raise self._provider_error(query_res, "CapCut TTS truy vấn task thất bại")
 
             q_tasks = (query_res.get("data") or {}).get("tasks") or []
             if not q_tasks:
                 continue
 
-            status = q_tasks[0].get("status")
+            status = str(q_tasks[0].get("status") or "").strip().lower()
             if status in ("success", "succeed"):
                 raw_payload = q_tasks[0].get("payload") or q_tasks[0].get("resp") or "{}"
                 payload_dict = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
@@ -610,11 +692,39 @@ class CapCutTTSClient:
                 if "audio" in payload_dict and payload_dict["audio"]:
                     return base64.b64decode(payload_dict["audio"])
 
-                raise RuntimeError(f"CapCut TTS thành công nhưng không tìm thấy URL âm thanh: {payload_dict}")
+                raise CapCutTTSRequestError(
+                    f"CapCut TTS thành công nhưng không tìm thấy dữ liệu âm thanh: {payload_dict}"
+                )
 
-            elif status == "failed":
-                err_code = q_tasks[0].get("err_code")
-                err_msg = q_tasks[0].get("err_msg")
-                raise RuntimeError(f"CapCut TTS task báo lỗi ({err_code}): {err_msg}")
+            elif status in ("failed", "failure", "error"):
+                raise self._provider_error(q_tasks[0], "CapCut TTS task báo lỗi")
 
         raise TimeoutError(f"CapCut TTS hết thời gian chờ ({timeout}s) cho task {task_id}")
+
+    async def synthesize(
+        self,
+        text: str,
+        voice: str = "BV075_streaming",
+        rate: str = "1.0",
+        timeout: float = 120.0,
+        max_attempts: int = 2,
+    ) -> bytes:
+        """Sinh MP3 và retry một lần cho lỗi kết nối/phản hồi tạm thời."""
+        attempts = max(1, int(max_attempts))
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return await self._synthesize_once(text, voice=voice, rate=rate, timeout=timeout)
+            except Exception as error:
+                last_error = error
+                if attempt + 1 >= attempts or not self._is_retryable_error(error):
+                    raise
+                delay = (0.5 * (2 ** attempt)) + random.uniform(0.0, 0.25)
+                logger.warning(
+                    "CapCut TTS lỗi tạm thời (%s), thử lại lần %d/%d sau %.2fs",
+                    type(error).__name__, attempt + 2, attempts, delay,
+                )
+                await asyncio.sleep(delay)
+        if last_error is not None:
+            raise last_error
+        return b""

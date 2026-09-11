@@ -43,16 +43,20 @@
     "vlm_provider": "gemini",
     "vlm_prompt_style": "accurate_dialogue",
     "demux_fallback_to_ocr": true,
-    "demux_stream_lang": "auto"
+    "demux_stream_lang": "auto",
+    "enable_persistent_text_filter": false,
+    "persistent_text_ratio": 0.55,
+    "enable_cue_follow_mask": false,
+    "scan_profile": "vertical_short"
   },
   "translation": {
     "provider": "gemini",
     "target_language": "vi",
     "gemini_model": "gemini-2.5-flash",
-    "local_model": "qwen2.5:7b-instruct",
+    "local_model": "qwen2.5:14b",
     "local_endpoint": "http://localhost:11434",
     "auto_fallback": true,
-    "batch_size": 35,
+    "batch_size": 0,
     "prompt_tone": "dramatic",
     "use_glossary": true
   },
@@ -73,7 +77,8 @@
     "ffmpeg_encoder": "auto",
     "default_mask_style": "feather_tight",
     "default_blur_strength": 24,
-    "burn_subtitles": true
+    "burn_subtitles": true,
+    "enable_cue_follow_mask": false
   },
   "batch": {
     "target_lang": "vi",

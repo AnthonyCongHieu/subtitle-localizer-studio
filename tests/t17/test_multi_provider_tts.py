@@ -1,7 +1,11 @@
+import asyncio
+import base64
+import json
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
@@ -12,12 +16,15 @@ from subtitle_localizer.dubbing.tts import (
     get_tts_catalog,
     synthesize_text,
     clean_subtitle_text,
+    default_voice_pools,
     detect_voice_provider,
+    normalize_voice_for_provider,
     resolve_tts_provider,
 )
 from subtitle_localizer.dubbing.capcut_tts import (
-    CapCutTTSClient,
     CAPCUT_VOICE_CATALOG,
+    CapCutTTSClient,
+    CapCutTTSRequestError,
 )
 from subtitle_localizer.dubbing.gemini_tts import (
     GeminiTTSClient,
@@ -76,6 +83,11 @@ class MultiProviderTTSTest(unittest.TestCase):
         self.assertIn("Puck", gemini_names)
         self.assertIn("Kore", gemini_names)
 
+    @staticmethod
+    def _request_payload(body: str) -> dict:
+        task_payload = json.loads(body)["tasks"][0]["payload"]
+        return json.loads(task_payload)
+
     def test_capcut_tts_client_ssml_and_sign(self) -> None:
         client = CapCutTTSClient()
         url, headers, body = client.build_tts_request(
@@ -88,6 +100,25 @@ class MultiProviderTTSTest(unittest.TestCase):
         self.assertIn("x-ss-stub", headers)
         self.assertIn("BV075_streaming", body)
         self.assertIn("sami_text_to_speech", body)
+
+    def test_capcut_ssml_uses_catalog_locale_and_sanitizes_xml(self) -> None:
+        client = CapCutTTSClient()
+        _, _, body_en = client.build_tts_request(
+            text="Café & <friends>\x00\x0b",
+            voice="DiT_en_female_jessie",
+        )
+        ssml_en = self._request_payload(body_en)["ssml"]
+        self.assertIn('xml:lang="en-US"', ssml_en)
+        self.assertIn("Café &amp; &lt;friends&gt;", ssml_en)
+        self.assertNotIn("Café", ssml_en)
+        self.assertNotIn("\x00", ssml_en)
+        self.assertNotIn("\x0b", ssml_en)
+
+        _, _, body_vi = client.build_tts_request(
+            text="Xin chào",
+            voice="multi_male_felipe_uranus_bigtts",
+        )
+        self.assertIn('xml:lang="vi-VN"', self._request_payload(body_vi)["ssml"])
 
     def test_capcut_ssml_applies_percent_speaking_rate(self) -> None:
         client = CapCutTTSClient()
@@ -108,6 +139,152 @@ class MultiProviderTTSTest(unittest.TestCase):
         self.assertAlmostEqual(parse_speaking_rate("+30%"), 1.3)
         self.assertAlmostEqual(parse_speaking_rate("-10%"), 0.9)
 
+    def test_capcut_accepts_numeric_and_string_success_ret(self) -> None:
+        for ret in (0, "0"):
+            with self.subTest(ret=ret), patch(
+                "subtitle_localizer.dubbing.capcut_tts.urllib.request.urlopen"
+            ) as mock_urlopen, patch(
+                "subtitle_localizer.dubbing.capcut_tts.asyncio.sleep", new_callable=AsyncMock
+            ):
+                create = MagicMock()
+                create.__enter__.return_value.read.return_value = json.dumps(
+                    {"ret": ret, "data": {"tasks": [{"id": "task-1", "token": "token-1"}]}}
+                ).encode()
+                query = MagicMock()
+                query.__enter__.return_value.read.return_value = json.dumps(
+                    {
+                        "ret": ret,
+                        "data": {
+                            "tasks": [
+                                {
+                                    "status": "success",
+                                    "payload": json.dumps(
+                                        {"audio": base64.b64encode(b"mp3-data").decode()}
+                                    ),
+                                }
+                            ]
+                        },
+                    }
+                ).encode()
+                mock_urlopen.side_effect = [create, query]
+
+                result = asyncio.run(CapCutTTSClient().synthesize("Xin chào"))
+                self.assertEqual(result, b"mp3-data")
+                self.assertEqual(mock_urlopen.call_count, 2)
+
+    def test_capcut_task_failure_is_surfaced_without_retry(self) -> None:
+        with patch(
+            "subtitle_localizer.dubbing.capcut_tts.urllib.request.urlopen"
+        ) as mock_urlopen, patch(
+            "subtitle_localizer.dubbing.capcut_tts.asyncio.sleep", new_callable=AsyncMock
+        ):
+            create = MagicMock()
+            create.__enter__.return_value.read.return_value = json.dumps(
+                {"ret": "0", "data": {"tasks": [{"id": "task-1", "token": "token-1"}]}}
+            ).encode()
+            query = MagicMock()
+            query.__enter__.return_value.read.return_value = json.dumps(
+                {
+                    "ret": 0,
+                    "data": {
+                        "tasks": [
+                            {"status": "failed", "err_code": 810, "err_msg": "voice unavailable"}
+                        ]
+                    },
+                }
+            ).encode()
+            mock_urlopen.side_effect = [create, query]
+
+            with self.assertRaisesRegex(CapCutTTSRequestError, "810.*voice unavailable"):
+                asyncio.run(CapCutTTSClient().synthesize("Xin chào"))
+            self.assertEqual(mock_urlopen.call_count, 2)
+
+    def test_capcut_query_ret_failure_is_surfaced_without_retry(self) -> None:
+        with patch(
+            "subtitle_localizer.dubbing.capcut_tts.urllib.request.urlopen"
+        ) as mock_urlopen, patch(
+            "subtitle_localizer.dubbing.capcut_tts.asyncio.sleep", new_callable=AsyncMock
+        ):
+            create = MagicMock()
+            create.__enter__.return_value.read.return_value = json.dumps(
+                {"ret": 0, "data": {"tasks": [{"id": "task-1", "token": "token-1"}]}}
+            ).encode()
+            query = MagicMock()
+            query.__enter__.return_value.read.return_value = json.dumps(
+                {"ret": "810", "errmsg": "query rejected"}
+            ).encode()
+            mock_urlopen.side_effect = [create, query]
+
+            with self.assertRaisesRegex(CapCutTTSRequestError, "810.*query rejected"):
+                asyncio.run(CapCutTTSClient().synthesize("Xin chào"))
+            self.assertEqual(mock_urlopen.call_count, 2)
+
+    def test_capcut_create_error_810_is_not_retried(self) -> None:
+        with patch(
+            "subtitle_localizer.dubbing.capcut_tts.urllib.request.urlopen"
+        ) as mock_urlopen, patch(
+            "subtitle_localizer.dubbing.capcut_tts.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = json.dumps(
+                {"ret": 810, "errmsg": "deterministic provider error"}
+            ).encode()
+            mock_urlopen.return_value = response
+
+            with self.assertRaisesRegex(CapCutTTSRequestError, "810"):
+                asyncio.run(CapCutTTSClient().synthesize("Xin chào"))
+            mock_urlopen.assert_called_once()
+            mock_sleep.assert_not_awaited()
+
+    def test_capcut_empty_success_payload_is_not_retried(self) -> None:
+        with patch.object(
+            CapCutTTSClient,
+            "_synthesize_once",
+            new_callable=AsyncMock,
+            side_effect=CapCutTTSRequestError("success response contained no audio"),
+        ) as mock_once, patch(
+            "subtitle_localizer.dubbing.capcut_tts.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
+            with self.assertRaisesRegex(CapCutTTSRequestError, "no audio"):
+                asyncio.run(CapCutTTSClient().synthesize("Xin chào"))
+            mock_once.assert_awaited_once()
+            mock_sleep.assert_not_awaited()
+
+    def test_capcut_system_busy_retries_as_transient_capacity_error(self) -> None:
+        with patch.object(
+            CapCutTTSClient,
+            "_synthesize_once",
+            new_callable=AsyncMock,
+            side_effect=[
+                CapCutTTSRequestError("CapCut TTS task báo lỗi (1000): system busy"),
+                b"capcut-audio",
+            ],
+        ) as mock_once, patch(
+            "subtitle_localizer.dubbing.capcut_tts.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
+            result = asyncio.run(CapCutTTSClient().synthesize("Xin chào"))
+
+        self.assertEqual(result, b"capcut-audio")
+        self.assertEqual(mock_once.await_count, 2)
+        mock_sleep.assert_awaited_once()
+
+    def test_capcut_transport_error_retries_exactly_once(self) -> None:
+        with patch.object(
+            CapCutTTSClient,
+            "_synthesize_once",
+            new_callable=AsyncMock,
+            side_effect=[
+                urllib.error.URLError("temporary-1"),
+                urllib.error.URLError("temporary-2"),
+            ],
+        ) as mock_once, patch(
+            "subtitle_localizer.dubbing.capcut_tts.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
+            with self.assertRaises(urllib.error.URLError):
+                asyncio.run(CapCutTTSClient().synthesize("Xin chào"))
+            self.assertEqual(mock_once.await_count, 2)
+            mock_sleep.assert_awaited_once()
+
     @patch("subtitle_localizer.dubbing.capcut_tts.CapCutTTSClient.synthesize", new_callable=AsyncMock)
     def test_synthesize_text_routes_to_capcut(self, mock_capcut: AsyncMock) -> None:
         import asyncio
@@ -120,6 +297,42 @@ class MultiProviderTTSTest(unittest.TestCase):
         ))
         self.assertEqual(result, b"fake_capcut_mp3_data")
         mock_capcut.assert_called_once()
+
+    @patch("subtitle_localizer.dubbing.capcut_tts.CapCutTTSClient.synthesize", new_callable=AsyncMock)
+    @patch("subtitle_localizer.dubbing.tts._synthesize_edge_tts", new_callable=AsyncMock)
+    def test_synthesize_text_explicit_capcut_wins_mismatched_edge_voice(
+        self, mock_edge: AsyncMock, mock_capcut: AsyncMock
+    ) -> None:
+        mock_capcut.return_value = b"capcut-mp3"
+
+        result = asyncio.run(
+            synthesize_text(
+                text="Provider đã chọn phải thắng",
+                provider="capcut",
+                voice="vi-VN-HoaiMyNeural",
+            )
+        )
+        self.assertEqual(result, b"capcut-mp3")
+        mock_capcut.assert_awaited_once()
+        mock_edge.assert_not_awaited()
+
+    @patch("subtitle_localizer.dubbing.tts._synthesize_edge_tts", new_callable=AsyncMock)
+    @patch("subtitle_localizer.dubbing.capcut_tts.CapCutTTSClient.synthesize", new_callable=AsyncMock)
+    def test_synthesize_text_explicit_edge_wins_mismatched_capcut_voice(
+        self, mock_capcut: AsyncMock, mock_edge: AsyncMock
+    ) -> None:
+        mock_edge.return_value = b"edge-mp3"
+
+        result = asyncio.run(
+            synthesize_text(
+                text="Provider đã chọn phải thắng",
+                provider="edge",
+                voice="BV075_streaming",
+            )
+        )
+        self.assertEqual(result, b"edge-mp3")
+        mock_edge.assert_awaited_once()
+        mock_capcut.assert_not_awaited()
 
     @patch("subtitle_localizer.dubbing.capcut_tts.CapCutTTSClient.synthesize", new_callable=AsyncMock)
     @patch("subtitle_localizer.dubbing.tts._synthesize_edge_tts", new_callable=AsyncMock)
@@ -141,9 +354,27 @@ class MultiProviderTTSTest(unittest.TestCase):
         mock_capcut.assert_called_once()
         mock_edge.assert_called_once()
 
+    @patch("subtitle_localizer.dubbing.capcut_tts.CapCutTTSClient.synthesize", new_callable=AsyncMock)
+    @patch("subtitle_localizer.dubbing.tts._synthesize_edge_tts", new_callable=AsyncMock)
+    def test_synthesize_text_fallback_on_empty_capcut_audio_once(
+        self, mock_edge: AsyncMock, mock_capcut: AsyncMock
+    ) -> None:
+        mock_capcut.return_value = b""
+        mock_edge.return_value = b"fallback_edge_mp3_data"
+
+        result = asyncio.run(
+            synthesize_text(
+                text="Câu nói quan trọng",
+                provider="capcut",
+                voice="BV075_streaming",
+            )
+        )
+        self.assertEqual(result, b"fallback_edge_mp3_data")
+        mock_capcut.assert_awaited_once()
+        mock_edge.assert_awaited_once()
+
     @patch("subtitle_localizer.dubbing.gemini_tts.GeminiTTSClient.synthesize", new_callable=AsyncMock)
     def test_synthesize_text_routes_to_gemini(self, mock_gemini: AsyncMock) -> None:
-        import asyncio
         mock_gemini.return_value = b"fake_gemini_mp3_data"
 
         result = asyncio.run(synthesize_text(
@@ -276,15 +507,50 @@ class MultiProviderTTSTest(unittest.TestCase):
         self.assertEqual(detect_voice_provider(None), "edge")
         self.assertEqual(detect_voice_provider(""), "edge")
 
-        # Resolve with preferred provider
-        # 1. Clear voice identity overrides conflicting preference
-        self.assertEqual(resolve_tts_provider("multi_female_yangguangnv_uranus_bigtts", preferred_provider="edge"), "capcut")
-        self.assertEqual(resolve_tts_provider("vi-VN-NamMinhNeural", preferred_provider="capcut"), "edge")
-        self.assertEqual(resolve_tts_provider("Zephyr", preferred_provider="edge"), "gemini")
+        # Resolve with an explicit valid provider: the user's provider wins even
+        # when a stale persisted voice belongs to another provider.
+        self.assertEqual(resolve_tts_provider("multi_female_yangguangnv_uranus_bigtts", preferred_provider="edge"), "edge")
+        self.assertEqual(resolve_tts_provider("vi-VN-NamMinhNeural", preferred_provider="capcut"), "capcut")
+        self.assertEqual(resolve_tts_provider("Zephyr", preferred_provider="edge"), "edge")
 
-        # 2. Unknown custom voice respects preferred_provider
+        # Unknown custom voice also respects the explicit provider.
         self.assertEqual(resolve_tts_provider("custom_cloned_voice_123", preferred_provider="capcut"), "capcut")
         self.assertEqual(resolve_tts_provider("custom_cloned_voice_123", preferred_provider="gemini"), "gemini")
+
+    def test_provider_specific_voice_pools_and_defaults(self) -> None:
+        provider_ids = {
+            provider: {voice["voice_id"] for voice in voices}
+            for provider, voices in TTS_CATALOG.items()
+        }
+        self.assertTrue(provider_ids["edge"].isdisjoint(provider_ids["capcut"]))
+        self.assertTrue(provider_ids["edge"].isdisjoint(provider_ids["gemini"]))
+        self.assertTrue(provider_ids["capcut"].isdisjoint(provider_ids["gemini"]))
+
+        self.assertIn(AVAILABLE_VOICES["nam"], provider_ids["edge"])
+        self.assertIn(AVAILABLE_VOICES["nu"], provider_ids["edge"])
+        self.assertEqual(
+            normalize_voice_for_provider("vi-VN-HoaiMyNeural", "capcut"),
+            "BV074_streaming",
+        )
+        self.assertEqual(
+            normalize_voice_for_provider("BV075_streaming", "gemini"),
+            "Puck",
+        )
+        self.assertEqual(
+            normalize_voice_for_provider("Puck", "edge"),
+            "vi-VN-NamMinhNeural",
+        )
+
+        for provider, defaults in {
+            "edge": {"male": AVAILABLE_VOICES["nam"], "female": AVAILABLE_VOICES["nu"]},
+            "capcut": {"male": "BV075_streaming", "female": "BV074_streaming"},
+            "gemini": {"male": "Puck", "female": "Kore"},
+        }.items():
+            pools = default_voice_pools(provider)
+            self.assertEqual(set(pools), {"male", "female"})
+            for gender, default_voice in defaults.items():
+                self.assertIn(default_voice, pools[gender])
+                self.assertTrue(set(pools[gender]).issubset(provider_ids[provider]))
 
     @patch("subtitle_localizer.dubbing.capcut_tts.CapCutTTSClient.synthesize", new_callable=AsyncMock)
     def test_server_test_tts_routes_capcut_without_fallback(self, mock_capcut: AsyncMock) -> None:

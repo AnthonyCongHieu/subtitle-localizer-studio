@@ -109,6 +109,87 @@ class ProxyAndStagePersistenceTest(unittest.TestCase):
         self.assertEqual(latest_trans.progress, 1.0)
         self.assertIn("câu", latest_trans.metrics.get("label", ""))
 
+    def test_clean_translation_and_voice_keep_source_cues(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-proxy"}
+        proj_id = "proj-clean-artifacts"
+        proj = ProjectManifestV1(
+            project_id=proj_id,
+            title="Clean artifacts",
+            source_video_path="E:/dummy.mp4",
+            video_fingerprint="fp-clean",
+            source_language="zh",
+            target_language="vi",
+        )
+        self.repo.save_project(proj)
+        self.repo.save_cues(proj_id, [SubtitleCueV1(
+            cue_id="c1", start_pts=0.0, end_pts=1.0,
+            source_text="你好", translated_text="Xin chào",
+            style={"spoken_text": "Xin chào", "speaker": "female"},
+        )])
+        out_dir = self.output_root / proj_id
+        (out_dir / "cues").mkdir(parents=True)
+        (out_dir / f"voiceover_{proj_id}.mp3").write_bytes(b"master")
+        (out_dir / "cues" / "c1.mp3").write_bytes(b"cue")
+        (out_dir / "keep.txt").write_text("keep", encoding="utf-8")
+
+        cleaned = client.post(f"/api/v1/projects/{proj_id}/translation/clean", headers=headers)
+        self.assertEqual(cleaned.status_code, 200, cleaned.text)
+        cue = self.repo.get_cues(proj_id)[0]
+        self.assertEqual(cue.source_text, "你好")
+        self.assertEqual(cue.translated_text, "")
+        self.assertNotIn("spoken_text", cue.style)
+        self.assertFalse((out_dir / f"voiceover_{proj_id}.mp3").exists())
+        self.assertFalse((out_dir / "cues" / "c1.mp3").exists())
+        self.assertTrue((out_dir / "keep.txt").exists())
+        project_view = client.get(f"/api/v1/projects/{proj_id}", headers=headers).json()
+        self.assertEqual(project_view["translated_count"], 0)
+        self.assertFalse(project_view["has_voiceover"])
+
+        # Voice clean is idempotent and must not touch source/translation fields.
+        self.repo.save_cues(proj_id, [SubtitleCueV1(
+            cue_id="c1", start_pts=0.0, end_pts=1.0,
+            source_text="你好", translated_text="Xin chào",
+        )])
+        cleaned_voice = client.post(f"/api/v1/projects/{proj_id}/dubbing/clean", headers=headers)
+        self.assertEqual(cleaned_voice.status_code, 200, cleaned_voice.text)
+        cue_after_voice = self.repo.get_cues(proj_id)[0]
+        self.assertEqual(cue_after_voice.translated_text, "Xin chào")
+
+    def test_clean_single_cue_translation_and_voice(self) -> None:
+        from fastapi.testclient import TestClient
+        client = TestClient(self.app)
+        headers = {"Authorization": "Bearer test-token-proxy"}
+        project_id = "proj-clean-one-cue"
+        self.repo.save_project(ProjectManifestV1(
+            project_id=project_id, title="Clean one", source_video_path="E:/dummy.mp4",
+            video_fingerprint="fp-clean-one", source_language="zh", target_language="vi",
+        ))
+        self.repo.save_cues(project_id, [
+            SubtitleCueV1(cue_id="c1", start_pts=0, end_pts=1, source_text="你好", translated_text="Xin chào", style={"spoken_text": "Xin chào"}),
+            SubtitleCueV1(cue_id="c2", start_pts=1, end_pts=2, source_text="再见", translated_text="Tạm biệt"),
+        ])
+        cue_dir = self.output_root / project_id / "cues"
+        cue_dir.mkdir(parents=True)
+        (cue_dir / "c1.mp3").write_bytes(b"cue1")
+        (cue_dir / "c2.mp3").write_bytes(b"cue2")
+        master = self.output_root / project_id / f"voiceover_{project_id}.mp3"
+        master.write_bytes(b"master")
+
+        res = client.post(f"/api/v1/projects/{project_id}/cues/c1/translation/clean", headers=headers)
+        self.assertEqual(res.status_code, 200, res.text)
+        cues = self.repo.get_cues(project_id)
+        self.assertEqual(cues[0].translated_text, "")
+        self.assertNotIn("spoken_text", cues[0].style)
+        self.assertEqual(cues[1].translated_text, "Tạm biệt")
+
+        res_voice = client.post(f"/api/v1/projects/{project_id}/cues/c1/dubbing/clean", headers=headers)
+        self.assertEqual(res_voice.status_code, 200, res_voice.text)
+        self.assertFalse((cue_dir / "c1.mp3").exists())
+        self.assertTrue((cue_dir / "c2.mp3").exists())
+        self.assertFalse(master.exists())
+
     @patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover", new_callable=AsyncMock)
     def test_dubbing_saves_stages_and_progress(self, mock_gen) -> None:
         from fastapi.testclient import TestClient

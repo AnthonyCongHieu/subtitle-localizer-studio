@@ -79,7 +79,7 @@ export const EngineConfigModal: React.FC<EngineConfigModalProps> = ({
       } else if (protocol === 'ollama') {
         // Test Ollama local endpoint
         const res = await apiClient.testLocalLlmConnection({
-          model: model || 'qwen2.5:7b-instruct',
+          model: model || 'qwen2.5:14b',
           endpoint: baseUrl || 'http://localhost:11434',
         });
         const latency = Date.now() - startTime;

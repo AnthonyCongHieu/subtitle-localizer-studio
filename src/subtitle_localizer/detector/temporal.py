@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List, Tuple
 
+from subtitle_localizer.detector.persistent_text import box_iou, classify_persistent_boxes
+
 
 @dataclass
 class SubtitleEvent:
@@ -15,18 +17,7 @@ class SubtitleEvent:
 
 def _box_overlap(b1: List[float], b2: List[float]) -> float:
     """Tính Intersection over Union (IoU) giữa 2 bounding box [x1, y1, x2, y2]."""
-    x1 = max(b1[0], b2[0])
-    y1 = max(b1[1], b2[1])
-    x2 = min(b1[2], b2[2])
-    y2 = min(b1[3], b2[3])
-
-    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-    area1 = (b1[2] - b1[0]) * (b1[3] - b1[1])
-    area2 = (b2[2] - b2[0]) * (b2[3] - b2[1])
-    union = area1 + area2 - intersection
-    if union <= 0:
-        return 0.0
-    return intersection / union
+    return box_iou(b1, b2)
 
 
 class NativeTemporalDetector:
@@ -57,31 +48,18 @@ class NativeTemporalDetector:
             return []
 
         # 1. Phát hiện và loại trừ watermark xuất hiện cố định > max_watermark_ratio
-        box_presence: List[Tuple[List[float], int]] = []
-        total_frames = len(frames_data)
-
-        for _, boxes in frames_data:
-            for b in boxes:
-                matched = False
-                for idx, (known_box, count) in enumerate(box_presence):
-                    if _box_overlap(known_box, b) > 0.6:
-                        box_presence[idx] = (known_box, count + 1)
-                        matched = True
-                        break
-                if not matched:
-                    box_presence.append((b, 1))
-
-        watermark_boxes = [
-            box for box, count in box_presence
-            if (count / max(1, total_frames)) >= self.max_watermark_ratio
-        ]
+        watermark_boxes = classify_persistent_boxes(
+            frames_data,
+            persistent_ratio=self.max_watermark_ratio,
+            iou_threshold=0.6,
+        )
 
         # 2. Lọc các frame có text không phải watermark
         active_points: List[Tuple[float, List[List[float]]]] = []
         for pts, boxes in frames_data:
             valid_boxes = [
                 b for b in boxes
-                if not any(_box_overlap(b, wb) > 0.6 for wb in watermark_boxes)
+                if not any(box_iou(b, wb) > 0.6 for wb in watermark_boxes)
             ]
             if valid_boxes:
                 active_points.append((pts, valid_boxes))

@@ -447,7 +447,7 @@ class TestTranslationRequest(BaseModel):
     target_lang: str = "vi"
     provider: str = "local"
     gemini_model: str = "gemini-2.5-flash"
-    local_model: str = "qwen2.5:7b-instruct"
+    local_model: str = "qwen2.5:14b"
     local_endpoint: str = "http://localhost:11434"
     auto_fallback: bool = False
     prompt_tone: str = "dramatic"
@@ -456,7 +456,7 @@ class TestTranslationRequest(BaseModel):
 
 class LocalLlmCheckRequest(BaseModel):
     endpoint: Optional[str] = "http://localhost:11434"
-    model: Optional[str] = "qwen2.5:7b-instruct"
+    model: Optional[str] = "qwen2.5:14b"
 
 
 class TestDubbingRequest(BaseModel):
@@ -1910,6 +1910,176 @@ def create_app(
         finally:
             translator.unload()
 
+    def _clean_project_voice_artifacts(project_id: str) -> int:
+        """Remove only generated voice files for one project, never source media."""
+        project_output = (resolved_output_root / project_id).resolve()
+        output_root_resolved = resolved_output_root.resolve()
+        if project_output.parent != output_root_resolved:
+            raise HTTPException(status_code=400, detail="Project output path không hợp lệ")
+        removed = 0
+        candidates = [project_output / f"voiceover_{project_id}.mp3"]
+        cue_dir = project_output / "cues"
+        if cue_dir.is_dir():
+            resolved_cue_dir = cue_dir.resolve()
+            if resolved_cue_dir.parent != project_output or resolved_cue_dir.name != "cues":
+                raise HTTPException(status_code=400, detail="Voice cue path không hợp lệ")
+            candidates.extend(cue_dir.glob("*.mp3"))
+        for path in candidates:
+            if path.parent.resolve() not in {project_output, cue_dir.resolve()}:
+                raise HTTPException(status_code=400, detail="Voice artifact path không hợp lệ")
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+                removed += 1
+        if cue_dir.is_dir() and not any(cue_dir.iterdir()):
+            cue_dir.rmdir()
+        return removed
+
+    @app.post("/api/v1/projects/{project_id}/translation/clean")
+    async def clean_project_translation(
+        project_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Clear generated translations while preserving every OCR source cue."""
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+        with running_lock:
+            if project_id in running_project_ids:
+                raise HTTPException(status_code=409, detail="Dự án đang xử lý; không thể clean lúc này")
+            running_project_ids.add(project_id)
+        try:
+            cues = repository.get_cues(project_id)
+            for cue in cues:
+                cue.translated_text = ""
+                if isinstance(cue.style, dict):
+                    cue.style.pop("spoken_text", None)
+                    cue.style.pop("spoken_text_meta", None)
+            repository.save_cues(project_id, cues)
+            removed_voice_files = _clean_project_voice_artifacts(project_id)
+            manifest.translated_count = 0
+            manifest.has_voiceover = False
+            manifest.voiceover_path = None
+            manifest.voiceover_file_size_bytes = 0
+            repository.save_project(manifest)
+        finally:
+            with running_lock:
+                running_project_ids.discard(project_id)
+        return {
+            "status": "cleaned",
+            "project_id": project_id,
+            "cues_count": len(cues),
+            "removed_voice_files": removed_voice_files,
+        }
+
+    @app.post("/api/v1/projects/{project_id}/dubbing/clean")
+    async def clean_project_voiceover(
+        project_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Delete generated master/cue voice files but keep translated subtitles."""
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+        with running_lock:
+            if project_id in running_project_ids:
+                raise HTTPException(status_code=409, detail="Dự án đang xử lý; không thể clean lúc này")
+            running_project_ids.add(project_id)
+        try:
+            removed_voice_files = _clean_project_voice_artifacts(project_id)
+            manifest.has_voiceover = False
+            manifest.voiceover_path = None
+            manifest.voiceover_file_size_bytes = 0
+            repository.save_project(manifest)
+        finally:
+            with running_lock:
+                running_project_ids.discard(project_id)
+        return {
+            "status": "cleaned",
+            "project_id": project_id,
+            "removed_voice_files": removed_voice_files,
+        }
+
+    def _clean_single_cue_voice_artifacts(project_id: str, cue_id: str) -> int:
+        project_output = (resolved_output_root / project_id).resolve()
+        if project_output.parent != resolved_output_root.resolve():
+            raise HTTPException(status_code=400, detail="Project output path không hợp lệ")
+        cue_dir = project_output / "cues"
+        if cue_dir.exists() and cue_dir.resolve().parent != project_output:
+            raise HTTPException(status_code=400, detail="Voice cue path không hợp lệ")
+        cue_audio = cue_dir / f"{cue_id}.mp3"
+        master_audio = project_output / f"voiceover_{project_id}.mp3"
+        removed = 0
+        for candidate, expected_parent in ((cue_audio, cue_dir), (master_audio, project_output)):
+            if candidate.parent.resolve() != expected_parent.resolve():
+                raise HTTPException(status_code=400, detail="Voice artifact path không hợp lệ")
+            if candidate.is_file() or candidate.is_symlink():
+                candidate.unlink()
+                removed += 1
+        return removed
+
+    @app.post("/api/v1/projects/{project_id}/cues/{cue_id}/translation/clean")
+    async def clean_cue_translation(
+        project_id: str,
+        cue_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+        with running_lock:
+            if project_id in running_project_ids:
+                raise HTTPException(status_code=409, detail="Dự án đang xử lý; không thể clean lúc này")
+            running_project_ids.add(project_id)
+        try:
+            cues = repository.get_cues(project_id)
+            cue = next((item for item in cues if item.cue_id == cue_id), None)
+            if cue is None:
+                raise HTTPException(status_code=404, detail="Cue not found")
+            cue.translated_text = ""
+            if isinstance(cue.style, dict):
+                cue.style.pop("spoken_text", None)
+                cue.style.pop("spoken_text_meta", None)
+            repository.save_cues(project_id, cues)
+            removed_voice_files = _clean_single_cue_voice_artifacts(project_id, cue_id)
+            manifest.has_voiceover = False
+            manifest.voiceover_path = None
+            manifest.voiceover_file_size_bytes = 0
+            repository.save_project(manifest)
+            return {"status": "cleaned", "cue": cue.to_dict(), "removed_voice_files": removed_voice_files}
+        finally:
+            with running_lock:
+                running_project_ids.discard(project_id)
+
+    @app.post("/api/v1/projects/{project_id}/cues/{cue_id}/dubbing/clean")
+    async def clean_cue_voiceover(
+        project_id: str,
+        cue_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if not any(cue.cue_id == cue_id for cue in repository.get_cues(project_id)):
+            raise HTTPException(status_code=404, detail="Cue not found")
+        with running_lock:
+            if project_id in running_project_ids:
+                raise HTTPException(status_code=409, detail="Dự án đang xử lý; không thể clean lúc này")
+            running_project_ids.add(project_id)
+        try:
+            removed_voice_files = _clean_single_cue_voice_artifacts(project_id, cue_id)
+            manifest.has_voiceover = False
+            manifest.voiceover_path = None
+            manifest.voiceover_file_size_bytes = 0
+            repository.save_project(manifest)
+            return {"status": "cleaned", "cue_id": cue_id, "removed_voice_files": removed_voice_files}
+        finally:
+            with running_lock:
+                running_project_ids.discard(project_id)
+
     @app.post("/api/v1/projects/{project_id}/dubbing/adapt-spoken")
     async def adapt_spoken_for_project(
         project_id: str,
@@ -2046,38 +2216,52 @@ def create_app(
         except Exception:
             pass
 
-        from subtitle_localizer.dubbing.tts import generate_timed_voiceover
-        generated_voiceover = await generate_timed_voiceover(
-            cues=cues,
-            voice=voice,
-            output_path=out_voiceover,
-            total_duration=duration,
-            rate=rate,
-            mode=mode,
-            voice_male=voice_male,
-            voice_female=voice_female,
-            provider=provider,
-            prompt_style=prompt_style,
-            export_cues_dir=cues_dir,
-            auto_detect_speakers=bool(auto_detect_speakers),
-        )
-
-        if (not out_voiceover.exists() or out_voiceover.stat().st_size == 0) and generated_voiceover:
-            candidate = Path(generated_voiceover)
-            if candidate.exists() and candidate.stat().st_size > 0 and candidate != out_voiceover:
-                import shutil
-                shutil.copyfile(candidate, out_voiceover)
-
-        if not out_voiceover.exists() or out_voiceover.stat().st_size == 0:
+        try:
+            from subtitle_localizer.dubbing.tts import generate_timed_voiceover, is_valid_speech_audio
+            generated_voiceover = await generate_timed_voiceover(
+                cues=cues,
+                voice=voice,
+                output_path=out_voiceover,
+                total_duration=duration,
+                rate=rate,
+                mode=mode,
+                voice_male=voice_male,
+                voice_female=voice_female,
+                provider=provider,
+                prompt_style=prompt_style,
+                export_cues_dir=cues_dir,
+                auto_detect_speakers=bool(auto_detect_speakers),
+            )
+            if (not out_voiceover.exists() or out_voiceover.stat().st_size == 0) and generated_voiceover:
+                candidate = Path(generated_voiceover)
+                if candidate.exists() and candidate.stat().st_size > 0 and candidate != out_voiceover:
+                    import shutil
+                    shutil.copyfile(candidate, out_voiceover)
+        except Exception as error:
+            error_message = f"Tạo audio TTS thất bại ({type(error).__name__}): {error}"
             repository.save_stage_run(
                 project_id,
-                StageRunV1(
-                    stage_name="dubbing",
-                    status="failed",
-                    progress=0.0,
-                    errors=["Không tạo được audio TTS; kiểm tra provider/Internet/voice."],
-                    end_time=time.time(),
-                ),
+                StageRunV1(stage_name="dubbing", status="failed", progress=0.0,
+                           errors=[error_message], end_time=time.time()),
+            )
+            raise
+
+        validation_error = ""
+        if not out_voiceover.exists() or out_voiceover.stat().st_size == 0:
+            validation_error = "Không tạo được audio TTS; file MP3 bị thiếu hoặc rỗng."
+        else:
+            try:
+                if not is_valid_speech_audio(out_voiceover.read_bytes()):
+                    validation_error = "Audio TTS không hợp lệ: MP3 không giải mã được hoặc chỉ chứa im lặng."
+            except Exception as error:
+                validation_error = f"Không thể xác thực audio TTS ({type(error).__name__}): {error}"
+
+        if validation_error:
+            out_voiceover.unlink(missing_ok=True)
+            repository.save_stage_run(
+                project_id,
+                StageRunV1(stage_name="dubbing", status="failed", progress=0.0,
+                           errors=[validation_error], end_time=time.time()),
             )
             raise HTTPException(status_code=502, detail="TTS không tạo được file audio; dự án chưa hoàn tất")
 
@@ -2174,6 +2358,8 @@ def create_app(
             voice_female=voice_female,
             auto_detect_speakers=bool(auto_detect_speakers),
         )
+        # splice_cue_voiceover validates the synthesized cue before it mutates the
+        # master MP3, so validating here again would decode the same audio twice.
 
         manifest.has_voiceover = True
         manifest.voiceover_path = str(out_voiceover).replace("\\", "/")
@@ -2817,7 +3003,7 @@ def create_app(
         import json
 
         endpoint = (req.endpoint if req and req.endpoint else "http://localhost:11434").rstrip("/")
-        model = (req.model if req and req.model else "qwen2.5:7b-instruct")
+        model = (req.model if req and req.model else "qwen2.5:14b")
 
         t0 = time.time()
         available_models = []
@@ -2983,7 +3169,7 @@ def create_app(
             import json
             import urllib.request
             endpoint = (req.local_endpoint or "http://localhost:11434").rstrip("/")
-            model = req.local_model or "qwen2.5:7b-instruct"
+            model = req.local_model or "qwen2.5:14b"
             prompt = (
                 f"Bạn là chuyên gia dịch thuật phim truyền hình. Dịch câu sau từ {req.source_lang} sang {req.target_lang}.\n"
                 f"Phong cách: {tone_desc}.\n"
@@ -3034,7 +3220,7 @@ def create_app(
         # change in translation quality or data residency.
         if not translated:
             endpoint = (req.local_endpoint or "http://localhost:11434").rstrip("/")
-            model = req.local_model or "qwen2.5:7b-instruct"
+            model = req.local_model or "qwen2.5:14b"
             translated = f"[Local LLM unavailable at {endpoint}; start Ollama and install {model}]"
             provider_used = "local_unavailable"
 

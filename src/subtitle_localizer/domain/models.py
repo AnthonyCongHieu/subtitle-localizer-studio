@@ -15,6 +15,8 @@ class RegionTrackV1:
     width: float = 1.0
     height: float = 1.0
     mask_enabled: bool = True
+    # dialogue = OCR + optional mask; ignore = skip OCR/mask; always_mask = blur always, skip OCR
+    role: str = "dialogue"
     valid_start_pts: float = 0.0
     valid_end_pts: float = float("inf")
     keyframe_overrides: Dict[float, Dict[str, float]] = field(default_factory=dict)
@@ -43,6 +45,7 @@ class RegionTrackV1:
             width=float(data.get("width", 1.0)),
             height=float(data.get("height", 1.0)),
             mask_enabled=bool(data.get("mask_enabled", True)),
+            role=str(data.get("role") or "dialogue"),
             valid_start_pts=float(data["valid_start_pts"]) if data.get("valid_start_pts") is not None else 0.0,
             valid_end_pts=float(data["valid_end_pts"]) if data.get("valid_end_pts") is not None else float("inf"),
             keyframe_overrides=data.get("keyframe_overrides", {}),

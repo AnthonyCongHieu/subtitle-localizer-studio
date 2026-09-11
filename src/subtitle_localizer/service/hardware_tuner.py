@@ -208,14 +208,17 @@ def probe_hardware(
         return HardwareSnapshot(cpu_threads=threads, gpu_index=index, cuda_available=False)
     total = _parse_memory_mb(fields[1])
     free = _parse_memory_mb(fields[2])
-    cuda = _cuda_provider_available() or bool(total)
+    has_nvidia = bool(total)
+    # nvidia-smi visibility remains valid profiling evidence even before ORT CUDA
+    # wheels are installed; OCR providers still verify the actual execution provider.
+    cuda = _cuda_provider_available() or has_nvidia
     return HardwareSnapshot(
         cpu_threads=threads,
         free_vram_mb=free,
         total_vram_mb=total,
         gpu_name=fields[0],
         cuda_available=cuda,
-        nvdec_available=cuda,
+        nvdec_available=has_nvidia,
         gpu_index=index,
     )
 

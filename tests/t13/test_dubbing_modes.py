@@ -3,6 +3,8 @@ import unittest
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+
+import numpy as np
 from fastapi.testclient import TestClient
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -17,8 +19,9 @@ class DubbingModesEndpointTest(unittest.TestCase):
         self.app = create_app()
         self.client = TestClient(self.app)
 
+    @patch("subtitle_localizer.dubbing.tts._decode_mp3_to_pcm", return_value=np.array([0.2], dtype=np.float32))
     @patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover")
-    def test_run_dubbing_single_mode_saves_settings(self, mock_tts):
+    def test_run_dubbing_single_mode_saves_settings(self, mock_tts, _mock_decode):
         def fake_synth(*args, **kwargs):
             out = kwargs.get("output_path")
             if out:
@@ -62,8 +65,9 @@ class DubbingModesEndpointTest(unittest.TestCase):
         self.assertEqual(dub_settings.get("voice"), "vi-VN-NamMinhNeural")
         self.assertEqual(dub_settings.get("rate"), "+10%")
 
+    @patch("subtitle_localizer.dubbing.tts._decode_mp3_to_pcm", return_value=np.array([0.2], dtype=np.float32))
     @patch("subtitle_localizer.dubbing.tts.generate_timed_voiceover")
-    def test_run_dubbing_multi_mode_saves_settings(self, mock_tts):
+    def test_run_dubbing_multi_mode_saves_settings(self, mock_tts, _mock_decode):
         dummy = Path(tempfile.gettempdir()) / "subtitle_localizer_dummy_voiceover.mp3"
         dummy.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00")
         mock_tts.return_value = dummy

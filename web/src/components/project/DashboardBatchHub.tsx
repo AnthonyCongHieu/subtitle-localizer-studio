@@ -1579,6 +1579,34 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
     }
   };
 
+  const handleCleanStage = async (project: ProjectManifestV1, kind: 'translation' | 'voice') => {
+    const label = kind === 'translation' ? 'bản dịch và voice phát sinh' : 'file voice lồng tiếng';
+    if (!window.confirm(`Xóa ${label} của tập này? Phụ đề gốc OCR vẫn được giữ lại.`)) return;
+    const pid = project.project_id;
+    setIsSingleRunning(true);
+    try {
+      setSingleActionStatus((prev) => ({ ...prev, [pid]: kind === 'translation' ? 'Đang clean bản dịch...' : 'Đang clean voice...' }));
+      if (kind === 'translation') {
+        await apiClient.cleanTranslation(pid);
+      } else {
+        await apiClient.cleanVoiceover(pid);
+      }
+      setSingleActionStatus((prev) => ({ ...prev, [pid]: kind === 'translation' ? '✓ Đã clean bản dịch!' : '✓ Đã clean voice!' }));
+      onRefreshProjects();
+      const updated = await apiClient.getProject(pid);
+      if (updated) setInspectingProject(updated);
+    } catch (err: any) {
+      setSingleActionStatus((prev) => ({ ...prev, [pid]: `Lỗi: ${err?.message || 'Không thể clean'}` }));
+    } finally {
+      setIsSingleRunning(false);
+      setTimeout(() => setSingleActionStatus((prev) => {
+        const next = { ...prev };
+        delete next[pid];
+        return next;
+      }), 3500);
+    }
+  };
+
   // Vận hành Hàng Đợi Tuần Tự (Sequential FIFO Queue)
   const handleStartQueue = async (action: 'all' | 'ocr' | 'translate' | 'dubbing' | 'export') => {
     const targets = selectedProjectIds.length > 0
@@ -3061,6 +3089,24 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                             <Film className="w-4 h-4 text-purple-400 group-hover:scale-110 transition-transform" />
                             <span>Xuất MP4</span>
                           </button>
+                          <button
+                            onClick={() => handleCleanStage(inspectingProject, 'translation')}
+                            disabled={isSingleRunning || (inspectingProject.cues_count || 0) === 0}
+                            title="Xóa toàn bộ bản dịch và voice phát sinh, giữ nguyên phụ đề gốc OCR"
+                            className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-rose-500/50 hover:bg-rose-950/20 text-slate-300 hover:text-rose-300 text-xs font-semibold flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shadow-sm group"
+                          >
+                            <Trash2 className="w-4 h-4 text-rose-400 group-hover:scale-110 transition-transform" />
+                            <span>Clean dịch</span>
+                          </button>
+                          <button
+                            onClick={() => handleCleanStage(inspectingProject, 'voice')}
+                            disabled={isSingleRunning}
+                            title="Xóa file voice lồng tiếng, giữ nguyên bản dịch"
+                            className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-orange-500/50 hover:bg-orange-950/20 text-slate-300 hover:text-orange-300 text-xs font-semibold flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shadow-sm group"
+                          >
+                            <Trash2 className="w-4 h-4 text-orange-400 group-hover:scale-110 transition-transform" />
+                            <span>Clean voice</span>
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -3376,7 +3422,7 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                                 >
                                   <option value="gemini-2.5-flash">Gemini 2.5 Flash (Khuyên dùng)</option>
                                   <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
-                                  <option value="qwen2.5:7b-instruct">Local Qwen 2.5 (7B)</option>
+                                  <option value="qwen2.5:14b">Local Qwen 2.5 14B (khuyên dùng)</option>
                                 </select>
                               </div>
                               <div>

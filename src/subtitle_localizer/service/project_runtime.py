@@ -44,19 +44,46 @@ async def run_project_dubbing(repository: Any, project_id: str, output_root: Pat
         duration = float(probe_media(manifest.source_video_path).duration)
     except Exception:
         pass
-    from subtitle_localizer.dubbing.tts import generate_timed_voiceover
-    generated = await generate_timed_voiceover(
-        cues=cues, voice=voice, output_path=output, total_duration=duration, rate=rate,
-        mode=mode, voice_male=voice_male, voice_female=voice_female, provider=provider,
-        prompt_style=prompt_style, export_cues_dir=cues_dir,
-        auto_detect_speakers=bool(auto_detect_speakers),
-    )
-    if (not output.exists() or output.stat().st_size == 0) and generated:
-        candidate = Path(generated)
-        if candidate.is_file() and candidate != output:
-            shutil.copyfile(candidate, output)
+
+    try:
+        from subtitle_localizer.dubbing.tts import generate_timed_voiceover, is_valid_speech_audio
+        generated = await generate_timed_voiceover(
+            cues=cues, voice=voice, output_path=output, total_duration=duration, rate=rate,
+            mode=mode, voice_male=voice_male, voice_female=voice_female, provider=provider,
+            prompt_style=prompt_style, export_cues_dir=cues_dir,
+            auto_detect_speakers=bool(auto_detect_speakers),
+        )
+        if (not output.exists() or output.stat().st_size == 0) and generated:
+            candidate = Path(generated)
+            if candidate.is_file() and candidate != output:
+                shutil.copyfile(candidate, output)
+    except Exception as error:
+        error_message = f"dubbing generation failed ({type(error).__name__}): {error}"
+        repository.save_stage_run(
+            project_id,
+            StageRunV1(stage_name="dubbing", status="failed", progress=0.0,
+                       errors=[error_message], end_time=time.time()),
+        )
+        raise
+
+    validation_error = ""
     if not output.is_file() or output.stat().st_size == 0:
-        raise RuntimeError("dubbing did not produce audio")
+        validation_error = "dubbing did not produce a non-empty MP3 file"
+    else:
+        try:
+            if not is_valid_speech_audio(output.read_bytes()):
+                validation_error = "dubbing output is invalid: MP3 cannot be decoded or contains only silence"
+        except Exception as error:
+            validation_error = f"dubbing validation failed ({type(error).__name__}): {error}"
+
+    if validation_error:
+        output.unlink(missing_ok=True)
+        repository.save_stage_run(
+            project_id,
+            StageRunV1(stage_name="dubbing", status="failed", progress=0.0,
+                       errors=[validation_error], end_time=time.time()),
+        )
+        raise RuntimeError(validation_error)
     current = repository.get_project(project_id) or manifest
     current.has_voiceover = True
     current.voiceover_path = str(output).replace("\\", "/")

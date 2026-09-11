@@ -1,0 +1,9 @@
+# Optional GPU OCR runtime for Subtitle Localizer Studio (Windows + NVIDIA)
+# Install after requirements.txt. Do NOT reinstall CPU onnxruntime afterward.
+onnxruntime-gpu==1.30.0
+nvidia-cublas
+nvidia-cuda-runtime
+nvidia-cuda-nvrtc
+nvidia-cufft
+nvidia-cudnn-cu13
+nvidia-nvjitlink
