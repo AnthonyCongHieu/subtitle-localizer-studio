@@ -316,6 +316,7 @@ export const AdminLanView: React.FC<AdminLanViewProps> = ({ onBack, onOpenInStud
         {lan.notice && (
           <div
             role={lan.notice.tone === 'error' ? 'alert' : 'status'}
+            aria-live={lan.notice.tone === 'error' ? 'assertive' : 'polite'}
             className={`rounded-xl border p-3.5 text-xs font-medium ${
               lan.notice.tone === 'error'
                 ? 'border-rose-800 bg-rose-950/50 text-rose-200'
@@ -328,6 +329,7 @@ export const AdminLanView: React.FC<AdminLanViewProps> = ({ onBack, onOpenInStud
         {lan.error && !lan.notice && (
           <div
             role="alert"
+            aria-live="assertive"
             className="rounded-xl border border-rose-800 bg-rose-950/40 p-3.5 text-xs text-rose-300"
           >
             Lỗi đồng bộ: {lan.error}. Đang lưu giữ trạng thái trước đó.

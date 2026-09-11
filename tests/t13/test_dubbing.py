@@ -18,6 +18,7 @@ from subtitle_localizer.dubbing.tts import (
     _synthesize_edge_tts,
     assign_voice_for_cue,
     calculate_slot_stretch,
+    calculate_uniform_slot_stretch,
     clean_subtitle_text,
     decode_and_validate_audio,
     generate_timed_voiceover,
@@ -108,6 +109,13 @@ class DubbingAndWaveformTest(unittest.TestCase):
         # Trường hợp biên thời lượng cực ngắn
         self.assertEqual(calculate_slot_stretch(0.0, 1.0), 1.0)
         self.assertEqual(calculate_slot_stretch(1.0, 0.0), 1.0)
+
+    def test_uniform_auto_stretch_uses_longest_required_ratio(self) -> None:
+        self.assertAlmostEqual(
+            calculate_uniform_slot_stretch([(1.0, 1.0), (2.4, 1.2), (1.2, 1.5)]),
+            2.0,
+        )
+        self.assertEqual(calculate_uniform_slot_stretch([(4.0, 1.0)], max_rate=2.5), 2.5)
 
     def test_time_stretch_pcm(self) -> None:
         sample_rate = 44100

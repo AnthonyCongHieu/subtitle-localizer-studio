@@ -224,11 +224,12 @@ class ProxyAndStagePersistenceTest(unittest.TestCase):
 
         mock_gen.side_effect = fake_generate
 
-        res = client.post(
-            f"/api/v1/projects/{proj_id}/dubbing/run",
-            json={"mode": "single", "voice": "vi-VN-NamMinhNeural"},
-            headers=headers,
-        )
+        with patch("subtitle_localizer.dubbing.tts.is_valid_speech_audio", return_value=True):
+            res = client.post(
+                f"/api/v1/projects/{proj_id}/dubbing/run",
+                json={"mode": "single", "voice": "vi-VN-NamMinhNeural"},
+                headers=headers,
+            )
         self.assertEqual(res.status_code, 200, res.text)
         data = res.json()
         self.assertEqual(data["status"], "completed")

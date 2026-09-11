@@ -1491,6 +1491,22 @@ export const App: React.FC = () => {
     setIsDubbingAll(true);
     setStatusMessage('Đang tạo thuyết minh lồng tiếng toàn bộ video...');
     appLogger.loading('Đang tạo thuyết minh lồng tiếng toàn bộ video...', 'Lồng Tiếng', { taskKey: tKey });
+    const projectId = activeProject.project_id;
+    const progressTimer = window.setInterval(async () => {
+      try {
+        const stages = await apiClient.getStages(projectId);
+        const latest = [...stages].reverse().find((stage: any) => stage.stage_name === 'dubbing');
+        if (!latest) return;
+        const percent = Number(latest.metrics?.percent ?? Math.round(Number(latest.progress || 0) * 100));
+        const done = latest.metrics?.completed_cues;
+        const total = latest.metrics?.total_cues;
+        if (latest.status === 'failed') {
+          setStatusMessage(`Lỗi lồng tiếng: ${latest.errors?.[0] || 'Tạo voice thất bại'}`);
+        } else if (latest.status === 'running') {
+          setStatusMessage(`Đang lồng tiếng ${percent}%${done != null && total ? ` (${done}/${total} câu)` : ''}...`);
+        }
+      } catch {}
+    }, 1000);
     try {
       const dubSettings = activeProject.custom_pipeline_settings?.dubbing || {};
       const modeRaw = String((dubSettings as any).mode || 'single');
@@ -1514,6 +1530,7 @@ export const App: React.FC = () => {
       setStatusMessage(`Lỗi lồng tiếng: ${err?.message || 'Thất bại'}`);
       appLogger.finishTask(tKey, `Lỗi lồng tiếng: ${err?.message || 'Thất bại'}`, 'error');
     } finally {
+      window.clearInterval(progressTimer);
       setIsDubbingAll(false);
     }
   }, [activeProject, cues.length, loadCues]);

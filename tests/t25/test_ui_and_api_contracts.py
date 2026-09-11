@@ -68,12 +68,13 @@ class T25ApiGenderMultiAliasTest(unittest.TestCase):
                 "status": "auto",
             }
         ])
-        dub_res = self.client.post(f"/api/v1/projects/{project_id}/dubbing/run", json={
-            "mode": "gender_multi",
-            "voice_male": "vi-VN-NamMinhNeural",
-            "voice_female": "vi-VN-HoaiMyNeural",
-            "provider": "edge",
-        })
+        with patch("subtitle_localizer.dubbing.tts.is_valid_speech_audio", return_value=True):
+            dub_res = self.client.post(f"/api/v1/projects/{project_id}/dubbing/run", json={
+                "mode": "gender_multi",
+                "voice_male": "vi-VN-NamMinhNeural",
+                "voice_female": "vi-VN-HoaiMyNeural",
+                "provider": "edge",
+            })
         self.assertEqual(dub_res.status_code, 200, dub_res.text)
         body = dub_res.json()
         self.assertEqual(body["mode"], "multi")

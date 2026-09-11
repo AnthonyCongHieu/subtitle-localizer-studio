@@ -668,6 +668,24 @@ def calculate_slot_stretch(
     return round(float(np.clip(ratio, min_rate, max_rate)), 3)
 
 
+def calculate_uniform_slot_stretch(
+    durations: list[tuple[float, float]],
+    min_rate: float = 1.0,
+    max_rate: float = 2.0,
+) -> float:
+    """
+    Tính toán một tốc độ chung cho toàn bộ danh sách các câu (speech_duration, slot_duration).
+    Chọn tỷ lệ lớn nhất cần thiết để tất cả các câu đều khớp hoặc được co tối đa trong ngưỡng max_rate.
+    """
+    if not durations:
+        return min_rate
+    rates = [
+        calculate_slot_stretch(s, slot, min_rate=min_rate, max_rate=max_rate)
+        for s, slot in durations
+    ]
+    return max(rates) if rates else min_rate
+
+
 def time_stretch_pcm(
     samples: np.ndarray,
     speed_factor: float,
@@ -761,11 +779,13 @@ def mix_voice_pcm(
     mode: str = "single",
     next_start_sample: int | None = None,
     allow_overlap: bool | None = None,
+    preserve_full_text: bool = False,
 ) -> np.ndarray:
     """Place one cue onto the master buffer.
 
     Overlap/additive mix is allowed only when allow_overlap=True.
     If allow_overlap is None, legacy behavior is used: multi => overlap, single => trim.
+    If preserve_full_text is True, audio is not trimmed at next_start_sample.
     """
     if len(pcm) == 0:
         return master
@@ -773,7 +793,7 @@ def mix_voice_pcm(
     placed = np.asarray(pcm, dtype=np.float32)
     mode_n = normalize_dubbing_mode(mode)
     can_overlap = bool(allow_overlap) if allow_overlap is not None else (mode_n == "multi")
-    if (not can_overlap) and next_start_sample is not None:
+    if (not can_overlap) and next_start_sample is not None and not preserve_full_text:
         placed = fade_trim_pcm(placed, max(0, int(next_start_sample) - start_sample))
         if len(placed) == 0:
             return master
@@ -1739,7 +1759,7 @@ async def generate_timed_voiceover(
     total_duration: float = 0.0,
     sample_rate: int = 44100,
     batch_size: int = 5,
-    max_stretch_rate: float = 1.45,
+    max_stretch_rate: float = 1.30,
     export_cues_dir: Optional[Path | str] = None,
     rate: str = "+0%",
     mode: str = "single",  # "single" (1 người) | "multi" (nhiều người phân vai)
@@ -1749,6 +1769,8 @@ async def generate_timed_voiceover(
     prompt_style: str = "dramatic",
     progress_callback: Optional[Any] = None,
     auto_detect_speakers: bool = True,
+    preserve_full_text: bool = True,
+    uniform_speed: bool = False,
 ) -> Path:
     """
     Sinh toàn bộ giọng thuyết minh cho các câu phụ đề theo đúng mốc thời gian start_pts của video.
@@ -1804,9 +1826,11 @@ async def generate_timed_voiceover(
                 cleaned,
                 slot_sec=slot_dur,
                 base_rate=base_rate,
-                soft_stretch=1.20,
-                hard_stretch=max_stretch_rate,
+                soft_stretch=1.15,
+                hard_stretch=min(max_stretch_rate, 1.30),
             )
+            # Học tập CapCut: gọt bỏ từ đệm/dư thừa khi câu vượt quá thời lượng
+            # để câu nói cô đọng, tự nhiên; giữ trọn ý nghĩa mà không phải ép tốc độ cao.
             if adapted:
                 cleaned = adapted
                 c.style["spoken_text"] = adapted
@@ -1911,7 +1935,9 @@ async def generate_timed_voiceover(
                 # Treat as non-overlap for slot budgeting to avoid false spill
                 slot_mode = "single"
         slot_dur = available_voiceover_slot(cue, next_cue, slot_mode)
-        speed_factor = calculate_slot_stretch(
+        # Khi người dùng chọn tốc độ chung (ví dụ +15%), giữ cùng một hệ số
+        # cho toàn video; không cộng thêm auto-fit khác nhau theo từng cue.
+        speed_factor = 1.0 if uniform_speed else calculate_slot_stretch(
             speech_dur, slot_dur, min_rate=1.0, max_rate=max_stretch_rate
         )
 
@@ -1943,6 +1969,7 @@ async def generate_timed_voiceover(
             mode=mode,
             next_start_sample=next_start_sample,
             allow_overlap=allow_overlap,
+            preserve_full_text=preserve_full_text,
         )
 
     if successful_cues == 0:

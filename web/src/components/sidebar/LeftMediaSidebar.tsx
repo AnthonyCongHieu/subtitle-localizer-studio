@@ -1475,6 +1475,9 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                   {dubbingSpeed.toFixed(2)}x ({dubbingSpeed === 1.0 ? 'Chuẩn' : dubbingSpeed > 1 ? `+${Math.round((dubbingSpeed - 1) * 100)}%` : `-${Math.round((1 - dubbingSpeed) * 100)}%`})
                 </span>
               </div>
+              <div className="rounded-lg border border-indigo-900/60 bg-indigo-950/30 px-2 py-1.5 text-[10px] leading-relaxed text-indigo-200">
+                <strong>Chuẩn CapCut:</strong> tốc độ đọc càng cao thời lượng voice càng ngắn. Tự động gọt hư từ thừa khi câu dài để giữ trọn ý nghĩa và giọng nói tự nhiên, không làm méo/vỡ tiếng.
+              </div>
 
               {/* Preset Tốc Độ Nhanh */}
               <div className="grid grid-cols-4 gap-1">

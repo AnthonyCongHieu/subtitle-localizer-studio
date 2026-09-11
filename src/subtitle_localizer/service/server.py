@@ -2218,6 +2218,29 @@ def create_app(
 
         try:
             from subtitle_localizer.dubbing.tts import generate_timed_voiceover, is_valid_speech_audio
+            last_progress_percent = -1
+
+            def _save_dubbing_progress(done: int, total: int, _text: str) -> None:
+                nonlocal last_progress_percent
+                percent = min(99, max(0, round((done / max(1, total)) * 100)))
+                if percent == last_progress_percent:
+                    return
+                last_progress_percent = percent
+                repository.save_stage_run(
+                    project_id,
+                    StageRunV1(
+                        stage_name="dubbing",
+                        status="running",
+                        progress=percent / 100.0,
+                        metrics={
+                            "label": f"Đang lồng tiếng {percent}% ({done}/{total} câu)",
+                            "completed_cues": done,
+                            "total_cues": total,
+                            "percent": percent,
+                        },
+                    ),
+                )
+
             generated_voiceover = await generate_timed_voiceover(
                 cues=cues,
                 voice=voice,
@@ -2231,6 +2254,10 @@ def create_app(
                 prompt_style=prompt_style,
                 export_cues_dir=cues_dir,
                 auto_detect_speakers=bool(auto_detect_speakers),
+                max_stretch_rate=1.30,
+                preserve_full_text=False,
+                uniform_speed=abs(float(rate.lstrip("+-").rstrip("%") or 0)) > 0.01 if isinstance(rate, str) else float(rate or 1.0) != 1.0,
+                progress_callback=_save_dubbing_progress,
             )
             if (not out_voiceover.exists() or out_voiceover.stat().st_size == 0) and generated_voiceover:
                 candidate = Path(generated_voiceover)
