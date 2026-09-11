@@ -4,7 +4,11 @@ from dataclasses import replace
 from typing import List
 
 from subtitle_localizer.domain.models import OcrObservationV1, SubtitleCueV1
-from subtitle_localizer.reconstruction.consensus import calculate_text_similarity, majority_vote_text
+from subtitle_localizer.reconstruction.consensus import (
+    calculate_text_similarity,
+    is_progressive_text_growth,
+    majority_vote_text,
+)
 from subtitle_localizer.reconstruction.ordering import sort_reading_order
 
 
@@ -26,10 +30,51 @@ def _cue_text_similarity(left: SubtitleCueV1, right: SubtitleCueV1) -> float:
 
 def _is_watermark_or_contained_duplicate(left: str, right: str) -> bool:
     shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    if is_progressive_text_growth(left, right, min_core=6):
+        return True
     if len(shorter) < 8 or shorter not in longer:
         return False
     extra = len(longer) - len(shorter)
     return extra <= max(8, int(len(shorter) * 0.30))
+
+
+def _cjk_ratio(text: str) -> float:
+    cleaned = "".join(ch for ch in (text or "") if not ch.isspace())
+    if not cleaned:
+        return 0.0
+    cjk = sum(1 for ch in cleaned if "一" <= ch <= "鿿")
+    return cjk / len(cleaned)
+
+
+def _pick_better_translated(left: str, right: str, source_text: str) -> str:
+    """Prefer real translations over CJK source-echo when merging progressive cues."""
+    candidates = [left or "", right or ""]
+    source = (source_text or "").strip()
+
+    def norm(text: str) -> str:
+        return "".join(ch for ch in (text or "").strip() if not ch.isspace()).rstrip("。．.，,！!？?")
+
+    source_n = norm(source)
+
+    def score(text: str) -> tuple:
+        t = (text or "").strip()
+        if not t:
+            return (-1, 0, 0)
+        t_n = norm(t)
+        echo_own = 1 if source_n and t_n == source_n else 0
+        cjk_residue = 1 if _cjk_ratio(t) >= 0.45 and t_n != source_n else 0
+        # Prefer non-empty real translations: not own-echo, not CJK residue from shift.
+        return (0 if (echo_own or cjk_residue) else 1, 0 if cjk_residue else 1, 0 if echo_own else 1, len(t))
+
+    best = max(candidates, key=score)
+    best_n = norm(best)
+    if not best.strip():
+        return ""
+    if _cjk_ratio(best) >= 0.45 and best_n != source_n:
+        return ""
+    if source_n and best_n == source_n:
+        return ""
+    return best
 
 
 def _merge_adjacent_cues(left: SubtitleCueV1, right: SubtitleCueV1) -> SubtitleCueV1:
@@ -38,8 +83,14 @@ def _merge_adjacent_cues(left: SubtitleCueV1, right: SubtitleCueV1) -> SubtitleC
     source_text = left_source if len(left_source) >= len(right_source) else right_source
     left_translated = left.translated_text or ""
     right_translated = right.translated_text or ""
-    translated_text = left_translated if len(left_translated) >= len(right_translated) else right_translated
-    flags = list(dict.fromkeys([*(left.quality_flags or []), *(right.quality_flags or []), "merged_duplicate"]))
+    translated_text = _pick_better_translated(left_translated, right_translated, source_text)
+    left_s = (left_source or "").strip()
+    right_s = (right_source or "").strip()
+    if left_s and right_s and left_s != right_s and is_progressive_text_growth(left_s, right_s):
+        flag = "merged_progressive"
+    else:
+        flag = "merged_duplicate"
+    flags = list(dict.fromkeys([*(left.quality_flags or []), *(right.quality_flags or []), flag]))
     return replace(
         left,
         start_pts=min(left.start_pts, right.start_pts),
@@ -67,7 +118,10 @@ def normalize_sequential_cues(
     for cue in ordered[1:]:
         previous = merged[-1]
         gap = cue.start_pts - previous.end_pts
-        if gap <= max_merge_gap and _cue_text_similarity(previous, cue) >= similarity_threshold:
+        progressive = is_progressive_text_growth(previous.source_text or "", cue.source_text or "")
+        if gap <= max_merge_gap and (
+            _cue_text_similarity(previous, cue) >= similarity_threshold or progressive
+        ):
             merged[-1] = _merge_adjacent_cues(previous, cue)
         else:
             merged.append(cue)
@@ -81,7 +135,23 @@ def normalize_sequential_cues(
             if 0 < overlap <= max_padding_overlap:
                 end_pts = max(cue.start_pts + 0.05, next_start)
         trimmed.append(replace(cue, start_pts=round(cue.start_pts, 3), end_pts=round(end_pts, 3)))
-    return trimmed
+
+    # Clear shifted source-echo translations (translated[i] == source[j]).
+    source_norms = set()
+    for cue in trimmed:
+        src = "".join(ch for ch in (cue.source_text or "").strip() if not ch.isspace()).rstrip("。．.，,！!？?")
+        if src:
+            source_norms.add(src)
+    cleaned: List[SubtitleCueV1] = []
+    for cue in trimmed:
+        translated = (cue.translated_text or "").strip()
+        t_norm = "".join(ch for ch in translated if not ch.isspace()).rstrip("。．.，,！!？?")
+        src_norm = "".join(ch for ch in (cue.source_text or "").strip() if not ch.isspace()).rstrip("。．.，,！!？?")
+        if translated and t_norm in source_norms and t_norm != src_norm:
+            cleaned.append(replace(cue, translated_text=""))
+        else:
+            cleaned.append(cue)
+    return cleaned
 
 
 class CueReconstructor:
@@ -138,8 +208,9 @@ class CueReconstructor:
             last_item = cur_cluster[-1]
             gap = item[0] - last_item[0]
             sim = calculate_text_similarity(item[1], last_item[1])
+            progressive = is_progressive_text_growth(item[1], last_item[1])
 
-            if gap <= self.max_merge_gap and sim >= self.similarity_threshold:
+            if gap <= self.max_merge_gap and (sim >= self.similarity_threshold or progressive):
                 cur_cluster.append(item)
             else:
                 clusters.append(cur_cluster)

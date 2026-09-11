@@ -28,7 +28,7 @@ def detect_scene_cut(
     if previous_hist is None or getattr(previous_hist, "size", 0) == 0:
         return False, current
     prev = np.asarray(previous_hist, dtype=np.float32)
-    score = float(cv2.compareHist(prev.reshape(-1, 1), current, cv2.HISTCMP_CORREL))
+    score = float(cv2.compareHist(prev.reshape(-1), current.reshape(-1), cv2.HISTCMP_CORREL))
     return score < float(threshold), current
 
 

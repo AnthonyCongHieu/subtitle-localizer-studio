@@ -639,7 +639,6 @@ class BackgroundWorker:
                     and (
                         r.region_id == "roi-default"
                         or r.region_id == "roi-main"
-                        or r.region_id.startswith("roi-")
                     )
                     and (r.y >= 0.68 or (r.y == 0.70 and r.height <= 0.27) or (r.y == 0.72 and r.height == 0.16))
                 )

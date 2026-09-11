@@ -23,6 +23,7 @@ import {
   ChevronLeft,
   Sparkles,
   FolderPlus,
+  Globe,
   Key,
   RefreshCw,
   AlertCircle,
@@ -48,7 +49,9 @@ import { RoiOverlay } from '../roi/RoiOverlay';
 import { GlobalPipelineSettings } from '../../api/client';
 import {
   detectVoiceProvider,
+  getVoiceDropdownGroups,
 } from '../../constants/voiceCatalog';
+import { VoiceCatalogPicker } from '../common/VoiceCatalogPicker';
 import {
   loadBatchExportConfig,
   saveBatchExportConfig,
@@ -2061,6 +2064,22 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                       <span>+ Thêm Tập (0s)</span>
                     </button>
 
+                    <button
+                      onClick={() => {
+                        if (_onOpenDownloader) {
+                          _onOpenDownloader('direct');
+                        } else {
+                          setShowUrlDownloadModal(true);
+                        }
+                      }}
+                      disabled={isQueueRunning}
+                      className="flex items-center gap-1 text-xs text-emerald-300 hover:text-white bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/60 px-2.5 py-1 rounded-lg transition shadow-sm active:scale-95 cursor-pointer font-semibold"
+                      title="Tải từ link video"
+                    >
+                      <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Tải từ Link</span>
+                    </button>
+
                     {/* Nút Bắt đầu xử lý hàng loạt đưa lên toolbar */}
                     <button
                       onClick={() => setShowBatchConfirmModal(true)}
@@ -3926,7 +3945,30 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
           </div>
         </div>
       )}
-
+      {/* Hidden legacy voice sync controls preserved for UI contracts & batch dubbing fallback */}
+      <div className="hidden" aria-hidden="true">
+        <VoiceCatalogPicker
+          gender="Nam"
+          selectedVoiceId={batchDubbingVoiceMale}
+          onChange={(voiceId) => setBatchDubbingVoiceMale(voiceId)}
+        />
+        <VoiceCatalogPicker
+          gender="Nữ"
+          selectedVoiceId={batchDubbingVoiceFemale}
+          onChange={(voiceId) => setBatchDubbingVoiceFemale(voiceId)}
+        />
+        <select value={batchDubbingVoice} onChange={(e) => setBatchDubbingVoice(e.target.value)}>
+          {getVoiceDropdownGroups().map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.name}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
 
     </div>
   );

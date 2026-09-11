@@ -10,6 +10,7 @@ export class StudioWebSocketClient {
   private currentStatus: WsConnectionStatus = 'disconnected';
   private isConnecting: boolean = false;
   private reconnectTimer: any = null;
+  private currentServerId: string | null = null;
 
   private notifyStatus(status: WsConnectionStatus) {
     this.currentStatus = status;
@@ -57,14 +58,38 @@ export class StudioWebSocketClient {
       const url = `${protocol}//${window.location.host}/api/v1/ws?after_sequence=${this.lastSequence}`;
       this.ws = new WebSocket(url);
 
-      this.ws.onopen = () => {
+      this.ws.onopen = async () => {
         this.isConnecting = false;
         this.notifyStatus('connected');
+        // Kiểm tra server_id khi kết nối / kết nối lại để tự động reload UI nếu server vừa restart/cập nhật
+        try {
+          const res = await fetch('/api/v1/health');
+          if (res.ok) {
+            const data = await res.json();
+            const newServerId = data?.server_id;
+            if (newServerId) {
+              if (this.currentServerId && this.currentServerId !== newServerId) {
+                console.warn('[Studio] Máy chủ đã cập nhật/khởi động lại. Đang tự động tải lại giao diện...');
+                window.location.reload();
+                return;
+              }
+              this.currentServerId = newServerId;
+            }
+          }
+        } catch {
+          // Bỏ qua nếu chưa sẵn sàng
+        }
       };
 
       this.ws.onmessage = (e) => {
         try {
           const event: BridgeEventV1 = JSON.parse(e.data);
+          // Kiểm tra sự kiện khởi động server hoặc cập nhật phiên bản server
+          if (event.event_type === 'server_restarted') {
+            console.warn('[Studio] Nhận tín hiệu server cập nhật. Đang tự động tải lại giao diện...');
+            window.location.reload();
+            return;
+          }
           if (event.sequence) {
             this.lastSequence = Math.max(this.lastSequence, event.sequence);
           }

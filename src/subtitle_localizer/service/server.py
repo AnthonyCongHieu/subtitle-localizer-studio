@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("subtitle_localizer.server")
+SERVER_INSTANCE_ID: str = str(uuid.uuid4())
 from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, Response, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -571,7 +572,7 @@ def create_app(
 
     @app.get("/api/v1/health")
     async def health_check() -> Dict[str, str]:
-        return {"status": "healthy", "version": "1.0.0"}
+        return {"status": "healthy", "version": "1.0.0", "server_id": SERVER_INSTANCE_ID}
 
     @app.post("/api/v1/admin/workers/register")
     async def register_worker(request: WorkerRegistrationRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:

@@ -174,22 +174,44 @@ class RealTranslationProvider(TranslationProvider):
     def unload(self) -> None:
         self.is_loaded = False
 
+
+    def _cjk_ratio(self, text: str) -> float:
+        cleaned = "".join(ch for ch in (text or "") if not ch.isspace())
+        if not cleaned:
+            return 0.0
+        cjk = sum(1 for ch in cleaned if "一" <= ch <= "鿿")
+        return cjk / len(cleaned)
+
+    def _normalize_compare_text(self, text: str) -> str:
+        return re.sub(r"[\s。．.，,！!？?：:；;、]+", "", (text or "").strip())
+
+    def _is_source_echo(self, translated: str, sources: list[str]) -> bool:
+        norm = self._normalize_compare_text(translated)
+        if not norm:
+            return False
+        for source in sources:
+            src = self._normalize_compare_text(source)
+            if src and (norm == src or (len(src) >= 6 and (norm in src or src in norm))):
+                return True
+        return False
+
     def _apply_model_response(
         self,
         cues: List[SubtitleCueV1],
         chunk_indices: List[int],
         text_content: str,
     ) -> int:
-        """Phân tích các thẻ [i] câu dịch từ mô hình và cập nhật vào cues kèm phân vai [Nam]/[Nữ]."""
+        """Parse [i] translations and map them onto cues with shift/echo guards."""
         if not chunk_indices:
             return 0
 
-        marker_pattern = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?\[(\d+)\][ \t]*")
+        marker_pattern = re.compile(r"(?m)^[ 	]*(?:[-*][ 	]+)?\[(\d+)\][ 	]*")
         chunk_index_set = set(chunk_indices)
+        batch_size = len(chunk_indices)
         valid_labels = (
             chunk_index_set
-            | set(range(len(chunk_indices)))
-            | set(range(1, len(chunk_indices) + 1))
+            | set(range(batch_size))
+            | set(range(1, batch_size + 1))
             | {i + 1 for i in chunk_indices}
         )
         markers = [
@@ -202,24 +224,26 @@ class RealTranslationProvider(TranslationProvider):
 
         labels = [int(match.group(1)) for match in markers]
 
-        # Kiểm tra quy cách đánh số của mô hình (0-based relative, 1-based relative, hoặc absolute)
+        # Prefer strict batch-local 1..N when the model followed the prompt.
         is_1based_relative = (
             0 not in labels
-            and any(l == len(chunk_indices) for l in labels)
-            and all(1 <= l <= len(chunk_indices) for l in labels)
+            and all(1 <= label <= batch_size for label in labels)
+            and len(set(labels)) == len(labels)
         )
         is_0based_relative = (
-            any(l == 0 for l in labels)
-            and all(0 <= l < len(chunk_indices) for l in labels)
-            and any(l not in chunk_index_set for l in labels)
+            any(label == 0 for label in labels)
+            and all(0 <= label < batch_size for label in labels)
+            and len(set(labels)) == len(labels)
         )
         is_1based_absolute = (
             not is_1based_relative
-            and all((l - 1) in chunk_index_set for l in labels)
-            and any(l not in chunk_index_set for l in labels)
+            and all((label - 1) in chunk_index_set for label in labels)
+            and any(label not in chunk_index_set for label in labels)
         )
 
-        updated_indices = set()
+        source_pool = [(cues[i].source_text or "").strip() for i in chunk_indices if 0 <= i < len(cues)]
+        parsed: dict[int, tuple[str | None, str]] = {}
+
         for position, marker in enumerate(markers):
             label = int(marker.group(1))
             if is_1based_relative:
@@ -230,9 +254,9 @@ class RealTranslationProvider(TranslationProvider):
                 cue_index = label - 1
             elif label in chunk_index_set:
                 cue_index = label
-            elif 0 <= label < len(chunk_indices):
+            elif 0 <= label < batch_size:
                 cue_index = chunk_indices[label]
-            elif 1 <= label <= len(chunk_indices):
+            elif 1 <= label <= batch_size:
                 cue_index = chunk_indices[label - 1]
             else:
                 continue
@@ -241,19 +265,71 @@ class RealTranslationProvider(TranslationProvider):
                 continue
 
             text_end = markers[position + 1].start() if position + 1 < len(markers) else len(text_content)
-            raw_item = text_content[marker.end():text_end].strip().rstrip(".")
+            raw_item = text_content[marker.end() : text_end].strip().rstrip(".")
             gender, spoken = _split_speaker_annotation(raw_item)
+            cleaned = _capitalize_first(spoken)
+            if not cleaned:
+                continue
+            # Reject source-echo / untranslated CJK leaks into the wrong slot.
+            own_source = (cues[cue_index].source_text or "").strip()
+            other_sources = [s for s in source_pool if s and s != own_source]
+            if self._is_source_echo(cleaned, other_sources):
+                continue
+            if cleaned == own_source:
+                continue
+            parsed[cue_index] = (gender, cleaned)
+
+        # Detect off-by-one cascade: many outputs equal the next source line.
+        if len(parsed) >= max(2, batch_size // 3):
+            shift_hits = 0
+            for offset, cue_index in enumerate(chunk_indices):
+                if cue_index not in parsed:
+                    continue
+                if offset + 1 >= len(chunk_indices):
+                    continue
+                nxt = chunk_indices[offset + 1]
+                nxt_source = (cues[nxt].source_text or "").strip()
+                if self._normalize_compare_text(parsed[cue_index][1]) == self._normalize_compare_text(nxt_source):
+                    shift_hits += 1
+            if shift_hits >= max(2, len(parsed) // 3):
+                # Repair by shifting translations back one slot within the batch.
+                repaired: dict[int, tuple[str | None, str]] = {}
+                ordered = [parsed[i] for i in chunk_indices if i in parsed]
+                targets = [i for i in chunk_indices if i in parsed]
+                # If outputs look like sources of i+1, map parsed[i] -> cue i-1 conceptually:
+                # take values in order and assign to earlier cues.
+                values = []
+                for cue_index in chunk_indices:
+                    if cue_index in parsed and not self._is_source_echo(
+                        parsed[cue_index][1],
+                        [(cues[j].source_text or "").strip() for j in chunk_indices],
+                    ):
+                        values.append(parsed[cue_index])
+                # Simpler deterministic repair: drop echoed next-source rows.
+                parsed = {
+                    idx: val
+                    for idx, val in parsed.items()
+                    if not self._is_source_echo(
+                        val[1],
+                        [
+                            (cues[j].source_text or "").strip()
+                            for j in chunk_indices
+                            if j != idx
+                        ],
+                    )
+                }
+
+        updated_indices = set()
+        for cue_index, (gender, cleaned) in parsed.items():
             if gender:
                 if not isinstance(cues[cue_index].style, dict):
                     cues[cue_index].style = {}
                 cues[cue_index].style["speaker"] = gender
-            cleaned = _capitalize_first(spoken)
-
-            if cleaned and cleaned != cues[cue_index].source_text.strip():
-                cues[cue_index].translated_text = cleaned
-                self._cache[cues[cue_index].source_text.strip()] = cleaned
-                updated_indices.add(cue_index)
+            cues[cue_index].translated_text = cleaned
+            self._cache[(cues[cue_index].source_text or "").strip()] = cleaned
+            updated_indices.add(cue_index)
         return len(updated_indices)
+
 
     def _build_narrative_prompt(
         self,
@@ -283,8 +359,8 @@ class RealTranslationProvider(TranslationProvider):
             f"     * Nếu đang nói về nhân vật Nam (chồng, bạn trai, bố, con trai, sếp nam), BẮT BUỘC dịch là 'anh ấy / chú ấy / chàng / bố / anh'.\n"
             f"   - Với quan hệ gia đình / hôn nhân (ly hôn, tình cảm): xưng hô chuẩn mực 'anh - em', 'chồng - vợ', không xưng hô nhạt nhẽo hay lộn vai vế.\n"
             f"4. Dịch thoát nghĩa, chuẩn văn phong phim truyền hình/điện ảnh, tự nhiên, súc tích, dễ đọc trên video, tuyệt đối KHÔNG dịch thô từng từ vô nghĩa.\n"
-            f"5. BẮT BUỘC giữ nguyên mã số `[i]` kèm nhãn phân vai `[Nam]` hoặc `[Nữ]` ở đầu mỗi câu (ví dụ: `[0] [Nam] Sao thế?` hoặc `[1] [Nữ] Tâm trạng em không tốt sao?`).\n"
-            f"6. Chỉ trả về danh sách các câu dịch dạng `[i] [Nam/Nữ] Câu tiếng Việt`, không kèm thêm lời chào hay giải thích thừa.\n"
+            f"5. BẮT BUỘC đánh số theo thứ tự batch hiện tại từ `[1]` đến `[{len(batch_items)}]` (không dùng index tuyệt đối). Kèm nhãn `[Nam]` hoặc `[Nữ]` (ví dụ: `[1] [Nam] Sao thế?` / `[2] [Nữ] Tâm trạng em không tốt sao?`).\n"
+            f"6. Chỉ trả về đúng {len(batch_items)} dòng `[i] [Nam/Nữ] Câu tiếng Việt`, không copy nguyên câu gốc, không kèm lời chào hay giải thích thừa.\n"
             f"7. CẤM ghi chú thích vai trò vào câu phụ đề: không được viết `(Tiếng người dẫn chuyện)`, `(Người dẫn chuyện)`, `(旁白)`, `(Lời bình)`. Lời dẫn chuyện vẫn chỉ là câu thoại đã dịch, gắn `[Nam]` hoặc `[Nữ]` thôi.\n\n"
             f"KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN:\n" + "\n".join(batch_items)
         )
@@ -371,7 +447,7 @@ class RealTranslationProvider(TranslationProvider):
         success_any = False
         for start_idx in range(0, len(all_indices), chunk_size):
             chunk_indices = all_indices[start_idx : start_idx + chunk_size]
-            batch_items = [f"[{i}] {cues[i].source_text.strip()}" for i in chunk_indices]
+            batch_items = [f"[{pos}] {cues[i].source_text.strip()}" for pos, i in enumerate(chunk_indices, start=1)]
             if _translate_batch(batch_items, chunk_indices):
                 success_any = True
 
@@ -493,7 +569,7 @@ class RealTranslationProvider(TranslationProvider):
         all_succeeded = True
         for start_idx in range(0, len(all_indices), chunk_size):
             chunk_indices = all_indices[start_idx : start_idx + chunk_size]
-            batch_items = [f"[{i}] {cues[i].source_text.strip()}" for i in chunk_indices]
+            batch_items = [f"[{pos}] {cues[i].source_text.strip()}" for pos, i in enumerate(chunk_indices, start=1)]
             if not _translate_batch(batch_items, chunk_indices):
                 all_succeeded = False
 

@@ -11,6 +11,9 @@ import {
   Mic,
   Check,
   Download,
+  ChevronDown,
+  FolderOpen,
+  Sliders,
 } from 'lucide-react';
 import { ProjectManifestV1, SubtitleCueV1 } from '../../types/api';
 import { PresetProfile } from '../../types/presets';
@@ -131,6 +134,53 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
           <span className="font-bold text-[10px] tracking-wide uppercase">Studio</span>
         </div>
 
+        {/* Bộ Chọn Tập Drama Dạng Pill Chuẩn Hóa */}
+        {_projects && _projects.length > 0 && (
+          <div className="relative hidden md:flex items-center bg-slate-900/90 hover:bg-slate-850 border border-slate-800 px-2.5 py-1 rounded-lg text-xs transition shrink-0">
+            <FolderOpen className="w-3.5 h-3.5 text-indigo-400 shrink-0 mr-1.5" />
+            <select
+              value={activeProject?.project_id || ''}
+              onChange={(e) => {
+                const found = _projects.find((p) => p.project_id === e.target.value);
+                if (found && _onSelectProject) _onSelectProject(found);
+              }}
+              className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer max-w-[150px] sm:max-w-[200px] truncate text-[11px] appearance-none pr-5"
+              title="Chọn tập phim để biên tập"
+            >
+              {_projects.map((p) => (
+                <option key={p.project_id} value={p.project_id} className="bg-slate-900 text-slate-200">
+                  {p.title}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="w-3 h-3 text-slate-400 pointer-events-none absolute right-2" />
+          </div>
+        )}
+
+        {/* Bộ Chọn Chuẩn Preset Dạng Pill Chuẩn Hóa */}
+        {_presets && _presets.length > 0 && (
+          <div className="relative hidden xl:flex items-center bg-slate-900/90 border border-slate-800 px-2 py-1 rounded-lg text-xs shrink-0">
+            <Sliders className="w-3 h-3 text-amber-400 shrink-0 mr-1.5" />
+            <select
+              value={_activePresetId}
+              onChange={(e) => {
+                if (_onSelectPreset) {
+                  const chosen = _presets.find((x) => x.id === e.target.value);
+                  if (chosen) (_onSelectPreset as any)(chosen);
+                }
+              }}
+              className="bg-transparent text-amber-300 font-medium focus:outline-none cursor-pointer max-w-[130px] truncate text-[11px] appearance-none pr-5"
+              title="Chuẩn cấu hình áp dụng cho video"
+            >
+              {_presets.map((p) => (
+                <option key={p.id} value={p.id} className="bg-slate-900 text-slate-200">
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="w-3 h-3 text-amber-400 pointer-events-none absolute right-1.5" />
+          </div>
+        )}
       </div>
 
       {/* Bên Phải: Trạng thái Server + Nhật ký + Nút Hành Động Chính */}
