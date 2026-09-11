@@ -714,17 +714,20 @@ def mix_voice_pcm(
     *,
     mode: str = "single",
     next_start_sample: int | None = None,
+    allow_overlap: bool | None = None,
 ) -> np.ndarray:
     """Place one cue onto the master buffer.
 
-    Multi-voice mode keeps additive mixing for genuine overlap. Single-voice
-    mode trims to the next cue start so two narrations cannot stack.
+    Overlap/additive mix is allowed only when allow_overlap=True.
+    If allow_overlap is None, legacy behavior is used: multi => overlap, single => trim.
     """
     if len(pcm) == 0:
         return master
     start_sample = max(0, int(start_sample))
     placed = np.asarray(pcm, dtype=np.float32)
-    if mode != "multi" and next_start_sample is not None:
+    mode_n = normalize_dubbing_mode(mode)
+    can_overlap = bool(allow_overlap) if allow_overlap is not None else (mode_n == "multi")
+    if (not can_overlap) and next_start_sample is not None:
         placed = fade_trim_pcm(placed, max(0, int(next_start_sample) - start_sample))
         if len(placed) == 0:
             return master
@@ -967,13 +970,426 @@ def _encode_pcm_to_mp3(
     return out
 
 
-def detect_cue_speaker(cue: SubtitleCueV1, text: str) -> str:
+
+def normalize_dubbing_mode(mode: str | None) -> str:
+    """Chuẩn hoá alias mode UI/backend về 'single' | 'multi'."""
+    raw = str(mode or "single").strip().lower()
+    if raw in {"multi", "gender_multi", "multi_speaker", "multi-voice", "cast"}:
+        return "multi"
+    return "single"
+
+
+_CROWD_PATTERNS = [
+    r"qu[aâ][nñ]n?\s*ch[uú]ng",
+    r"\bđám\s*đông\b",
+    r"\bcrowd\b",
+    r"\bwalla\b",
+    r"\bextras?\b",
+    r"đồng\s*thanh",
+    r"mọi\s*người\s*hô",
+    r"众人",
+    r"齐声",
+    r"群众",
+]
+
+_SPEAKER_ID_TAG = re.compile(
+    r"[\[\(\uff08【]\s*((?:nam|nữ|nu|male|female)\s*\d+|[a-zA-ZÀ-ỹ0-9_\-]{2,32}|mẹ|bố|ba|chị|anh|em|ông|bà|narrator|dẫn\s*chuyện)\s*[\]\)\uff09】]",
+    re.IGNORECASE,
+)
+
+
+def is_skip_tts_role(role: str | None) -> bool:
+    return str(role or "").strip().lower() in {"crowd", "extra", "extras", "walla", "background"}
+
+
+def cues_truly_overlap(a: SubtitleCueV1, b: SubtitleCueV1, min_overlap: float = 0.05) -> bool:
+    """True when two cues overlap on the timeline by more than min_overlap seconds."""
+    start = max(float(a.start_pts), float(b.start_pts))
+    end = min(float(a.end_pts), float(b.end_pts))
+    return (end - start) > min_overlap
+
+
+def estimate_speech_seconds(text: str, base_rate: float = 1.0) -> float:
+    """Ước lượng thời lượng nói tiếng Việt theo số tiếng/token."""
+    cleaned = clean_subtitle_text(text or "")
+    if not cleaned:
+        return 0.0
+    tokens = re.findall(r"[A-Za-zÀ-ỹ0-9]+|[\u4e00-\u9fff]", cleaned)
+    # ~3.3 tiếng/sec ở tốc độ tự nhiên cho VI narration ngắn
+    natural = max(0.35, len(tokens) / 3.3)
+    rate = max(0.5, min(2.0, float(base_rate or 1.0)))
+    return natural / rate
+
+
+
+def has_explicit_speaker_id(cue: SubtitleCueV1, text: str = "") -> bool:
+    """True when speaker_id comes from style or translation/character tags."""
+    style = cue.style if isinstance(getattr(cue, "style", None), dict) else {}
+    if str(style.get("speaker_id") or style.get("character_id") or "").strip():
+        return True
+    raw = f"{cue.source_text} {cue.translated_text} {text}".strip()
+    return bool(_SPEAKER_ID_TAG.search(raw))
+
+
+_VI_FILLER_RE = re.compile(
+    r"\b(?:à|ừ|ờ|nhỉ|nhé|ạ|thì|mà|đã|đang|sẽ|những|các|rất|quá|hết\s+sức|thật\s+sự|thật\s+ra|có\s+lẽ|một\s+cách)\b",
+    re.IGNORECASE,
+)
+_VI_SHORTEN_MAP: List[tuple[str, str]] = [
+    (r"\bkhông\s+thể\b", "không"),
+    (r"\bkhông\s+được\b", "đừng"),
+    (r"\bcó\s+phải\s+không\b", "phải không"),
+    (r"\bngay\s+lập\s+tức\b", "ngay"),
+    (r"\btrong\s+trường\s+hợp\b", "nếu"),
+    (r"\bchúng\s+ta\s+sẽ\b", "ta"),
+    (r"\bchúng\s+ta\b", "ta"),
+    (r"\bchúng\s+tôi\b", "tôi"),
+    (r"\bcùng\s+nhau\b", "cùng"),
+    (r"\bđi\s+đến\b", "đến"),
+    (r"\bđể\s+không\s+bị\b", "tránh"),
+    (r"\bvà\s+thật\s+sự\b", "và"),
+]
+
+
+def compress_vietnamese_for_speech(text: str, aggressiveness: int = 1) -> str:
+    """Deterministic VI compression for dubbing duration budget (no LLM)."""
+    s = clean_subtitle_text(text or "")
+    if not s:
+        return ""
+    s = re.sub(r"[\(\[（【].*?[\)\]）】]", " ", s)
+    if aggressiveness >= 1:
+        s = _VI_FILLER_RE.sub(" ", s)
+        for pat, repl in _VI_SHORTEN_MAP:
+            s = re.sub(pat, repl, s, flags=re.IGNORECASE)
+    if aggressiveness >= 2:
+        s = re.sub(
+            r"\b(?:hết\s+sức|cẩn\s+thận|nhẹ\s+nhàng|thật\s+lòng|hoàn\s+toàn|tuyệt\s+đối)\b",
+            " ",
+            s,
+            flags=re.IGNORECASE,
+        )
+        s = re.sub(r"\s*,\s*", " ", s)
+    if aggressiveness >= 3:
+        tokens = re.findall(r"[A-Za-zÀ-ỹ0-9]+|[\u4e00-\u9fff]|[,.!?;:…]", s)
+        keep = max(3, int(len(tokens) * 0.7))
+        s = " ".join(tokens[:keep])
+    s = re.sub(r"\s+", " ", s).strip(" ,;:-")
+    return s or clean_subtitle_text(text or "")
+
+
+def adapt_spoken_text_for_slot(
+    text: str,
+    slot_sec: float,
+    base_rate: float = 1.0,
+    soft_stretch: float = 1.20,
+    hard_stretch: float = 1.45,
+) -> tuple[str, Dict[str, Any]]:
+    """Adapt VI spoken script to fit a time slot before TTS/stretch.
+
+    Returns (spoken_text, meta) where meta may include adapted/timing_warning.
     """
-    Xác định nhân vật / vai người nói (male hoặc female) cho từng câu phụ đề:
-    1. Kiểm tra thuộc tính style['speaker'] nếu đã được phân vai sẵn.
-    2. Kiểm tra tiền tố nhân vật: [Nam], [Nữ], [Anh], [Em], (Nam), (Nữ), [Mẹ], [Bố], v.v.
-    3. Phân tích ngữ cảnh đại từ xưng hô trong câu thoại tiếng Việt.
-    Mặc định trả về 'male' nếu không phát hiện đặc thù nữ.
+    original = clean_subtitle_text(text or "")
+    meta: Dict[str, Any] = {
+        "adapted": False,
+        "timing_warning": "",
+        "original_est": 0.0,
+        "spoken_est": 0.0,
+        "slot_sec": float(slot_sec or 0.0),
+        "aggressiveness": 0,
+    }
+    if not original:
+        return "", meta
+
+    rate = max(0.5, min(2.0, float(base_rate or 1.0)))
+    soft = max(1.0, float(soft_stretch or 1.2))
+    hard = max(soft, float(hard_stretch or 1.45))
+    slot = max(0.05, float(slot_sec or 0.0))
+
+    est0 = estimate_speech_seconds(original, rate)
+    meta["original_est"] = est0
+    if est0 <= slot * soft:
+        meta["spoken_est"] = est0
+        return original, meta
+
+    best = original
+    best_est = est0
+    for aggr in (1, 2, 3):
+        candidate = compress_vietnamese_for_speech(original, aggressiveness=aggr)
+        if not candidate:
+            continue
+        est = estimate_speech_seconds(candidate, rate)
+        if est < best_est or len(candidate) < len(best):
+            best, best_est = candidate, est
+        meta["aggressiveness"] = aggr
+        if est <= slot * soft:
+            break
+        if est <= slot * hard and aggr >= 2:
+            break
+
+    # Final token-budget trim if still over hard stretch ceiling
+    if best_est > slot * hard:
+        target_tokens = max(3, int(slot * hard * rate * 3.3))
+        tokens = re.findall(r"[A-Za-zÀ-ỹ0-9]+|[\u4e00-\u9fff]", best)
+        if len(tokens) > target_tokens:
+            best = " ".join(tokens[:target_tokens])
+            best_est = estimate_speech_seconds(best, rate)
+            meta["aggressiveness"] = max(int(meta.get("aggressiveness") or 0), 4)
+
+    spoken = best
+    meta["spoken_est"] = best_est
+    meta["adapted"] = spoken != original
+    if best_est > slot * hard:
+        meta["timing_warning"] = "hard"
+    elif best_est > slot * soft:
+        meta["timing_warning"] = "soft"
+    else:
+        meta["timing_warning"] = ""
+    return spoken, meta
+
+
+def assign_turn_taking_speaker_ids(cues: List[SubtitleCueV1], mode: str = "multi") -> List[SubtitleCueV1]:
+    """Fill missing speaker_id using adjacency turn-taking for same-gender accuracy."""
+    mode_n = normalize_dubbing_mode(mode)
+    if mode_n != "multi" or not cues:
+        return cues
+
+    ordered = sorted(cues, key=lambda c: (float(c.start_pts), float(c.end_pts), str(c.cue_id)))
+    last_gender: Optional[str] = None
+    last_id: Optional[str] = None
+    last_end: Optional[float] = None
+    last_by_gender: Dict[str, str] = {}
+    counters: Dict[str, int] = {"male": 0, "female": 0, "unknown": 0}
+    short_gap = 1.8
+
+    def _alloc(gender: str) -> str:
+        g = gender if gender in counters else "unknown"
+        counters[g] = int(counters.get(g, 0)) + 1
+        prefix = "nam" if g == "male" else ("nu" if g == "female" else "spk")
+        return f"{prefix}_{counters[g]}"
+
+    for cue in ordered:
+        if not isinstance(cue.style, dict):
+            cue.style = {}
+        text = (cue.translated_text or cue.source_text or "").strip()
+        identity = detect_speaker_identity(cue, text)
+        role = identity.get("speaker_role") or "main"
+        gender = identity.get("speaker") or "unknown"
+
+        if is_skip_tts_role(role):
+            cue.style.setdefault("speaker_role", role)
+            cue.style.setdefault("speaker", gender)
+            cue.style.setdefault("speaker_id", identity.get("speaker_id") or "crowd")
+            last_gender, last_id, last_end = gender, cue.style["speaker_id"], float(cue.end_pts)
+            continue
+
+        if has_explicit_speaker_id(cue, text):
+            sid = str(cue.style.get("speaker_id") or identity.get("speaker_id") or "").strip() or _alloc(gender)
+            cue.style["speaker_id"] = sid
+            cue.style.setdefault("speaker", gender)
+            cue.style.setdefault("speaker_role", role)
+            last_by_gender[gender] = sid
+            last_gender, last_id, last_end = gender, sid, float(cue.end_pts)
+            continue
+
+        gap = None if last_end is None else max(0.0, float(cue.start_pts) - float(last_end))
+        if last_gender == gender and last_id and gap is not None and gap <= short_gap:
+            sid = last_id
+        elif gender in last_by_gender and last_gender != gender and (gap is None or gap <= 3.0):
+            sid = last_by_gender[gender]
+        else:
+            sid = _alloc(gender)
+
+        cue.style["speaker_id"] = sid
+        cue.style["speaker"] = gender
+        cue.style.setdefault("speaker_role", role)
+        last_by_gender[gender] = sid
+        last_gender, last_id, last_end = gender, sid, float(cue.end_pts)
+
+    return cues
+
+
+def _stable_index(key: str, modulus: int) -> int:
+    if modulus <= 0:
+        return 0
+    acc = 0
+    for ch in key:
+        acc = (acc * 131 + ord(ch)) % 2_147_483_647
+    return acc % modulus
+
+
+def detect_speaker_identity(cue: SubtitleCueV1, text: str) -> Dict[str, str]:
+    """Trả về speaker/gender, speaker_id, speaker_role cho một cue."""
+    style = cue.style if isinstance(getattr(cue, "style", None), dict) else {}
+    role = str(style.get("speaker_role") or style.get("role") or "").strip().lower()
+    speaker_id = str(style.get("speaker_id") or style.get("character_id") or "").strip()
+    gender = str(style.get("speaker") or "").strip().lower()
+
+    raw_combined = f"{cue.source_text} {cue.translated_text} {text}".strip()
+    lower_combined = raw_combined.lower()
+
+    if not role:
+        for pat in _CROWD_PATTERNS:
+            if re.search(pat, lower_combined, flags=re.IGNORECASE):
+                role = "crowd"
+                break
+    if not role and re.search(r"\[(?:quần\s*chúng|đám\s*đông|crowd|walla|众人|齐声)\]", lower_combined):
+        role = "crowd"
+    if not role:
+        role = "main"
+
+    if not speaker_id:
+        tag = _SPEAKER_ID_TAG.search(raw_combined)
+        if tag:
+            speaker_id = re.sub(r"\s+", "_", tag.group(1).strip().lower())
+    if not speaker_id and role == "crowd":
+        speaker_id = "crowd"
+    if not speaker_id:
+        # fallback identity by gender bucket; still better than collapsing all males
+        gender_guess = detect_cue_speaker(cue, text, default="unknown", allow_heuristic=True)
+        speaker_id = f"{gender_guess or 'unknown'}_default"
+
+    if gender in {"female", "nu", "nữ", "woman", "girl"}:
+        gender = "female"
+    elif gender in {"male", "nam", "man", "boy"}:
+        gender = "male"
+    elif gender in {"unknown", "other"}:
+        gender = "unknown"
+    else:
+        gender = detect_cue_speaker(cue, text, default="unknown", allow_heuristic=True)
+
+    if role == "crowd" and not str(style.get("speaker_id") or "").strip():
+        speaker_id = "crowd"
+
+    return {
+        "speaker": gender or "unknown",
+        "speaker_id": speaker_id or "unknown_default",
+        "speaker_role": role or "main",
+    }
+
+
+def default_voice_pools() -> Dict[str, List[str]]:
+    """Pool giọng theo giới tính lấy từ catalog Edge/CapCut/Gemini hiện có."""
+    male: List[str] = []
+    female: List[str] = []
+    for item in list(EDGE_VOICE_CATALOG) + list(CAPCUT_VOICE_CATALOG) + list(GEMINI_VOICE_CATALOG):
+        vid = str(item.get("voice_id") or "").strip()
+        gender = str(item.get("gender") or "").strip().lower()
+        if not vid:
+            continue
+        if gender == "female" and vid not in female:
+            female.append(vid)
+        elif gender == "male" and vid not in male:
+            male.append(vid)
+    if "vi-VN-NamMinhNeural" not in male:
+        male.insert(0, "vi-VN-NamMinhNeural")
+    if "vi-VN-HoaiMyNeural" not in female:
+        female.insert(0, "vi-VN-HoaiMyNeural")
+    return {"male": male or ["vi-VN-NamMinhNeural"], "female": female or ["vi-VN-HoaiMyNeural"]}
+
+
+def assign_voice_for_cue(
+    cue: SubtitleCueV1,
+    *,
+    mode: str,
+    voice: str,
+    voice_male: str,
+    voice_female: str,
+    female_pool: List[str] | None = None,
+    male_pool: List[str] | None = None,
+    text: str | None = None,
+) -> str:
+    """Chọn voice_id cho cue; cùng gender nhưng khác speaker_id -> giọng khác nhau."""
+    mode_n = normalize_dubbing_mode(mode)
+    spoken = text if text is not None else (cue.translated_text or cue.source_text or "")
+    style = cue.style if isinstance(getattr(cue, "style", None), dict) else {}
+    override = str(style.get("voice_id") or "").strip()
+    if override:
+        return override
+    if mode_n != "multi":
+        return voice
+
+    identity = detect_speaker_identity(cue, spoken)
+    if is_skip_tts_role(identity["speaker_role"]):
+        return ""
+
+    gender = identity["speaker"]
+    speaker_id = identity["speaker_id"]
+    pools = default_voice_pools()
+    males = list(male_pool or pools["male"])
+    females = list(female_pool or pools["female"])
+    if voice_male and voice_male not in males:
+        males.insert(0, voice_male)
+    elif voice_male:
+        males = [voice_male] + [v for v in males if v != voice_male]
+    if voice_female and voice_female not in females:
+        females.insert(0, voice_female)
+    elif voice_female:
+        females = [voice_female] + [v for v in females if v != voice_female]
+
+    if gender == "female":
+        pool = females or [voice_female or voice]
+    elif gender == "male":
+        pool = males or [voice_male or voice]
+    else:
+        # unknown: prefer configured single voice, else male pool first
+        return voice or (males[0] if males else voice_female)
+
+    if not pool:
+        return voice_female if gender == "female" else voice_male
+    return pool[_stable_index(speaker_id, len(pool))]
+
+
+def resolve_cue_voice(
+    cue: SubtitleCueV1,
+    text: str,
+    *,
+    mode: str,
+    voice: str,
+    voice_male: str,
+    voice_female: str,
+    female_pool: List[str] | None = None,
+    male_pool: List[str] | None = None,
+) -> str:
+    return assign_voice_for_cue(
+        cue,
+        mode=mode,
+        voice=voice,
+        voice_male=voice_male,
+        voice_female=voice_female,
+        female_pool=female_pool,
+        male_pool=male_pool,
+        text=text,
+    )
+
+
+def required_voices_count(cues: List[SubtitleCueV1], mode: str = "single") -> int:
+    mode_n = normalize_dubbing_mode(mode)
+    if mode_n != "multi":
+        return 1
+    ids = set()
+    for cue in cues:
+        text = (cue.translated_text or cue.source_text or "").strip()
+        identity = detect_speaker_identity(cue, text)
+        if is_skip_tts_role(identity["speaker_role"]):
+            continue
+        style = cue.style if isinstance(getattr(cue, "style", None), dict) else {}
+        has_identity = bool(style.get("speaker_id") or style.get("speaker") or clean_subtitle_text(text))
+        if not has_identity:
+            continue
+        ids.add(identity["speaker_id"])
+    return max(1, len(ids))
+
+
+def detect_cue_speaker(
+    cue: SubtitleCueV1,
+    text: str,
+    default: str = "unknown",
+    allow_heuristic: bool = True,
+) -> str:
+    """
+    Xác định giới tính người nói cho cue.
+    Ưu tiên style.speaker -> tag -> heuristic đại từ.
+    default='unknown' để tránh ép male âm thầm; truyền default='male' nếu cần tương thích cũ.
     """
     if hasattr(cue, "style") and isinstance(cue.style, dict):
         spk = str(cue.style.get("speaker", "")).lower()
@@ -981,17 +1397,18 @@ def detect_cue_speaker(cue: SubtitleCueV1, text: str) -> str:
             return "female"
         if spk in ("male", "nam", "man", "boy"):
             return "male"
+        if spk in ("unknown", "other"):
+            return "unknown"
 
     raw_combined = f"{cue.source_text} {cue.translated_text} {text}".lower()
 
-    # Nhận diện thẻ phân vai rõ ràng
     female_prefixes = [
-        r"\[nữ\]", r"\(nữ\)", r"nữ\s*:", r"\[cô gái\]", r"\[mẹ\]", r"\[chị\]",
-        r"\[bà\]", r"\[em gái\]", r"\[tiểu thư\]", r"\[hoàng hậu\]", r"\[công chúa\]"
+        r"\[nữ(?:\d+)?\]", r"\(nữ(?:\d+)?\)", r"nữ\s*:", r"\[cô gái\]", r"\[mẹ\]", r"\[chị\]",
+        r"\[bà\]", r"\[em gái\]", r"\[tiểu thư\]", r"\[hoàng hậu\]", r"\[công chúa\]",
     ]
     male_prefixes = [
-        r"\[nam\]", r"\(nam\)", r"nam\s*:", r"\[chàng trai\]", r"\[bố\]", r"\[ba\]",
-        r"\[anh\]", r"\[ông\]", r"\[em trai\]", r"\[thiếu gia\]", r"\[hoàng đế\]", r"\[hoàng tử\]"
+        r"\[nam(?:\d+)?\]", r"\(nam(?:\d+)?\)", r"nam\s*:", r"\[chàng trai\]", r"\[bố\]", r"\[ba\]",
+        r"\[anh\]", r"\[ông\]", r"\[em trai\]", r"\[thiếu gia\]", r"\[hoàng đế\]", r"\[hoàng tử\]",
     ]
 
     for pat in female_prefixes:
@@ -1001,28 +1418,28 @@ def detect_cue_speaker(cue: SubtitleCueV1, text: str) -> str:
         if re.search(pat, raw_combined):
             return "male"
 
-    # Phân tích đại từ xưng hô trong câu tiếng Việt
-    lower_vi = text.lower()
+    if not allow_heuristic:
+        return default
+
+    lower_vi = (text or "").lower()
     female_indicators = [
         r"\banh ơi\b", r"\banh à\b", r"\banh nhé\b", r"\bem đây\b", r"\bem biết\b",
         r"\bem không\b", r"\bem xin lỗi\b", r"\bem yêu anh\b", r"\bem thích anh\b",
-        r"\bmẹ bảo\b", r"\bchị bảo\b"
+        r"\bmẹ bảo\b", r"\bchị bảo\b",
     ]
     male_indicators = [
         r"\bem ơi\b", r"\bem à\b", r"\bem nhé\b", r"\banh đây\b", r"\banh biết\b",
         r"\banh không\b", r"\banh xin lỗi\b", r"\banh yêu em\b", r"\banh thích em\b",
-        r"\bbố bảo\b", r"\bba bảo\b"
+        r"\bbố bảo\b", r"\bba bảo\b",
     ]
 
     f_score = sum(1 for pat in female_indicators if re.search(pat, lower_vi))
     m_score = sum(1 for pat in male_indicators if re.search(pat, lower_vi))
-
     if f_score > m_score:
         return "female"
-    elif m_score > f_score:
+    if m_score > f_score:
         return "male"
-
-    return "male"
+    return default
 
 
 async def generate_timed_voiceover(
@@ -1041,6 +1458,7 @@ async def generate_timed_voiceover(
     provider: str = "edge",
     prompt_style: str = "dramatic",
     progress_callback: Optional[Any] = None,
+    auto_detect_speakers: bool = True,
 ) -> Path:
     """
     Sinh toàn bộ giọng thuyết minh cho các câu phụ đề theo đúng mốc thời gian start_pts của video.
@@ -1050,12 +1468,59 @@ async def generate_timed_voiceover(
     Tự động lọc rác thoại và co giãn thời lượng (Slot Time-Stretching 1.0x -> 1.45x).
     """
     cues = normalize_sequential_cues(list(cues))
+    mode = normalize_dubbing_mode(mode)
+    # Stabilize same-gender casting before TTS (explicit ids preserved)
+    assign_turn_taking_speaker_ids(cues, mode=mode)
+    base_rate = parse_speaking_rate(rate)
     valid_cues: List[tuple[SubtitleCueV1, str]] = []
-    for c in cues:
+    for idx_c, c in enumerate(cues):
         raw_text = (c.translated_text or c.source_text).strip()
-        cleaned = clean_subtitle_text(raw_text)
-        if cleaned:
-            valid_cues.append((c, cleaned))
+        # Prefer dedicated spoken_text when present (duration-adapted dubbing script)
+        style = c.style if isinstance(getattr(c, "style", None), dict) else {}
+        spoken_raw = str(style.get("spoken_text") or raw_text).strip()
+        cleaned = clean_subtitle_text(spoken_raw)
+        if not cleaned:
+            continue
+        identity = detect_speaker_identity(c, cleaned)
+        if is_skip_tts_role(identity["speaker_role"]):
+            logger.info(f"Bỏ qua TTS quần chúng/extra cho cue {c.cue_id}")
+            continue
+        # Persist identity onto cue style for downstream UI / single-cue redub
+        if not isinstance(c.style, dict):
+            c.style = {}
+        c.style.setdefault("speaker", identity["speaker"])
+        c.style.setdefault("speaker_id", identity["speaker_id"])
+        c.style.setdefault("speaker_role", identity["speaker_role"])
+
+        next_cue = cues[idx_c + 1] if idx_c + 1 < len(cues) else None
+        slot_mode = mode
+        if mode == "multi" and next_cue is not None:
+            id_a = str((c.style or {}).get("speaker_id") or "")
+            id_b = str((next_cue.style or {}).get("speaker_id") or "")
+            if not (cues_truly_overlap(c, next_cue) and id_a and id_b and id_a != id_b):
+                slot_mode = "single"
+        slot_dur = available_voiceover_slot(c, next_cue, slot_mode)
+        # Only auto-adapt when spoken_text was not manually provided
+        manual_spoken = bool(str(style.get("spoken_text") or "").strip())
+        if not manual_spoken:
+            adapted, adapt_meta = adapt_spoken_text_for_slot(
+                cleaned,
+                slot_sec=slot_dur,
+                base_rate=base_rate,
+                soft_stretch=1.20,
+                hard_stretch=max_stretch_rate,
+            )
+            if adapted:
+                cleaned = adapted
+                c.style["spoken_text"] = adapted
+            if adapt_meta.get("timing_warning"):
+                c.style["timing_warning"] = adapt_meta["timing_warning"]
+            elif "timing_warning" in c.style and not adapt_meta.get("adapted"):
+                c.style.pop("timing_warning", None)
+        if not auto_detect_speakers:
+            # Keep explicit style labels only; avoid pronoun heuristic overrides later
+            pass
+        valid_cues.append((c, cleaned))
 
     if not valid_cues:
         raise ValueError("Không có câu phụ đề nào hợp lệ sau khi làm sạch để sinh giọng đọc thuyết minh")
@@ -1084,10 +1549,26 @@ async def generate_timed_voiceover(
 
     async def _fetch_single(i: int, c: SubtitleCueV1, text: str):
         nonlocal completed_count
-        target_v = voice
-        if mode == "multi":
-            speaker = detect_cue_speaker(c, text)
-            target_v = voice_female if speaker == "female" else voice_male
+        if not auto_detect_speakers and isinstance(c.style, dict):
+            # Freeze speaker label if provided; still allow speaker_id casting
+            if not c.style.get("speaker"):
+                c.style["speaker"] = "unknown"
+        target_v = resolve_cue_voice(
+            c,
+            text,
+            mode=mode,
+            voice=voice,
+            voice_male=voice_male,
+            voice_female=voice_female,
+        )
+        if not target_v:
+            completed_count += 1
+            if progress_callback is not None:
+                try:
+                    progress_callback(completed_count, total_valid, text)
+                except Exception:
+                    pass
+            return i, c, text, b""
         async with sem:
             audio_bytes = await synthesize_text(
                 text,
@@ -1120,7 +1601,14 @@ async def generate_timed_voiceover(
         next_cue = results[result_index + 1][1] if result_index + 1 < len(results) else None
         # Co giãn khớp slot thời gian (Slot Time-Stretching 1.0x -> 1.45x)
         speech_dur = len(pcm_samples) / sample_rate
-        slot_dur = available_voiceover_slot(cue, next_cue, mode)
+        slot_mode = mode
+        if mode == "multi" and next_cue is not None:
+            id_a = str((cue.style or {}).get("speaker_id") or "")
+            id_b = str((next_cue.style or {}).get("speaker_id") or "")
+            if not (cues_truly_overlap(cue, next_cue) and id_a and id_b and id_a != id_b):
+                # Treat as non-overlap for slot budgeting to avoid false spill
+                slot_mode = "single"
+        slot_dur = available_voiceover_slot(cue, next_cue, slot_mode)
         speed_factor = calculate_slot_stretch(
             speech_dur, slot_dur, min_rate=1.0, max_rate=max_stretch_rate
         )
@@ -1141,12 +1629,18 @@ async def generate_timed_voiceover(
 
         start_sample = max(0, int(cue.start_pts * sample_rate))
         next_start_sample = None if next_cue is None else max(0, int(next_cue.start_pts * sample_rate))
+        allow_overlap = False
+        if mode == "multi" and next_cue is not None and cues_truly_overlap(cue, next_cue):
+            id_a = str((cue.style or {}).get("speaker_id") or "")
+            id_b = str((next_cue.style or {}).get("speaker_id") or "")
+            allow_overlap = bool(id_a and id_b and id_a != id_b)
         master_buffer = mix_voice_pcm(
             master_buffer,
             pcm_samples,
             start_sample,
             mode=mode,
             next_start_sample=next_start_sample,
+            allow_overlap=allow_overlap,
         )
 
     # Chuẩn hóa chống vỡ tiếng (Anti-clipping soft peak normalization) khi có nhiều nhân vật nói đè lên nhau
@@ -1174,6 +1668,7 @@ def generate_voiceover_sync(
     voice_female: str = "vi-VN-HoaiMyNeural",
     provider: str = "edge",
     prompt_style: str = "dramatic",
+    auto_detect_speakers: bool = True,
 ) -> Path:
     """Wrapper đồng bộ để gọi từ luồng worker thông thường."""
     try:
@@ -1196,6 +1691,7 @@ def generate_voiceover_sync(
                         voice_female=voice_female,
                         provider=provider,
                         prompt_style=prompt_style,
+                        auto_detect_speakers=auto_detect_speakers,
                     ),
                 ).result()
         else:
@@ -1213,6 +1709,7 @@ def generate_voiceover_sync(
                     voice_female=voice_female,
                     provider=provider,
                     prompt_style=prompt_style,
+                    auto_detect_speakers=auto_detect_speakers,
                 )
             )
     except RuntimeError:
@@ -1230,6 +1727,7 @@ def generate_voiceover_sync(
                 voice_female=voice_female,
                 provider=provider,
                 prompt_style=prompt_style,
+                auto_detect_speakers=auto_detect_speakers,
             )
         )
 
@@ -1246,6 +1744,10 @@ async def splice_cue_voiceover(
     max_stretch_rate: float = 1.45,
     provider: str = "edge",
     prompt_style: str = "dramatic",
+    mode: str = "single",
+    voice_male: str = "vi-VN-NamMinhNeural",
+    voice_female: str = "vi-VN-HoaiMyNeural",
+    auto_detect_speakers: bool = True,
 ) -> Dict[str, Any]:
     """
     Sinh giọng đọc thuyết minh cho riêng 1 câu phụ đề (Single Cue TTS) và
@@ -1253,15 +1755,59 @@ async def splice_cue_voiceover(
     Nếu file master chưa tồn tại, tự động khởi tạo master buffer và đặt câu vào đúng mốc start_pts.
     """
     out_path = Path(output_path).resolve()
-    raw_text = (target_cue.translated_text or target_cue.source_text).strip()
+    mode = normalize_dubbing_mode(mode)
+    # Keep casting consistent with full-timeline turn-taking when possible
+    try:
+        assign_turn_taking_speaker_ids(list(cues), mode=mode)
+    except Exception:
+        pass
+    style = target_cue.style if isinstance(getattr(target_cue, "style", None), dict) else {}
+    raw_text = str(style.get("spoken_text") or target_cue.translated_text or target_cue.source_text).strip()
     cleaned_text = clean_subtitle_text(raw_text)
     if not cleaned_text:
         raise ValueError(f"Câu phụ đề {target_cue.cue_id} không có nội dung văn bản hợp lệ để lồng tiếng.")
 
-    logger.info(f"Đang sinh giọng TTS câu đơn {target_cue.cue_id} [{voice}] qua [{provider}]...")
+    identity = detect_speaker_identity(target_cue, cleaned_text)
+    if is_skip_tts_role(identity["speaker_role"]):
+        raise ValueError(f"Câu {target_cue.cue_id} thuộc quần chúng/extra — bỏ qua TTS.")
+    if not isinstance(target_cue.style, dict):
+        target_cue.style = {}
+    if auto_detect_speakers or not target_cue.style.get("speaker"):
+        target_cue.style["speaker"] = identity["speaker"]
+    target_cue.style.setdefault("speaker_id", identity["speaker_id"])
+    target_cue.style.setdefault("speaker_role", identity["speaker_role"])
+
+    # Duration-budget spoken adaptation for single-cue redub
+    base_rate = parse_speaking_rate(rate)
+    slot_dur = max(0.05, float(target_cue.end_pts) - float(target_cue.start_pts))
+    manual_spoken = bool(str(style.get("spoken_text") or "").strip())
+    if not manual_spoken:
+        adapted, adapt_meta = adapt_spoken_text_for_slot(
+            cleaned_text,
+            slot_sec=slot_dur,
+            base_rate=base_rate,
+            soft_stretch=1.20,
+            hard_stretch=max_stretch_rate,
+        )
+        if adapted:
+            cleaned_text = adapted
+            target_cue.style["spoken_text"] = adapted
+        if adapt_meta.get("timing_warning"):
+            target_cue.style["timing_warning"] = adapt_meta["timing_warning"]
+
+    selected_voice = resolve_cue_voice(
+        target_cue,
+        cleaned_text,
+        mode=mode,
+        voice=voice,
+        voice_male=voice_male,
+        voice_female=voice_female,
+    ) or voice
+
+    logger.info(f"Đang sinh giọng TTS câu đơn {target_cue.cue_id} [{selected_voice}] mode={mode} qua [{provider}]...")
     mp3_res = await synthesize_text(
         cleaned_text,
-        voice=voice,
+        voice=selected_voice,
         rate=rate,
         provider=provider,
         prompt_style=prompt_style,
@@ -1324,7 +1870,8 @@ async def splice_cue_voiceover(
     return {
         "status": "completed",
         "cue_id": target_cue.cue_id,
-        "voice": voice,
+        "voice": selected_voice,
+        "mode": mode,
         "duration": len(pcm_samples) / sample_rate,
         "file_size": out_path.stat().st_size if out_path.exists() else 0,
     }

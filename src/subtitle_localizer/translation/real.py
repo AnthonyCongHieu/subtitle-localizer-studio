@@ -76,35 +76,67 @@ def _capitalize_first(s: str) -> str:
     return s[0].upper() + s[1:]
 
 _GENDER_PREFIX = re.compile(
-    r"^[\[\(\uff08【]\s*(Nam|Nữ|Nu|Male|Female|Man|Woman)\s*[\]\)\uff09】][:\s]*",
+    r"^[\[\(\uff08\u3010]\s*(Nam|Nữ|Nu|Male|Female|Man|Woman)(\d+)?\s*[\]\)\uff09\u3011][:\s]*",
+    re.IGNORECASE,
+)
+_SPEAKER_ID_PREFIX = re.compile(
+    r"^[\[\(\uff08\u3010]\s*(?P<sid>[A-Za-zÀ-ỹ0-9_\-]{2,32})\s*[\]\)\uff09\u3011][:\s]*",
+    re.IGNORECASE,
+)
+_CROWD_PREFIX = re.compile(
+    r"^[\[\(\uff08\u3010]\s*(?:Quần\s*chúng|Đám\s*đông|Crowd|Walla|Extras?|众人|齐声|群众)\s*[\]\)\uff09\u3011][:\s]*",
     re.IGNORECASE,
 )
 _ROLE_PREFIX = re.compile(
-    r"^[\[\(\uff08【]\s*(?:"
+    r"^[\[\(\uff08\u3010]\s*(?:"
     r"Tiếng\s+người\s+dẫn\s+chuyện|Người\s+dẫn\s+chuyện|Lời\s+dẫn\s+chuyện|"
     r"Lời\s+bình|Thuyết\s+minh|Narrator|Voice[\s-]*over|旁白|解说"
-    r")\s*[\]\)\uff09】][:\s]*",
+    r")\s*[\]\)\uff09\u3011][:\s]*",
     re.IGNORECASE,
 )
 
 
-def _split_speaker_annotation(raw_item: str) -> tuple[str | None, str]:
-    """Tách nhãn [Nam]/[Nữ] và chú thích vai (Tiếng người dẫn chuyện) khỏi câu dịch."""
+def _split_speaker_annotation(raw_item: str) -> tuple[str | None, str, dict]:
+    """Tách nhãn [Nam]/[Nữ]/[speaker_id]/crowd và chú thích vai khỏi câu dịch.
+
+    Returns: (gender, spoken_text, meta)
+    """
     text = (raw_item or "").strip()
     gender: str | None = None
-    for _ in range(4):
+    meta: dict = {}
+    for _ in range(6):
+        crowd_match = _CROWD_PREFIX.match(text)
+        if crowd_match:
+            meta["speaker_role"] = "crowd"
+            meta.setdefault("speaker_id", "crowd")
+            text = text[crowd_match.end() :].strip()
+            continue
         gender_match = _GENDER_PREFIX.match(text)
         if gender_match:
             spk_raw = gender_match.group(1).lower()
             gender = "female" if spk_raw in ("nữ", "nu", "female", "woman") else "male"
+            suffix = gender_match.group(2) or ""
+            if suffix:
+                meta["speaker_id"] = f"{'nu' if gender == 'female' else 'nam'}_{suffix}"
             text = text[gender_match.end() :].strip()
             continue
         role_match = _ROLE_PREFIX.match(text)
         if role_match:
+            meta.setdefault("speaker_role", "narrator")
+            meta.setdefault("speaker_id", "narrator")
             text = text[role_match.end() :].strip()
             continue
+        sid_match = _SPEAKER_ID_PREFIX.match(text)
+        if sid_match:
+            sid = sid_match.group("sid").strip()
+            sid_l = sid.lower()
+            if sid_l in {"nam", "nữ", "nu", "male", "female", "man", "woman"}:
+                break
+            meta["speaker_id"] = re.sub(r"\s+", "_", sid_l)
+            text = text[sid_match.end() :].strip()
+            continue
         break
-    return gender, text
+    return gender, text, meta
 
 
 def _refine_subtitles(text: str, source_text: str) -> str:
@@ -266,7 +298,7 @@ class RealTranslationProvider(TranslationProvider):
 
             text_end = markers[position + 1].start() if position + 1 < len(markers) else len(text_content)
             raw_item = text_content[marker.end() : text_end].strip().rstrip(".")
-            gender, spoken = _split_speaker_annotation(raw_item)
+            gender, spoken, spk_meta = _split_speaker_annotation(raw_item)
             cleaned = _capitalize_first(spoken)
             if not cleaned:
                 continue
@@ -277,7 +309,7 @@ class RealTranslationProvider(TranslationProvider):
                 continue
             if cleaned == own_source:
                 continue
-            parsed[cue_index] = (gender, cleaned)
+            parsed[cue_index] = (gender, cleaned, spk_meta)
 
         # Detect off-by-one cascade: many outputs equal the next source line.
         if len(parsed) >= max(2, batch_size // 3):
@@ -320,11 +352,16 @@ class RealTranslationProvider(TranslationProvider):
                 }
 
         updated_indices = set()
-        for cue_index, (gender, cleaned) in parsed.items():
+        for cue_index, (gender, cleaned, spk_meta) in parsed.items():
+            if not isinstance(cues[cue_index].style, dict):
+                cues[cue_index].style = {}
             if gender:
-                if not isinstance(cues[cue_index].style, dict):
-                    cues[cue_index].style = {}
                 cues[cue_index].style["speaker"] = gender
+            if isinstance(spk_meta, dict):
+                if spk_meta.get("speaker_id"):
+                    cues[cue_index].style["speaker_id"] = spk_meta["speaker_id"]
+                if spk_meta.get("speaker_role"):
+                    cues[cue_index].style["speaker_role"] = spk_meta["speaker_role"]
             cues[cue_index].translated_text = cleaned
             self._cache[(cues[cue_index].source_text or "").strip()] = cleaned
             updated_indices.add(cue_index)
@@ -352,14 +389,15 @@ class RealTranslationProvider(TranslationProvider):
             f"Phong cách kịch bản: {tone_instruction}\n\n"
             f"NGUYÊN TẮC BỐI CẢNH & PHÂN VAI (RẤT QUAN TRỌNG):\n"
             f"1. Đọc toàn bộ kịch bản từ đầu đến cuối để nắm bắt cốt truyện, tâm lý và mối quan hệ đối thoại qua lại giữa các nhân vật.\n"
-            f"2. BẮT BUỘC xác định rõ giới tính của người nói mỗi câu: [Nam] hoặc [Nữ] dựa theo ngữ cảnh đối thoại (người hỏi/người đáp, bạn nam/bạn nữ, vợ/chồng, mẹ/con, sếp/nhân viên).\n"
+            f"2. BẮT BUỘC xác định rõ giới tính của người nói mỗi câu: [Nam]/[Nữ] hoặc [Nam1]/[Nữ2] nếu nhiều nhân vật cùng giới; thêm [tên_riêng] nếu nhận ra nhân vật. Tiếng quần chúng gắn [Quần chúng]."
+            f"2b. Lời dịch phải RÚT GỌN khẩu ngữ để đọc kịp khung thời gian phụ đề (ngắn gọn, tự nhiên).\n"
             f"3. ĐỐI CHIẾU ĐẠI TỪ VÀ GIỚI TÍNH CHÍNH XÁC (TUYỆT ĐỐI KHÔNG NHẦM LẪN):\n"
             f"   - Khi câu thoại có đại từ '他' (anh ấy) hoặc '她' (cô ấy), PHẢI đối chiếu với nhân vật/đối tượng đang được nhắc đến trong ngữ cảnh thực tế của câu chuyện:\n"
             f"     * Nếu đang nói về nhân vật Nữ (vợ cũ, bạn gái, mẹ, con gái, sếp nữ), BẮT BUỘC dịch là 'cô ấy / chị ấy / nàng / mẹ / em', TUYỆT ĐỐI KHÔNG dịch nhầm thành 'anh ấy'.\n"
             f"     * Nếu đang nói về nhân vật Nam (chồng, bạn trai, bố, con trai, sếp nam), BẮT BUỘC dịch là 'anh ấy / chú ấy / chàng / bố / anh'.\n"
             f"   - Với quan hệ gia đình / hôn nhân (ly hôn, tình cảm): xưng hô chuẩn mực 'anh - em', 'chồng - vợ', không xưng hô nhạt nhẽo hay lộn vai vế.\n"
             f"4. Dịch thoát nghĩa, chuẩn văn phong phim truyền hình/điện ảnh, tự nhiên, súc tích, dễ đọc trên video, tuyệt đối KHÔNG dịch thô từng từ vô nghĩa.\n"
-            f"5. BẮT BUỘC đánh số theo thứ tự batch hiện tại từ `[1]` đến `[{len(batch_items)}]` (không dùng index tuyệt đối). Kèm nhãn `[Nam]` hoặc `[Nữ]` (ví dụ: `[1] [Nam] Sao thế?` / `[2] [Nữ] Tâm trạng em không tốt sao?`).\n"
+            f"5. BẮT BUỘC đánh số theo thứ tự batch hiện tại từ `[1]` đến `[{len(batch_items)}]` (không dùng index tuyệt đối). Kèm nhãn `[Nam]/[Nữ]/[Nam1]/[Nữ2]/[Quần chúng]` (ví dụ: `[1] [Nam] Sao thế?` / `[2] [Nữ] Tâm trạng em không tốt sao?` / `[3] [Quần chúng] Hoan hô!`).\n"
             f"6. Chỉ trả về đúng {len(batch_items)} dòng `[i] [Nam/Nữ] Câu tiếng Việt`, không copy nguyên câu gốc, không kèm lời chào hay giải thích thừa.\n"
             f"7. CẤM ghi chú thích vai trò vào câu phụ đề: không được viết `(Tiếng người dẫn chuyện)`, `(Người dẫn chuyện)`, `(旁白)`, `(Lời bình)`. Lời dẫn chuyện vẫn chỉ là câu thoại đã dịch, gắn `[Nam]` hoặc `[Nữ]` thôi.\n\n"
             f"KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN:\n" + "\n".join(batch_items)

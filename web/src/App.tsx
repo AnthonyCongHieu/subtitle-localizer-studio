@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { apiClient } from './api/client';
+import { apiClient } from './api/client'
+import {
+  ORIGINAL_AUDIO_VOLUME_KEY,
+  VOICEOVER_VOLUME_KEY,
+  readStoredVolumePercent,
+  writeStoredVolumePercent,
+} from './utils/audioVolume';
 import { wsClient, WsConnectionStatus } from './api/websocket';
 import { ProjectManifestV1, RegionTrackV1, SubtitleCueV1, BridgeEventV1 } from './types/api';
 import {
@@ -224,36 +230,18 @@ export const App: React.FC = () => {
   const [selectedCueIds, setSelectedCueIds] = useState<string[]>([]);
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
   const [isVideoVisible, setIsVideoVisible] = useState<boolean>(true);
-  const [originalAudioVolume, setOriginalAudioVolume] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem('studio_original_audio_volume');
-      return saved !== null ? Math.max(0, Math.min(100, parseInt(saved, 10))) : 100;
-    } catch {
-      return 100;
-    }
-  });
+  const [originalAudioVolume, setOriginalAudioVolume] = useState<number>(() =>
+    readStoredVolumePercent(ORIGINAL_AUDIO_VOLUME_KEY, 100)
+  );
   const handleOriginalAudioVolumeChange = useCallback((vol: number) => {
-    const clamped = Math.max(0, Math.min(100, Math.round(vol)));
-    setOriginalAudioVolume(clamped);
-    try {
-      localStorage.setItem('studio_original_audio_volume', String(clamped));
-    } catch {}
+    setOriginalAudioVolume(writeStoredVolumePercent(ORIGINAL_AUDIO_VOLUME_KEY, vol));
   }, []);
 
-  const [voiceoverVolume, setVoiceoverVolume] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem('sls_voiceover_volume');
-      return saved !== null ? Math.max(0, Math.min(100, parseInt(saved, 10))) : 100;
-    } catch {
-      return 100;
-    }
-  });
+  const [voiceoverVolume, setVoiceoverVolume] = useState<number>(() =>
+    readStoredVolumePercent(VOICEOVER_VOLUME_KEY, 100)
+  );
   const handleVoiceoverVolumeChange = useCallback((vol: number) => {
-    const clamped = Math.max(0, Math.min(100, Math.round(vol)));
-    setVoiceoverVolume(clamped);
-    try {
-      localStorage.setItem('sls_voiceover_volume', String(clamped));
-    } catch {}
+    setVoiceoverVolume(writeStoredVolumePercent(VOICEOVER_VOLUME_KEY, vol));
   }, []);
   const dragStartCuesSnapshotRef = useRef<SubtitleCueV1[] | null>(null);
   // Cờ ngăn toast trùng lặp khi dừng quét: handleStopScan set true, WS/polling kiểm tra để bỏ qua toast
@@ -1454,8 +1442,19 @@ export const App: React.FC = () => {
     setStatusMessage('Đang tạo thuyết minh lồng tiếng toàn bộ video...');
     appLogger.loading('Đang tạo thuyết minh lồng tiếng toàn bộ video...', 'Lồng Tiếng', { taskKey: tKey });
     try {
-      const dubSettings = activeProject.custom_pipeline_settings?.dubbing;
-      await apiClient.runDubbing(activeProject.project_id, dubSettings || {});
+      const dubSettings = activeProject.custom_pipeline_settings?.dubbing || {};
+      const modeRaw = String((dubSettings as any).mode || 'single');
+      const mode = modeRaw === 'multi' || modeRaw === 'gender_multi' ? 'multi' : 'single';
+      await apiClient.runDubbing(activeProject.project_id, {
+        ...dubSettings,
+        mode,
+        voice: (dubSettings as any).voice,
+        voice_male: (dubSettings as any).voice_male,
+        voice_female: (dubSettings as any).voice_female,
+        rate: (dubSettings as any).rate,
+        provider: (dubSettings as any).provider,
+        auto_detect_speakers: (dubSettings as any).auto_detect_speakers,
+      });
       setStatusMessage('Lồng tiếng toàn bộ video hoàn tất!');
       appLogger.finishTask(tKey, 'Lồng tiếng toàn bộ video hoàn tất! Đã đồng bộ với Timeline.', 'success');
       const updated = await apiClient.getProject(activeProject.project_id);
@@ -1894,7 +1893,7 @@ export const App: React.FC = () => {
             onStopScan={handleStopScan}
             isTranslating={isTranslatingAll}
             isDubbing={isDubbingAll}
-            dubbingMode={activeProject?.custom_pipeline_settings?.dubbing?.mode === 'multi' ? 'multi' : 'single'}
+            dubbingMode={(activeProject?.custom_pipeline_settings?.dubbing?.mode === 'multi' || activeProject?.custom_pipeline_settings?.dubbing?.mode === 'gender_multi') ? 'multi' : 'single'}
           />
         </>
       )}

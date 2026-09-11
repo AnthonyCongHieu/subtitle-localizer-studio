@@ -1882,6 +1882,83 @@ def create_app(
         finally:
             translator.unload()
 
+    @app.post("/api/v1/projects/{project_id}/dubbing/adapt-spoken")
+    async def adapt_spoken_for_project(
+        project_id: str,
+        body: Optional[Dict[str, Any]] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Rút gọn spoken_text theo ngân sách thời lượng (duration-budget) trước khi TTS."""
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+        cues = repository.get_cues(project_id)
+        if not cues:
+            raise HTTPException(status_code=400, detail="Dự án chưa có phụ đề")
+
+        from subtitle_localizer.dubbing.tts import (
+            adapt_spoken_text_for_slot,
+            assign_turn_taking_speaker_ids,
+            available_voiceover_slot,
+            clean_subtitle_text,
+            cues_truly_overlap,
+            normalize_dubbing_mode,
+            parse_speaking_rate,
+            required_voices_count,
+        )
+
+        settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
+        mode = normalize_dubbing_mode((body or {}).get("mode") or getattr(settings.dubbing, "mode", "single"))
+        rate = (body or {}).get("rate") or getattr(settings.dubbing, "rate", "+0%")
+        cue_id = (body or {}).get("cue_id")
+        force = bool((body or {}).get("force", False))
+        base_rate = parse_speaking_rate(rate)
+        assign_turn_taking_speaker_ids(cues, mode=mode)
+
+        adapted_count = 0
+        warned = 0
+        for idx_c, c in enumerate(cues):
+            if cue_id and c.cue_id != cue_id:
+                continue
+            if not isinstance(c.style, dict):
+                c.style = {}
+            existing_spoken = str(c.style.get("spoken_text") or "").strip()
+            raw = str(existing_spoken or c.translated_text or c.source_text or "").strip()
+            cleaned = clean_subtitle_text(raw)
+            if not cleaned:
+                continue
+            if existing_spoken and not force and not cue_id:
+                continue
+            next_cue = cues[idx_c + 1] if idx_c + 1 < len(cues) else None
+            slot_mode = mode
+            if mode == "multi" and next_cue is not None:
+                id_a = str((c.style or {}).get("speaker_id") or "")
+                id_b = str((next_cue.style or {}).get("speaker_id") or "")
+                if not (cues_truly_overlap(c, next_cue) and id_a and id_b and id_a != id_b):
+                    slot_mode = "single"
+            slot_dur = available_voiceover_slot(c, next_cue, slot_mode)
+            spoken, meta = adapt_spoken_text_for_slot(cleaned, slot_sec=slot_dur, base_rate=base_rate)
+            if spoken:
+                c.style["spoken_text"] = spoken
+                adapted_count += 1
+            if meta.get("timing_warning"):
+                c.style["timing_warning"] = meta["timing_warning"]
+                warned += 1
+            elif "timing_warning" in c.style:
+                c.style.pop("timing_warning", None)
+
+        repository.save_cues(project_id, cues)
+        return {
+            "status": "completed",
+            "project_id": project_id,
+            "mode": mode,
+            "adapted_count": adapted_count,
+            "warned_count": warned,
+            "required_voices": required_voices_count(cues, mode=mode),
+            "cues_count": len(cues),
+        }
+
     @app.post("/api/v1/projects/{project_id}/dubbing/run")
     async def run_dubbing(
         project_id: str,
@@ -1899,13 +1976,17 @@ def create_app(
             raise HTTPException(status_code=400, detail="Dự án chưa có phụ đề để lồng tiếng")
 
         settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
+        from subtitle_localizer.dubbing.tts import normalize_dubbing_mode, required_voices_count
         provider = (body or {}).get("provider") or getattr(settings.dubbing, "provider", "edge")
         voice = (body or {}).get("voice") or settings.dubbing.voice
         rate = (body or {}).get("rate") or settings.dubbing.rate
-        mode = (body or {}).get("mode") or getattr(settings.dubbing, "mode", "single")
+        mode = normalize_dubbing_mode((body or {}).get("mode") or getattr(settings.dubbing, "mode", "single"))
         voice_male = (body or {}).get("voice_male") or getattr(settings.dubbing, "voice_male", "vi-VN-NamMinhNeural")
         voice_female = (body or {}).get("voice_female") or getattr(settings.dubbing, "voice_female", "vi-VN-HoaiMyNeural")
         prompt_style = (body or {}).get("prompt_style") or getattr(settings.dubbing, "gemini_prompt_style", "dramatic")
+        auto_detect_speakers = (body or {}).get("auto_detect_speakers")
+        if auto_detect_speakers is None:
+            auto_detect_speakers = bool(getattr(settings.dubbing, "auto_detect_speakers", True))
 
         # Lưu cài đặt lồng tiếng (Đơn giọng / Đa giọng, giọng chọn) riêng cho video này
         if body:
@@ -1919,6 +2000,7 @@ def create_app(
             manifest.custom_pipeline_settings["dubbing"]["voice_female"] = voice_female
             manifest.custom_pipeline_settings["dubbing"]["provider"] = provider
             manifest.custom_pipeline_settings["dubbing"]["rate"] = rate
+            manifest.custom_pipeline_settings["dubbing"]["auto_detect_speakers"] = bool(auto_detect_speakers)
 
         project_output = resolved_output_root / project_id
         project_output.mkdir(parents=True, exist_ok=True)
@@ -1949,6 +2031,7 @@ def create_app(
             provider=provider,
             prompt_style=prompt_style,
             export_cues_dir=cues_dir,
+            auto_detect_speakers=bool(auto_detect_speakers),
         )
 
         if (not out_voiceover.exists() or out_voiceover.stat().st_size == 0) and generated_voiceover:
@@ -1979,6 +2062,7 @@ def create_app(
             if not current_manifest.custom_pipeline_settings:
                 current_manifest.custom_pipeline_settings = {}
             current_manifest.custom_pipeline_settings["dubbing"] = manifest.custom_pipeline_settings.get("dubbing", {})
+        repository.save_cues(project_id, cues)
         repository.save_project(current_manifest)
         repository.save_stage_run(project_id, StageRunV1(stage_name="dubbing", status="completed", progress=1.0, metrics={"label": f"Đã lồng tiếng {len(cues)} câu"}, end_time=time.time()))
 
@@ -1988,6 +2072,7 @@ def create_app(
             "cues_count": len(cues),
             "voice": voice,
             "mode": mode,
+            "required_voices": required_voices_count(cues, mode=mode),
             "audio_url": f"/api/v1/projects/{project_id}/audio/voiceover",
         }
 
@@ -2017,11 +2102,18 @@ def create_app(
         if not target_cue:
             raise HTTPException(status_code=404, detail=f"Không tìm thấy câu phụ đề {cue_id}")
 
+        from subtitle_localizer.dubbing.tts import normalize_dubbing_mode
         settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
         provider = (body or {}).get("provider") or getattr(settings.dubbing, "provider", "edge")
         voice = (body or {}).get("voice") or settings.dubbing.voice
         rate = (body or {}).get("rate") or settings.dubbing.rate
         prompt_style = (body or {}).get("prompt_style") or getattr(settings.dubbing, "gemini_prompt_style", "dramatic")
+        mode = normalize_dubbing_mode((body or {}).get("mode") or getattr(settings.dubbing, "mode", "single"))
+        voice_male = (body or {}).get("voice_male") or getattr(settings.dubbing, "voice_male", "vi-VN-NamMinhNeural")
+        voice_female = (body or {}).get("voice_female") or getattr(settings.dubbing, "voice_female", "vi-VN-HoaiMyNeural")
+        auto_detect_speakers = (body or {}).get("auto_detect_speakers")
+        if auto_detect_speakers is None:
+            auto_detect_speakers = bool(getattr(settings.dubbing, "auto_detect_speakers", True))
 
         project_output = resolved_output_root / project_id
         project_output.mkdir(parents=True, exist_ok=True)
@@ -2049,18 +2141,24 @@ def create_app(
             rate=rate,
             provider=provider,
             prompt_style=prompt_style,
+            mode=mode,
+            voice_male=voice_male,
+            voice_female=voice_female,
+            auto_detect_speakers=bool(auto_detect_speakers),
         )
 
         manifest.has_voiceover = True
         manifest.voiceover_path = str(out_voiceover).replace("\\", "/")
         manifest.voiceover_file_size_bytes = out_voiceover.stat().st_size if out_voiceover.exists() else 0
+        repository.save_cues(project_id, cues)
         repository.save_project(manifest)
 
         return {
             "status": "completed",
             "project_id": project_id,
             "cue_id": cue_id,
-            "voice": voice,
+            "voice": result.get("voice", voice),
+            "mode": mode,
             "duration": result.get("duration", 0.0),
             "cue_audio_url": f"/api/v1/projects/{project_id}/cues/{cue_id}/audio",
             "audio_url": f"/api/v1/projects/{project_id}/audio/voiceover",

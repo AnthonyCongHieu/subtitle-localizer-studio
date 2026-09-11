@@ -3973,18 +3973,46 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                         {settings.dubbing.rate}
                       </span>
                     </div>
-                    <select
-                      value={settings.dubbing.rate}
-                      onChange={(e) =>
-                        setSettings({ ...settings, dubbing: { ...settings.dubbing, rate: e.target.value } })
-                      }
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-emerald-500"
-                    >
-                      <option value="-10%">-10% (Chậm rãi, lắng đọng)</option>
-                      <option value="+0%">+0% (Chuẩn tự nhiên)</option>
-                      <option value="+10%">+10% (Nhanh vừa, khớp thoại gấp)</option>
-                      <option value="+20%">+20% (Nhanh, cho câu dài)</option>
-                    </select>
+                    <div className="space-y-2">
+                      <input
+                        type="range"
+                        min={-30}
+                        max={40}
+                        step={1}
+                        value={(() => {
+                          const raw = String(settings.dubbing.rate || '+0%').replace('%', '');
+                          const n = Number(raw);
+                          return Number.isFinite(n) ? Math.max(-30, Math.min(40, n)) : 0;
+                        })()}
+                        onChange={(e) => {
+                          const pct = Number(e.target.value);
+                          const rate = pct === 0 ? '+0%' : pct > 0 ? `+${pct}%` : `${pct}%`;
+                          setSettings({ ...settings, dubbing: { ...settings.dubbing, rate } });
+                        }}
+                        className="w-full accent-emerald-500 cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                        <span>-30% chậm</span>
+                        <span>0% chuẩn</span>
+                        <span>+40% nhanh</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {['-10%', '+0%', '+10%', '+20%', '+30%'].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setSettings({ ...settings, dubbing: { ...settings.dubbing, rate: preset } })}
+                            className={`px-2 py-1 rounded-md text-[10px] font-mono border ${
+                              settings.dubbing.rate === preset
+                                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="p-5 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-3">

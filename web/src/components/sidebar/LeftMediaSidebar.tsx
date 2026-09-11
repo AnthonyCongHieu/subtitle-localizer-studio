@@ -109,6 +109,11 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   const [cueFilter, setCueFilter] = useState<CueFilterMode>('all');
   const [editingCueId, setEditingCueId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState<string>('');
+  const [editingSpokenText, setEditingSpokenText] = useState<string>('');
+  const [editingSpeaker, setEditingSpeaker] = useState<string>('unknown');
+  const [editingSpeakerId, setEditingSpeakerId] = useState<string>('');
+  const [editingSpeakerRole, setEditingSpeakerRole] = useState<string>('main');
+  const [adaptingSpoken, setAdaptingSpoken] = useState(false);
   const splitTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Media tab state: Tự động sort & Chọn nhiều tập
@@ -499,13 +504,25 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   const handleStartEdit = (cue: SubtitleCueV1) => {
     setEditingCueId(cue.cue_id);
     setEditingText(cue.translated_text || cue.source_text);
+    const style = (cue.style || {}) as Record<string, any>;
+    setEditingSpokenText(String(style.spoken_text || ''));
+    setEditingSpeaker(String(style.speaker || 'unknown'));
+    setEditingSpeakerId(String(style.speaker_id || ''));
+    setEditingSpeakerRole(String(style.speaker_role || 'main'));
   };
 
   const handleSaveEdit = (cue: SubtitleCueV1) => {
     if (onUpdateCue) {
+      const nextStyle: Record<string, any> = { ...(cue.style || {}) };
+      nextStyle.speaker = editingSpeaker || 'unknown';
+      nextStyle.speaker_id = editingSpeakerId.trim();
+      nextStyle.speaker_role = editingSpeakerRole || 'main';
+      if (editingSpokenText.trim()) nextStyle.spoken_text = editingSpokenText.trim();
+      else delete nextStyle.spoken_text;
       onUpdateCue({
         ...cue,
         translated_text: editingText,
+        style: nextStyle,
         status: 'reviewed',
       });
     }
@@ -515,6 +532,34 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   const handleCancelEdit = () => {
     setEditingCueId(null);
     setEditingText('');
+    setEditingSpokenText('');
+    setEditingSpeaker('unknown');
+    setEditingSpeakerId('');
+    setEditingSpeakerRole('main');
+  };
+
+  const patchCueStyle = (cue: SubtitleCueV1, patch: Record<string, any>) => {
+    if (!onUpdateCue) return;
+    const nextStyle: Record<string, any> = { ...(cue.style || {}), ...patch };
+    Object.keys(patch).forEach((k) => {
+      if (patch[k] === '' || patch[k] === null || patch[k] === undefined) delete nextStyle[k];
+    });
+    onUpdateCue({ ...cue, style: nextStyle, status: 'reviewed' });
+  };
+
+  const handleAdaptSpokenCue = async (cue: SubtitleCueV1, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!activeProject) return;
+    setAdaptingSpoken(true);
+    try {
+      await apiClient.adaptSpoken(activeProject.project_id, { cue_id: cue.cue_id, force: true });
+      onRefreshCues?.();
+      appLogger.success('Đã rút gọn lời đọc theo thời lượng cue', 'Lồng tiếng');
+    } catch (err: any) {
+      appLogger.error(`Rút gọn lời đọc thất bại: ${err?.message || 'error'}`, 'Lồng tiếng');
+    } finally {
+      setAdaptingSpoken(false);
+    }
   };
 
   // Mở modal lấy danh sách CapCut drafts
@@ -987,6 +1032,43 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                         rows={2}
                         autoFocus
                       />
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <select
+                          value={editingSpeaker}
+                          onChange={(e) => setEditingSpeaker(e.target.value)}
+                          className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200"
+                          title="Giới tính nhân vật"
+                        >
+                          <option value="unknown">Giới tính?</option>
+                          <option value="male">Nam</option>
+                          <option value="female">Nữ</option>
+                        </select>
+                        <select
+                          value={editingSpeakerRole}
+                          onChange={(e) => setEditingSpeakerRole(e.target.value)}
+                          className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200"
+                          title="Vai trò"
+                        >
+                          <option value="main">Chính</option>
+                          <option value="support">Phụ</option>
+                          <option value="narrator">Dẫn chuyện</option>
+                          <option value="crowd">Quần chúng</option>
+                        </select>
+                        <input
+                          value={editingSpeakerId}
+                          onChange={(e) => setEditingSpeakerId(e.target.value)}
+                          placeholder="speaker_id"
+                          className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200"
+                          title="Mã nhân vật (cùng giới tính khác id = khác giọng)"
+                        />
+                      </div>
+                      <textarea
+                        value={editingSpokenText}
+                        onChange={(e) => setEditingSpokenText(e.target.value)}
+                        placeholder="spoken_text (lời đọc TTS; có thể ngắn hơn bản dịch)"
+                        className="w-full bg-slate-950 border border-amber-700/60 rounded-lg p-2 text-[11px] text-amber-100 focus:outline-none"
+                        rows={2}
+                      />
                       <div className="flex items-center justify-end gap-1.5 ml-auto">
                         <button
                           type="button"
@@ -1028,9 +1110,65 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                     </div>
                   )}
 
+                  {/* Speaker / timing badges */}
+                  <div className="flex flex-wrap items-center gap-1 pt-1" onClick={(e) => e.stopPropagation()}>
+                    <select
+                      value={String((cue.style as any)?.speaker || 'unknown')}
+                      onChange={(e) => patchCueStyle(cue, { speaker: e.target.value })}
+                      className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[9px] text-slate-200"
+                      title="Giới tính"
+                    >
+                      <option value="unknown">?</option>
+                      <option value="male">Nam</option>
+                      <option value="female">Nữ</option>
+                    </select>
+                    <select
+                      value={String((cue.style as any)?.speaker_role || 'main')}
+                      onChange={(e) => patchCueStyle(cue, { speaker_role: e.target.value })}
+                      className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[9px] text-slate-200"
+                      title="Vai trò"
+                    >
+                      <option value="main">main</option>
+                      <option value="support">support</option>
+                      <option value="narrator">narrator</option>
+                      <option value="crowd">crowd</option>
+                    </select>
+                    <input
+                      defaultValue={String((cue.style as any)?.speaker_id || '')}
+                      key={`sid-${cue.cue_id}-${String((cue.style as any)?.speaker_id || '')}`}
+                      onBlur={(e) => patchCueStyle(cue, { speaker_id: e.target.value.trim() })}
+                      placeholder="id"
+                      className="w-16 bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[9px] text-slate-200"
+                      title="speaker_id"
+                    />
+                    <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-[9px] text-slate-300 font-mono">
+                      {(cue.style as any)?.speaker === 'female' ? 'Nữ' : (cue.style as any)?.speaker === 'male' ? 'Nam' : '?'}
+                      {(cue.style as any)?.speaker_id ? ` · ${(cue.style as any).speaker_id}` : ''}
+                      {(cue.style as any)?.speaker_role ? ` · ${(cue.style as any).speaker_role}` : ''}
+                    </span>
+                    {(cue.style as any)?.timing_warning ? (
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${(cue.style as any)?.timing_warning === 'hard' ? 'bg-rose-950 text-rose-300 border-rose-700' : 'bg-amber-950 text-amber-300 border-amber-700'}`}>
+                        {(cue.style as any)?.timing_warning === 'hard' ? 'Quá dài' : 'Đã rút gọn'}
+                      </span>
+                    ) : null}
+                    {(cue.style as any)?.spoken_text ? (
+                      <span className="px-1.5 py-0.5 rounded bg-indigo-950/70 border border-indigo-800 text-[9px] text-indigo-300">spoken_text</span>
+                    ) : null}
+                  </div>
+
                   {/* Thanh công cụ cho từng câu: Dịch lại AI, Lồng tiếng đơn, Nghe audio, Tách câu */}
                   <div className="flex items-center justify-between gap-1 pt-1.5 mt-1 border-t border-slate-800/80 flex-wrap">
                     <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => handleAdaptSpokenCue(cue, e)}
+                        disabled={adaptingSpoken}
+                        className="px-1.5 py-0.5 rounded bg-amber-950/50 hover:bg-amber-900/70 border border-amber-800 text-amber-200 text-[10px] flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                        title="Rút gọn spoken_text cho khớp thời lượng"
+                      >
+                        <Sparkles className={`w-2.5 h-2.5 ${adaptingSpoken ? 'animate-pulse' : ''}`} />
+                        <span>Rút gọn</span>
+                      </button>
                       <button
                         type="button"
                         onClick={(e) => {

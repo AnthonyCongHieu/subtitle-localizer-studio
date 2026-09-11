@@ -19,7 +19,14 @@ import {
   Square,
   CheckCircle2,
 } from 'lucide-react';
-import { apiClient } from '../../api/client';
+import { apiClient } from '../../api/client'
+import {
+  ORIGINAL_AUDIO_VOLUME_KEY,
+  VOICEOVER_VOLUME_KEY,
+  readStoredVolumePercent,
+  toAudioGain,
+  writeStoredVolumePercent,
+} from '../../utils/audioVolume';
 import { SubtitleCueV1 } from '../../types/api';
 
 interface BottomTimelineProps {
@@ -66,16 +73,7 @@ interface BottomTimelineProps {
   dubbingMode?: 'single' | 'multi';
 }
 
-/**
- * Chuyển đổi % âm lượng sang tỉ lệ gain âm thanh thực tế (0.0 -> 1.0).
- * Sử dụng tỉ lệ tuyến tính trực tiếp để đồng bộ 1:1 với trình phát video và các NLE chuẩn,
- * giúp người dùng tăng/giảm âm lượng một cách chính xác, tự nhiên, không bị sụt âm đột ngột.
- */
-export const toAudioGain = (volumePercent: number): number => {
-  if (volumePercent <= 0) return 0;
-  if (volumePercent >= 100) return 1;
-  return Math.min(1, Math.max(0, volumePercent / 100));
-};
+export { toAudioGain } from '../../utils/audioVolume';
 
 const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
   videoUrl,
@@ -160,45 +158,29 @@ const BottomTimelineComponent: React.FC<BottomTimelineProps> = ({
 
   const [isVoiceoverLocked, setIsVoiceoverLocked] = useState<boolean>(false);
   const [isVoiceoverMuted, setIsVoiceoverMuted] = useState<boolean>(false);
-  const [internalVoiceoverVolume, setInternalVoiceoverVolume] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem('studio_voiceover_volume');
-      return saved !== null ? Math.max(0, Math.min(100, parseInt(saved, 10))) : 100;
-    } catch {
-      return 100;
-    }
-  });
+  const [internalVoiceoverVolume, setInternalVoiceoverVolume] = useState<number>(() =>
+    readStoredVolumePercent(VOICEOVER_VOLUME_KEY, 100)
+  );
   const voiceoverVolume = externalVoiceoverVolume !== undefined ? externalVoiceoverVolume : internalVoiceoverVolume;
   const setVoiceoverVolume = onVoiceoverVolumeChange || setInternalVoiceoverVolume;
 
   const handleVoiceoverVolumeChange = (newVol: number) => {
-    const clamped = Math.max(0, Math.min(100, Math.round(newVol)));
+    const clamped = writeStoredVolumePercent(VOICEOVER_VOLUME_KEY, newVol);
     setVoiceoverVolume(clamped);
-    try {
-      localStorage.setItem('studio_voiceover_volume', String(clamped));
-    } catch {}
   };
 
   const [isAudioLocked, setIsAudioLocked] = useState<boolean>(false);
   const [internalAudioMuted, setInternalAudioMuted] = useState<boolean>(false);
   const isAudioMuted = externalAudioMuted !== undefined ? externalAudioMuted : internalAudioMuted;
-  const [internalOriginalVolume, setInternalOriginalVolume] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem('studio_original_audio_volume');
-      return saved !== null ? Math.max(0, Math.min(100, parseInt(saved, 10))) : 100;
-    } catch {
-      return 100;
-    }
-  });
+  const [internalOriginalVolume, setInternalOriginalVolume] = useState<number>(() =>
+    readStoredVolumePercent(ORIGINAL_AUDIO_VOLUME_KEY, 100)
+  );
   const originalAudioVolume = externalOriginalVolume !== undefined ? externalOriginalVolume : internalOriginalVolume;
   const setOriginalAudioVolume = onOriginalAudioVolumeChange || setInternalOriginalVolume;
 
   const handleOriginalAudioVolumeChange = (newVol: number) => {
-    const clamped = Math.max(0, Math.min(100, Math.round(newVol)));
+    const clamped = writeStoredVolumePercent(ORIGINAL_AUDIO_VOLUME_KEY, newVol);
     setOriginalAudioVolume(clamped);
-    try {
-      localStorage.setItem('studio_original_audio_volume', String(clamped));
-    } catch {}
   };
 
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);

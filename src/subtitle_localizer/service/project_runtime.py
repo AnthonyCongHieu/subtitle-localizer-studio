@@ -24,7 +24,11 @@ async def run_project_dubbing(repository: Any, project_id: str, output_root: Pat
     provider = options.get("provider") or getattr(settings.dubbing, "provider", "edge")
     voice = options.get("voice") or settings.dubbing.voice
     rate = options.get("rate") or settings.dubbing.rate
-    mode = options.get("mode") or getattr(settings.dubbing, "mode", "single")
+    from subtitle_localizer.dubbing.tts import normalize_dubbing_mode
+    mode = normalize_dubbing_mode(options.get("mode") or getattr(settings.dubbing, "mode", "single"))
+    auto_detect_speakers = options.get("auto_detect_speakers")
+    if auto_detect_speakers is None:
+        auto_detect_speakers = bool(getattr(settings.dubbing, "auto_detect_speakers", True))
     voice_male = options.get("voice_male") or getattr(settings.dubbing, "voice_male", "vi-VN-NamMinhNeural")
     voice_female = options.get("voice_female") or getattr(settings.dubbing, "voice_female", "vi-VN-HoaiMyNeural")
     prompt_style = options.get("prompt_style") or getattr(settings.dubbing, "gemini_prompt_style", "dramatic")
@@ -45,6 +49,7 @@ async def run_project_dubbing(repository: Any, project_id: str, output_root: Pat
         cues=cues, voice=voice, output_path=output, total_duration=duration, rate=rate,
         mode=mode, voice_male=voice_male, voice_female=voice_female, provider=provider,
         prompt_style=prompt_style, export_cues_dir=cues_dir,
+        auto_detect_speakers=bool(auto_detect_speakers),
     )
     if (not output.exists() or output.stat().st_size == 0) and generated:
         candidate = Path(generated)

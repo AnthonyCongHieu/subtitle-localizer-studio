@@ -453,6 +453,22 @@ export class StudioApiClient {
     return res.json();
   }
 
+  async adaptSpoken(
+    projectId: string,
+    options?: { cue_id?: string; mode?: string; rate?: string; force?: boolean }
+  ): Promise<{ status: string; adapted_count: number; warned_count: number; required_voices: number; cues_count: number; mode: string }> {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/dubbing/adapt-spoken`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(options || {}),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(payload?.detail || 'Lỗi khi rút gọn lời đọc theo thời lượng');
+    }
+    return res.json();
+  }
+
   getVoiceoverAudioUrl(projectId: string): string {
     return `${API_BASE}/projects/${projectId}/audio/voiceover`;
   }

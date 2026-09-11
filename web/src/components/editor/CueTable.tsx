@@ -344,6 +344,66 @@ export const CueTable: React.FC<CueTableProps> = ({
               />
             </div>
 
+            <div className="md:col-span-12 grid grid-cols-1 md:grid-cols-12 gap-2 pt-1 border-t border-zinc-800/50">
+              <div className="md:col-span-2">
+                <label className="text-[10px] text-zinc-500">Giới tính</label>
+                <select
+                  value={String((activeSelectedCue.style as any)?.speaker || 'unknown')}
+                  onChange={(e) => onUpdateCue({ ...activeSelectedCue, style: { ...(activeSelectedCue.style || {}), speaker: e.target.value } })}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-zinc-100"
+                >
+                  <option value="unknown">Unknown</option>
+                  <option value="male">Nam</option>
+                  <option value="female">Nữ</option>
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-[10px] text-zinc-500">Vai (speaker_role)</label>
+                <select
+                  value={String((activeSelectedCue.style as any)?.speaker_role || 'main')}
+                  onChange={(e) => onUpdateCue({ ...activeSelectedCue, style: { ...(activeSelectedCue.style || {}), speaker_role: e.target.value } })}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-zinc-100"
+                >
+                  <option value="main">main</option>
+                  <option value="support">support</option>
+                  <option value="narrator">narrator</option>
+                  <option value="crowd">crowd</option>
+                </select>
+              </div>
+              <div className="md:col-span-3">
+                <label className="text-[10px] text-zinc-500">speaker_id</label>
+                <input
+                  value={String((activeSelectedCue.style as any)?.speaker_id || '')}
+                  onChange={(e) => onUpdateCue({ ...activeSelectedCue, style: { ...(activeSelectedCue.style || {}), speaker_id: e.target.value } })}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-zinc-100 font-mono"
+                  placeholder="nam_1 / nu_chinh"
+                />
+              </div>
+              <div className="md:col-span-5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] text-zinc-500">spoken_text (lời TTS)</label>
+                  {(activeSelectedCue.style as any)?.timing_warning ? (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${(activeSelectedCue.style as any)?.timing_warning === 'hard' ? 'text-rose-300 border-rose-700 bg-rose-950/50' : 'text-amber-300 border-amber-700 bg-amber-950/40'}`}>
+                      timing_warning: {(activeSelectedCue.style as any)?.timing_warning}
+                    </span>
+                  ) : null}
+                </div>
+                <textarea
+                  value={String((activeSelectedCue.style as any)?.spoken_text || '')}
+                  onChange={(e) => {
+                    const spoken_text = e.target.value;
+                    const style = { ...(activeSelectedCue.style || {}) } as Record<string, any>;
+                    if (spoken_text.trim()) style.spoken_text = spoken_text;
+                    else delete style.spoken_text;
+                    onUpdateCue({ ...activeSelectedCue, style });
+                  }}
+                  rows={2}
+                  className="w-full bg-zinc-900 border border-amber-700/50 rounded-lg px-2 py-1.5 text-xs text-amber-100"
+                  placeholder="Để trống = dùng bản dịch; điền để tách lời đọc khỏi phụ đề"
+                />
+              </div>
+            </div>
+
             {/* Original OCR Text (4 cols) */}
             <div className="md:col-span-4 flex flex-col space-y-1.5">
               <div className="flex items-center justify-between text-xs text-zinc-400 font-medium">
