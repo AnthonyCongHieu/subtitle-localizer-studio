@@ -92,6 +92,29 @@ def _capitalize_first(s: str) -> str:
         return ""
     return s[0].upper() + s[1:]
 
+
+def _normalize_ellipsis(text: str) -> str:
+    """Collapse repeated ellipsis markers emitted by translation models.
+
+    Models commonly mix three ASCII dots and the single Unicode ellipsis, or
+    repeat the marker with whitespace (``... ...``).  Keep one canonical
+    ``...`` so the subtitle renderer does not show a run of duplicate pauses.
+    """
+    value = str(text or "")
+    value = re.sub(r"(?:\s*(?:\.{3,}|…)){2,}", "...", value)
+    value = re.sub(r"…", "...", value)
+    return value
+
+
+def _apply_source_punctuation_policy(text: str, source_text: str) -> str:
+    """Prevent the model from inventing ellipses absent from the OCR source."""
+    value = _normalize_ellipsis(text)
+    source_has_ellipsis = bool(re.search(r"(?:\.{3,}|…)", source_text or ""))
+    if not source_has_ellipsis:
+        value = re.sub(r"\s*\.\.\.\s*", " ", value)
+        value = re.sub(r"[ \t]{2,}", " ", value).strip()
+    return value
+
 _GENDER_PREFIX = re.compile(
     r"^[\[\(\uff08\u3010]\s*(Nam|Nữ|Nu|Male|Female|Man|Woman)(\d+)?\s*[\]\)\uff09\u3011][:\s]*",
     re.IGNORECASE,
@@ -190,7 +213,7 @@ def _polish_addressing(
 
 def _refine_subtitles(text: str, source_text: str, *, preserve_existing: bool = False) -> str:
     """Tinh chỉnh câu dịch dựa trên từ điển ngữ cảnh và sửa các lỗi dịch thô."""
-    result = text.strip()
+    result = _apply_source_punctuation_policy(text.strip(), source_text)
     
     # Sửa các lỗi dịch máy ngớ ngẩn thường gặp trong phụ đề
     lower_res = result.lower()
@@ -587,7 +610,9 @@ class RealTranslationProvider(TranslationProvider):
                 continue
 
             text_end = markers[position + 1].start() if position + 1 < len(markers) else len(text_content)
-            raw_item = text_content[marker.end() : text_end].strip().rstrip(".")
+            # Keep terminal punctuation; _refine_subtitles canonicalizes
+            # repeated ellipsis markers without dropping a meaningful pause.
+            raw_item = text_content[marker.end() : text_end].strip()
             gender, spoken, spk_meta = _split_speaker_annotation(raw_item)
             cleaned = _capitalize_first(spoken)
             if not cleaned:

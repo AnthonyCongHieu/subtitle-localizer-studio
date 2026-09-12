@@ -47,6 +47,22 @@ class TranslationContextFidelityTests(unittest.TestCase):
             "Đã sớm vắt kiệt cơ thể đến mức rơi vào chế độ treo máy",
         )
 
+    def test_refine_collapses_repeated_ellipsis_markers(self) -> None:
+        from subtitle_localizer.translation.real import _refine_subtitles
+
+        self.assertEqual(
+            _refine_subtitles("Chờ tôi... ...……", "等我..."),
+            "Chờ tôi...",
+        )
+
+    def test_refine_removes_model_ellipsis_when_ocr_has_none(self) -> None:
+        from subtitle_localizer.translation.real import _refine_subtitles
+
+        self.assertEqual(
+            _refine_subtitles("...mà vô tình chữa khỏi bệnh...", "居然治好了隐疾"),
+            "Mà vô tình chữa khỏi bệnh",
+        )
+
     def test_addressing_polish_is_mode_driven_not_hardcoded_cast(self) -> None:
         from subtitle_localizer.translation.real import _polish_addressing
 
@@ -132,6 +148,23 @@ class TranslationContextFidelityTests(unittest.TestCase):
         self.assertEqual(cues[0].style.get("speaker"), "female")
         self.assertEqual(cues[1].translated_text, "Lỗi là của tôi")
         self.assertEqual(cues[1].style.get("speaker"), "male")
+
+    def test_apply_model_response_keeps_one_terminal_ellipsis(self) -> None:
+        from subtitle_localizer.translation.real import RealTranslationProvider
+
+        cues = [
+            SubtitleCueV1(cue_id="c1", start_pts=0.0, end_pts=1.0, source_text="等我"),
+            SubtitleCueV1(cue_id="c2", start_pts=1.0, end_pts=2.0, source_text="我不知道"),
+        ]
+        updated = RealTranslationProvider()._apply_model_response(
+            cues,
+            [0, 1],
+            "[1] [Nữ] Chờ tôi... ...……\n[2] [Nam] Tôi không biết......",
+        )
+
+        self.assertEqual(updated, 2)
+        self.assertEqual(cues[0].translated_text, "Chờ tôi")
+        self.assertEqual(cues[1].translated_text, "Tôi không biết")
 
     def test_rejects_english_drift_when_target_is_vietnamese(self) -> None:
         from subtitle_localizer.translation.real import RealTranslationProvider

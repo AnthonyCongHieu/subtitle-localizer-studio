@@ -556,7 +556,25 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
 
         signal.signal(signal.SIGINT, _cleanup)
         try:
-            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", log_config=log_config)
+            # Use Uvicorn's import-string reloader in dev mode so backend
+            # edits restart the API process automatically.  Passing the
+            # already-created app object would silently disable reload.
+            src_path = str(SRC_DIR)
+            current_pythonpath = os.environ.get("PYTHONPATH", "")
+            if src_path not in current_pythonpath.split(os.pathsep):
+                os.environ["PYTHONPATH"] = os.pathsep.join(
+                    part for part in (src_path, current_pythonpath) if part
+                )
+            uvicorn.run(
+                "subtitle_localizer.service.server:create_app",
+                factory=True,
+                reload=True,
+                reload_dirs=[str(SRC_DIR)],
+                host="0.0.0.0",
+                port=port,
+                log_level="info",
+                log_config=log_config,
+            )
         finally:
             try:
                 vite_proc.terminate()
