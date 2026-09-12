@@ -1344,11 +1344,15 @@ export class StudioApiClient {
     return res.json();
   }
 
-  async retryFullPipelineWorkflow(workflowId: string, stage?: string): Promise<{ status: string; workflow_id: string; stage?: string }> {
+  async retryFullPipelineWorkflow(
+    workflowId: string,
+    stage?: string,
+    manual_roi?: { x: number; y: number; width: number; height: number },
+  ): Promise<{ status: string; workflow_id: string; stage?: string }> {
     const res = await fetch(`${API_BASE}/workflows/full-pipeline/${encodeURIComponent(workflowId)}/retry`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ stage }),
+      body: JSON.stringify({ stage, manual_roi }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Không thể thử lại workflow' }));
@@ -1938,6 +1942,8 @@ export interface FullPipelineSettings {
   proxy?: string;
   cookie_source?: string;
   idempotency_key?: string;
+  pause_after_download?: boolean;
+  manual_roi?: { x: number; y: number; width: number; height: number };
 }
 
 export interface FullPipelineCreatePayload extends FullPipelineSettings {

@@ -19,6 +19,7 @@ import {
   Layers,
   Sliders,
   History,
+  Scan,
 } from 'lucide-react';
 import {
   apiClient,
@@ -28,6 +29,26 @@ import {
 } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
 import { appLogger } from '../common/GlobalActivityLogger';
+
+export const ROI_PRESETS: Record<string, { label: string; roi?: { x: number; y: number; width: number; height: number } }> = {
+  auto: { label: 'Tự động phát hiện thông minh (AI Auto-detect)' },
+  bottom_review: {
+    label: 'Dải đáy Review Phim (X: 8%, Y: 82%, W: 84%, H: 12%)',
+    roi: { x: 0.08, y: 0.82, width: 0.84, height: 0.12 },
+  },
+  bottom_1line: {
+    label: 'Phụ đề 1 dòng sát đáy (X: 12%, Y: 85%, W: 76%, H: 9%)',
+    roi: { x: 0.12, y: 0.85, width: 0.76, height: 0.09 },
+  },
+  bottom_2line: {
+    label: 'Phụ đề 2 dòng đáy (X: 10%, Y: 80%, W: 80%, H: 15%)',
+    roi: { x: 0.10, y: 0.80, width: 0.80, height: 0.15 },
+  },
+  top: {
+    label: 'Phụ đề đỉnh màn hình (X: 12%, Y: 5%, W: 76%, H: 10%)',
+    roi: { x: 0.12, y: 0.05, width: 0.76, height: 0.10 },
+  },
+};
 
 export interface FullPipelineTabProps {
   onOpenProject?: (project: ProjectManifestV1) => void;
@@ -57,6 +78,8 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
   const [maskMode, setMaskMode] = useState('blur');
   const [exportSrtAss, setExportSrtAss] = useState(true);
   const [outputDir, setOutputDir] = useState('');
+  const [pauseAfterDownload, setPauseAfterDownload] = useState(false);
+  const [manualRoiPreset, setManualRoiPreset] = useState<string>('auto');
 
   // 3. Active Workflow & Polling State
   const [activeWorkflow, setActiveWorkflow] = useState<FullPipelineWorkflow | null>(null);
@@ -145,6 +168,8 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
         mask_mode: maskMode,
         export_srt_ass: exportSrtAss,
         output_dir: outputDir.trim() || undefined,
+        pause_after_download: pauseAfterDownload,
+        manual_roi: ROI_PRESETS[manualRoiPreset]?.roi,
       };
 
       const wf = await apiClient.createFullPipelineWorkflow(payload);
@@ -177,12 +202,13 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
     }
   };
 
-  // Retry Workflow
-  const handleRetryWorkflow = async (stage?: string) => {
+  // Retry / Resume Workflow
+  const handleRetryWorkflow = async (stage?: string, customRoi?: { x: number; y: number; width: number; height: number }) => {
     if (!activeWorkflow) return;
     setIsRetrying(true);
     try {
-      await apiClient.retryFullPipelineWorkflow(activeWorkflow.workflow_id, stage);
+      const roi = customRoi || ROI_PRESETS[manualRoiPreset]?.roi;
+      await apiClient.retryFullPipelineWorkflow(activeWorkflow.workflow_id, stage, roi);
       const updated = await apiClient.getFullPipelineWorkflow(activeWorkflow.workflow_id);
       setActiveWorkflow(updated);
       fetchHistory();
@@ -221,13 +247,6 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
   useEffect(() => {
     if (!activeWorkflow) return;
     const isTerminal = ['completed', 'failed', 'cancelled'].includes(activeWorkflow.state);
-    if (isTerminal && activeWorkflow.state === 'completed' && activeWorkflow.project_id) {
-      if (autoOpenedRef.current !== activeWorkflow.workflow_id) {
-        autoOpenedRef.current = activeWorkflow.workflow_id;
-        handleOpenEditor(activeWorkflow.project_id);
-      }
-      return;
-    }
     if (isTerminal) return;
 
     pollIntervalRef.current = setInterval(async () => {
@@ -237,10 +256,7 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
         if (updated.state === 'completed' && updated.project_id) {
           clearInterval(pollIntervalRef.current);
           fetchHistory();
-          if (autoOpenedRef.current !== updated.workflow_id) {
-            autoOpenedRef.current = updated.workflow_id;
-            handleOpenEditor(updated.project_id);
-          }
+          appLogger.success(`Quy trình đã hoàn tất! Bấm 'Mở Studio Editor' để bắt đầu chỉnh sửa.`, 'Full Pipeline');
         } else if (['failed', 'cancelled', 'needs_review'].includes(updated.state)) {
           clearInterval(pollIntervalRef.current);
           fetchHistory();
@@ -253,7 +269,7 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
-  }, [activeWorkflow, handleOpenEditor, fetchHistory]);
+  }, [activeWorkflow, fetchHistory]);
 
   const STAGE_LABELS: Record<string, { label: string; icon: any }> = {
     downloading: { label: 'Tải video', icon: Film },
@@ -335,7 +351,7 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
               id="pipeline-analyze-button"
               type="button"
               onClick={handleAnalyze}
-              disabled={isAnalyzing || !url.trim()}
+              disabled={isAnalyzing}
               className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition"
             >
               {isAnalyzing ? (
@@ -353,7 +369,10 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
           </div>
 
           {analyzeError && (
-            <div className="mt-3 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl flex items-center gap-2.5 text-xs text-rose-300">
+            <div
+              data-testid="pipeline-analyze-error"
+              className="mt-3 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl flex items-center gap-2.5 text-xs text-rose-300"
+            >
               <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
               <span>{analyzeError}</span>
             </div>
@@ -388,6 +407,8 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
               {/* Status Badge & Actions */}
               <div className="flex items-center gap-2.5">
                 <span
+                  data-testid="pipeline-workflow-state-badge"
+                  data-state={activeWorkflow.state}
                   className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
                     activeWorkflow.state === 'completed'
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
@@ -416,6 +437,8 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
 
                 {activeWorkflow.state === 'completed' && activeWorkflow.project_id && (
                   <button
+                    id="pipeline-open-editor-button"
+                    data-testid="pipeline-open-editor-button"
                     type="button"
                     onClick={() => handleOpenEditor(activeWorkflow.project_id!)}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-emerald-600/30 flex items-center gap-1.5 transition"
@@ -436,8 +459,22 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
                   </button>
                 )}
 
+                {activeWorkflow.state === 'needs_review' && (
+                  <button
+                    id="pipeline-approve-continue-btn"
+                    type="button"
+                    onClick={() => handleRetryWorkflow('detecting_roi')}
+                    disabled={isRetrying}
+                    className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/30 flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    {isRetrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                    <span>Duyệt & Chạy Tiếp</span>
+                  </button>
+                )}
+
                 {['failed', 'needs_review'].includes(activeWorkflow.state) && (
                   <button
+                    id="pipeline-retry-button"
                     type="button"
                     onClick={() => handleRetryWorkflow()}
                     disabled={isRetrying}
@@ -450,6 +487,7 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
 
                 {!['completed', 'failed', 'cancelled'].includes(activeWorkflow.state) && (
                   <button
+                    id="pipeline-cancel-button"
                     type="button"
                     onClick={handleCancelWorkflow}
                     disabled={isCancelling}
@@ -533,6 +571,56 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
                 );
               })}
             </div>
+
+            {/* Needs Review Interactive Action Banner */}
+            {activeWorkflow.state === 'needs_review' && (
+              <div className="mt-4 p-4 bg-gradient-to-r from-amber-950/60 to-slate-900 border border-amber-500/40 rounded-2xl shadow-lg">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm font-bold text-amber-300">
+                      <Clock className="w-4 h-4 text-amber-400 animate-pulse" />
+                      <span>Đang tạm dừng chờ duyệt thông số & vùng quét OCR</span>
+                    </div>
+                    <p className="text-xs text-slate-300">
+                      Video đã tải về hoàn tất an toàn. Bạn có thể chọn trước vùng OCR bên dưới hoặc bấm mở Studio Editor để căn chỉnh trực quan trên khung hình video.
+                    </p>
+                    <div className="pt-2 flex flex-wrap items-center gap-3">
+                      <span className="text-xs text-slate-400 font-medium">Vùng quét OCR áp dụng:</span>
+                      <select
+                        value={manualRoiPreset}
+                        onChange={(e) => setManualRoiPreset(e.target.value)}
+                        className="bg-slate-900 border border-amber-500/40 text-xs text-white rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-amber-400"
+                      >
+                        {Object.entries(ROI_PRESETS).map(([k, v]) => (
+                          <option key={k} value={k}>{v.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {activeWorkflow.project_id && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditor(activeWorkflow.project_id!)}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-200 text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Mở Studio Editor</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRetryWorkflow('detecting_roi')}
+                      disabled={isRetrying}
+                      className="px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 text-white text-xs font-bold rounded-xl shadow-md flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      {isRetrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      <span>Duyệt & Chạy Tiếp</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Warnings Alert Banner */}
             {activeWorkflow.warnings && activeWorkflow.warnings.length > 0 && (
@@ -842,6 +930,44 @@ export const FullPipelineTab: React.FC<FullPipelineTabProps> = ({
                     />
                     <span>Xuất kèm file phụ đề rời (.SRT / .ASS)</span>
                   </label>
+                </div>
+
+                {/* 5. Kiểm Soát Duyệt & Vùng Quét OCR */}
+                <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80 space-y-3 sm:col-span-2">
+                  <h5 className="font-bold text-indigo-300 uppercase text-[10px] tracking-wider flex items-center gap-1.5">
+                    <Scan className="w-3.5 h-3.5" />
+                    <span>Kiểm Soát Duyệt & Vùng Quét OCR (Tự Động / Thủ Công)</span>
+                  </h5>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="flex items-start gap-2.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={pauseAfterDownload}
+                          onChange={(e) => setPauseAfterDownload(e.target.checked)}
+                          className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0 mt-0.5"
+                        />
+                        <div>
+                          <span className="font-semibold text-slate-200">Tạm dừng sau khi tải để duyệt thông số</span>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Sau khi tải xong, hệ thống sẽ dừng lại cho phép kiểm tra độ phân giải, âm thanh và chọn trước vùng OCR ở preview/editor rồi mới chạy tiếp.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 mb-1 font-medium">Thiết lập vùng quét phụ đề (ROI):</label>
+                      <select
+                        value={manualRoiPreset}
+                        onChange={(e) => setManualRoiPreset(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white text-xs focus:ring-1 focus:ring-indigo-500"
+                      >
+                        {Object.entries(ROI_PRESETS).map(([k, v]) => (
+                          <option key={k} value={k}>{v.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
 

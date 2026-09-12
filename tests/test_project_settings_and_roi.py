@@ -243,6 +243,11 @@ class ProjectSettingsAndRoiTest(unittest.TestCase):
             rendered_dummy.write_bytes(b"DUMMY_MP4")
             mock_render.return_value = rendered_dummy
 
+            def _fake_mix(**kw):
+                from pathlib import Path
+                Path(kw["output_path"]).write_bytes(b"DUMMY_MIXED_MP4")
+            mock_mix.side_effect = _fake_mix
+
             res = client.post(f"/api/v1/projects/{proj_id}/export/mp4", headers=headers, json={})
             self.assertEqual(res.status_code, 200)
             self.assertTrue(mock_mix.called)

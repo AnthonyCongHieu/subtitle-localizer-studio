@@ -422,3 +422,110 @@ def get_global_gemini_pool() -> GeminiKeyPool:
 
             _GLOBAL_GEMINI_POOL = pool
         return _GLOBAL_GEMINI_POOL
+
+
+class GroqKeyPool(GeminiKeyPool):
+    """
+    Bộ quản lý và điều phối xoay tua Pool API Keys Groq.
+    """
+
+    def check_key_health(self, key: str, timeout: float = 6.0) -> Dict[str, Any]:
+        """Kiểm tra thực tế trạng thái hoạt động của key đối với Groq API."""
+        import urllib.request
+        import urllib.error
+
+        t0 = time.time()
+        result: Dict[str, Any] = {
+            "masked_key": mask_api_key(key),
+            "last_checked": time.time(),
+        }
+        url = "https://api.groq.com/openai/v1/models"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "User-Agent": "SubtitleLocalizer/1.0",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                latency_ms = round((time.time() - t0) * 1000, 1)
+                result.update({
+                    "status": "active",
+                    "status_label": "Khả dụng",
+                    "latency_ms": latency_ms,
+                    "message": f"Hoạt động tốt ({latency_ms}ms)",
+                })
+                with self._lock:
+                    self._cooldowns.pop(key, None)
+                    self._reasons.pop(key, None)
+                    self._health[key] = result
+                return result
+        except urllib.error.HTTPError as err:
+            latency_ms = round((time.time() - t0) * 1000, 1)
+            if err.code == 429:
+                self.mark_rate_limited(key, cooldown_seconds=60.0, reason="rate_limit_exceeded")
+                result.update({
+                    "status": "cooldown",
+                    "status_label": "Tạm nghỉ 429",
+                    "latency_ms": latency_ms,
+                    "message": "Nghẽn Rate Limit Groq (60s)",
+                })
+            elif err.code in (401, 403):
+                self.mark_rate_limited(key, cooldown_seconds=86400.0 * 365, reason="invalid_key")
+                result.update({
+                    "status": "invalid",
+                    "status_label": "Không hợp lệ",
+                    "latency_ms": latency_ms,
+                    "message": f"Lỗi xác thực HTTP {err.code} (Key sai/bị khóa)",
+                })
+            else:
+                result.update({
+                    "status": "error",
+                    "status_label": f"HTTP {err.code}",
+                    "latency_ms": latency_ms,
+                    "message": f"HTTP {err.code}: {err.reason}",
+                })
+            with self._lock:
+                self._health[key] = result
+            return result
+        except Exception as e:
+            latency_ms = round((time.time() - t0) * 1000, 1)
+            result.update({
+                "status": "network_error",
+                "status_label": "Lỗi mạng",
+                "latency_ms": latency_ms,
+                "message": str(e),
+            })
+            with self._lock:
+                self._health[key] = result
+            return result
+
+
+_GLOBAL_GROQ_POOL: Optional[GroqKeyPool] = None
+_GLOBAL_GROQ_POOL_LOCK = threading.Lock()
+
+
+def get_global_groq_pool() -> GroqKeyPool:
+    """Lấy instance GroqKeyPool toàn cục, tự động nạp từ groq_keys_pool.json hoặc biến môi trường."""
+    global _GLOBAL_GROQ_POOL
+    with _GLOBAL_GROQ_POOL_LOCK:
+        if _GLOBAL_GROQ_POOL is None:
+            pool = GroqKeyPool()
+            candidate_files = [
+                Path("groq_keys_pool.json"),
+                Path(__file__).resolve().parents[3] / "groq_keys_pool.json",
+                Path.cwd() / "groq_keys_pool.json",
+                Path.cwd() / "uploads" / "groq_keys_pool.json",
+            ]
+            for cf in candidate_files:
+                if cf.exists() and pool.load_from_file(cf):
+                    logger.info(f"Đã nạp {pool.total_keys} Groq keys từ {cf}")
+                    break
+
+            env_key = os.environ.get("GROQ_API_KEY", "").strip()
+            if env_key:
+                with pool._lock:
+                    if env_key not in pool._keys:
+                        pool._keys.insert(0, env_key)
+
+            _GLOBAL_GROQ_POOL = pool
+        return _GLOBAL_GROQ_POOL

@@ -500,10 +500,13 @@ class FullPipelineCreateRequest(BaseModel):
     proxy: Optional[str] = None
     cookie_source: Optional[str] = "none"
     idempotency_key: Optional[str] = None
+    pause_after_download: Optional[bool] = False
+    manual_roi: Optional[Dict[str, float]] = None
 
 
 class FullPipelineRetryRequest(BaseModel):
     stage: Optional[str] = None
+    manual_roi: Optional[Dict[str, float]] = None
 
 
 def create_app(
@@ -564,6 +567,7 @@ def create_app(
     db.migrate()
     repository = repo or ProjectRepository(db)
     try:
+        repository.reconcile_orphaned_stage_runs()
         repository.reconcile_active_workflows()
     except Exception as reconcile_wf_exc:
         logger.warning("Không thể dọn dẹp workflow kẹt: %s", reconcile_wf_exc)
@@ -1284,6 +1288,8 @@ def create_app(
             output_dir=req.output_dir,
             proxy=req.proxy,
             cookie_source=req.cookie_source or "none",
+            pause_after_download=bool(req.pause_after_download) if req.pause_after_download is not None else False,
+            manual_roi=req.manual_roi,
         )
 
         wf_id = f"wf-{uuid.uuid4().hex[:10]}"
@@ -1337,7 +1343,9 @@ def create_app(
         authorization: Optional[str] = Header(None),
     ) -> Dict[str, Any]:
         verify_auth(authorization)
-        success = full_pipeline_orchestrator.retry_workflow(workflow_id, from_stage=req.stage)
+        success = full_pipeline_orchestrator.retry_workflow(
+            workflow_id, from_stage=req.stage, manual_roi=req.manual_roi
+        )
         if not success:
             raise HTTPException(status_code=404, detail="Workflow not found")
         return {"status": "retrying", "workflow_id": workflow_id, "stage": req.stage}
@@ -2078,8 +2086,11 @@ def create_app(
         )
         translator.load()
         try:
-            translated_cues = translator.translate_cues(
-                cues, source_lang=manifest.source_language, target_lang=manifest.target_language
+            translated_cues = await asyncio.to_thread(
+                translator.translate_cues,
+                cues,
+                source_lang=manifest.source_language,
+                target_lang=manifest.target_language,
             )
             translated_cues = normalize_sequential_cues(translated_cues)
             repository.save_cues(project_id, translated_cues)
@@ -2094,6 +2105,7 @@ def create_app(
             repository.save_stage_run(project_id, StageRunV1(stage_name="translation", status="failed", metrics={"label": "Dịch thất bại"}, errors=[str(error)], end_time=time.time()))
             raise
         finally:
+            active_dubbing_tasks.pop(project_id, None)
             translator.unload()
 
     def _clean_project_voice_artifacts(project_id: str) -> int:
@@ -2357,8 +2369,7 @@ def create_app(
 
         cues = repository.get_cues(project_id)
         if not cues:
-            if request_task is not None:
-                active_dubbing_tasks.pop(project_id, None)
+            active_dubbing_tasks.pop(project_id, None)
             raise HTTPException(status_code=400, detail="Dự án chưa có phụ đề để lồng tiếng")
 
         settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
@@ -3049,6 +3060,57 @@ def create_app(
         pool.save_to_file("gemini_keys_pool.json")
         return {"status": "success", "pool_status": pool.get_status()}
 
+    @app.get("/api/v1/settings/groq-pool")
+    async def get_groq_pool_status(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+        """Lấy thông tin trạng thái xoay tua của Groq Key Pool."""
+        verify_auth(authorization)
+        from subtitle_localizer.translation.key_pool import get_global_groq_pool
+        pool = get_global_groq_pool()
+        return pool.get_status()
+
+    @app.post("/api/v1/settings/groq-pool")
+    async def update_groq_pool(
+        req: GeminiPoolRequest,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Cập nhật và lưu danh sách Groq API Keys vào Pool xoay tua."""
+        verify_auth(authorization)
+        from subtitle_localizer.translation.key_pool import get_global_groq_pool
+        pool = get_global_groq_pool()
+        pool.load_keys(req.keys)
+        pool.save_to_file("groq_keys_pool.json")
+        return {"status": "success", "pool_status": pool.get_status()}
+
+    @app.post("/api/v1/settings/groq-pool/verify")
+    async def verify_groq_pool(
+        req: Optional[GeminiVerifyRequest] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Kiểm tra thực tế trạng thái hoạt động của keys trong Groq pool."""
+        verify_auth(authorization)
+        from subtitle_localizer.translation.key_pool import get_global_groq_pool
+        pool = get_global_groq_pool()
+        if req and req.index is not None:
+            res = pool.verify_key_by_index(req.index)
+            return {"status": "success", "result": res, "pool_status": pool.get_status()}
+        pool.verify_all_keys()
+        return {"status": "success", "pool_status": pool.get_status()}
+
+    @app.delete("/api/v1/settings/groq-pool/key/{index}")
+    async def delete_groq_key(
+        index: int,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Xóa một Groq key khỏi Pool theo số thứ tự (1-based index)."""
+        verify_auth(authorization)
+        from subtitle_localizer.translation.key_pool import get_global_groq_pool
+        pool = get_global_groq_pool()
+        ok = pool.remove_key_by_index(index)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Key index not found")
+        pool.save_to_file("groq_keys_pool.json")
+        return {"status": "success", "pool_status": pool.get_status()}
+
     @app.get("/api/v1/settings/pipeline")
     async def get_pipeline_settings_endpoint(
         authorization: Optional[str] = Header(None),
@@ -3475,6 +3537,93 @@ def create_app(
             blur_strength=request.blur_strength,
         )
         return {"status": "completed", "output_path": rendered_path}
+
+    @app.post("/api/v1/projects/{project_id}/merge-export")
+    async def merge_project_exports_endpoint(
+        project_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        """Ghép các tập video đã xuất của dự án thành một video duy nhất."""
+        verify_auth(authorization)
+        manifest = repository.get_project(project_id)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        project_output = resolved_output_root / project_id
+        candidates = []
+        if project_output.exists():
+            candidates = sorted([
+                f for f in project_output.glob("*.mp4")
+                if not f.name.startswith((".", "merged_", "temp_", ".tmp_"))
+            ])
+
+        if len(candidates) <= 1:
+            all_projects = repository.list_projects()
+            title_prefix = manifest.title.split("-")[0].strip() if "-" in manifest.title else manifest.title.strip()
+            related_files = []
+            for p in all_projects:
+                if title_prefix and title_prefix.lower() in p.title.lower():
+                    p_out = resolved_output_root / p.project_id
+                    if p_out.exists():
+                        for f in p_out.glob("*.mp4"):
+                            if not f.name.startswith((".", "merged_", "temp_", ".tmp_")):
+                                related_files.append(f)
+            if len(related_files) > len(candidates):
+                candidates = sorted(list(set(related_files)))
+
+        if not candidates:
+            raise HTTPException(
+                status_code=400,
+                detail="Không tìm thấy file video MP4 đã xuất nào để ghép cho dự án này.",
+            )
+
+        merged_output = project_output / f"merged_{project_id}.mp4"
+        project_output.mkdir(parents=True, exist_ok=True)
+
+        if len(candidates) == 1:
+            import shutil
+            shutil.copyfile(candidates[0], merged_output)
+            return {
+                "status": "success",
+                "output_path": str(merged_output).replace("\\", "/"),
+                "item_count": 1,
+            }
+
+        import subprocess
+        concat_list_file = project_output / f".concat_{project_id}.txt"
+        try:
+            lines = [f"file '{str(c.resolve()).replace('\\', '/')}'" for c in candidates]
+            concat_list_file.write_text("\n".join(lines), encoding="utf-8")
+
+            cmd = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", str(concat_list_file),
+                "-c", "copy",
+                str(merged_output),
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if res.returncode != 0 or not merged_output.exists() or merged_output.stat().st_size == 0:
+                cmd_reencode = [
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                    "-i", str(concat_list_file),
+                    "-c:v", "libx264", "-c:a", "aac",
+                    str(merged_output),
+                ]
+                res2 = subprocess.run(cmd_reencode, capture_output=True, text=True, timeout=300)
+                if res2.returncode != 0 or not merged_output.exists() or merged_output.stat().st_size == 0:
+                    raise RuntimeError(f"FFmpeg ghép video thất bại: {res2.stderr[:300]}")
+        finally:
+            if concat_list_file.exists():
+                try:
+                    concat_list_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        return {
+            "status": "success",
+            "output_path": str(merged_output).replace("\\", "/"),
+            "item_count": len(candidates),
+        }
 
     @app.get("/api/v1/projects/{project_id}/video/rendered")
     def stream_rendered_video(project_id: str, download: bool = False):

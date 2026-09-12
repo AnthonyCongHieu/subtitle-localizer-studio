@@ -28,6 +28,7 @@ def do_export_mp4(
     regions_override: Optional[List[Dict[str, Any]]] = None,
     subtitle_placement: Optional[str] = "roi",
     blur_strength: Optional[int] = 20,
+    voiceover_path: Optional[Path | str] = None,
 ) -> str:
     """Export localized MP4 with masked regions, burned subtitles, and mixed voiceover."""
     project = repository.get_project(project_id)
@@ -130,8 +131,27 @@ def do_export_mp4(
             rotation=rotation,
         )
 
-        voiceover_path = project_output / f"voiceover_{project_id}.mp3"
-        if voiceover_path.exists() and voiceover_path.stat().st_size > 0:
+        voiceover_candidate: Optional[Path] = None
+        if voiceover_path:
+            p = Path(voiceover_path)
+            if p.exists() and p.stat().st_size > 0:
+                voiceover_candidate = p
+            elif p.exists() and p.stat().st_size == 0:
+                raise RuntimeError(f"Voiceover file rỗng (0 bytes): {p}")
+            else:
+                raise FileNotFoundError(f"Voiceover file không tồn tại: {p}")
+        elif getattr(project, "has_voiceover", False) and getattr(project, "voiceover_path", None):
+            p = Path(project.voiceover_path)
+            if p.exists() and p.stat().st_size > 0:
+                voiceover_candidate = p
+            else:
+                raise FileNotFoundError(f"Project đánh dấu has_voiceover nhưng không tìm thấy file voiceover hợp lệ: {p}")
+        else:
+            default_vo = project_output / f"voiceover_{project_id}.mp3"
+            if default_vo.exists() and default_vo.stat().st_size > 0:
+                voiceover_candidate = default_vo
+
+        if voiceover_candidate:
             from subtitle_localizer.dubbing.tts import mix_voiceover_into_video
             temp_mixed = project_output / f".tmp_dubbed_{output_path.name}"
             merged_settings = merge_pipeline_settings(overrides=project.custom_pipeline_settings)
@@ -139,16 +159,22 @@ def do_export_mp4(
             try:
                 mix_voiceover_into_video(
                     video_path=rendered_path,
-                    voiceover_path=voiceover_path,
+                    voiceover_path=voiceover_candidate,
                     output_path=temp_mixed,
                     ducking_volume=actual_ducking,
                 )
                 if temp_mixed.exists() and temp_mixed.stat().st_size > 0:
                     temp_mixed.replace(rendered_path)
+                else:
+                    raise RuntimeError(f"Hòa trộn voiceover thất bại: file tạm không tồn tại hoặc rỗng ({temp_mixed})")
             except Exception as ex:
-                logger.warning(f"Không thể hòa trộn voiceover vào video xuất: {ex}")
+                logger.error(f"Không thể hòa trộn voiceover vào video xuất: {ex}", exc_info=True)
                 if temp_mixed.exists():
-                    temp_mixed.unlink(missing_ok=True)
+                    try:
+                        temp_mixed.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                raise RuntimeError(f"Lỗi hòa trộn voiceover vào video xuất: {ex}") from ex
 
         return str(rendered_path)
     finally:

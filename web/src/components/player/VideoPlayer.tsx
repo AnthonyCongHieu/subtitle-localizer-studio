@@ -463,6 +463,61 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   const effectiveBoxWidth = boxDimensions.width > 0 ? boxDimensions.width : canvasFitSize.width;
   const effectiveBoxHeight = boxDimensions.height > 0 ? boxDimensions.height : canvasFitSize.height;
 
+  // Tính toán vùng hiển thị thực tế của khung hình video bên trong Canvas (Letterbox/Pillarbox Compensation)
+  const videoRect = useMemo(() => {
+    if (
+      videoDimensions.width <= 0 ||
+      videoDimensions.height <= 0 ||
+      effectiveBoxWidth <= 0 ||
+      effectiveBoxHeight <= 0
+    ) {
+      return { left: 0, top: 0, width: effectiveBoxWidth, height: effectiveBoxHeight };
+    }
+    const boxRatio = effectiveBoxWidth / effectiveBoxHeight;
+    const vidRatio = videoDimensions.width / videoDimensions.height;
+
+    if (fitMode === 'cover') {
+      if (boxRatio > vidRatio) {
+        const renderH = effectiveBoxWidth / vidRatio;
+        return {
+          left: 0,
+          top: Math.round((effectiveBoxHeight - renderH) / 2),
+          width: effectiveBoxWidth,
+          height: Math.round(renderH),
+        };
+      } else {
+        const renderW = effectiveBoxHeight * vidRatio;
+        return {
+          left: Math.round((effectiveBoxWidth - renderW) / 2),
+          top: 0,
+          width: Math.round(renderW),
+          height: effectiveBoxHeight,
+        };
+      }
+    }
+
+    // fitMode === 'contain' (mặc định): kẹp khít khung hình video
+    if (boxRatio > vidRatio) {
+      // Chiều cao khít, 2 bên trái/phải có khoảng đệm pillarbox
+      const renderW = Math.round(effectiveBoxHeight * vidRatio);
+      return {
+        left: Math.round((effectiveBoxWidth - renderW) / 2),
+        top: 0,
+        width: renderW,
+        height: effectiveBoxHeight,
+      };
+    } else {
+      // Chiều ngang khít, trên/dưới có khoảng đệm letterbox
+      const renderH = Math.round(effectiveBoxWidth / vidRatio);
+      return {
+        left: 0,
+        top: Math.round((effectiveBoxHeight - renderH) / 2),
+        width: effectiveBoxWidth,
+        height: renderH,
+      };
+    }
+  }, [videoDimensions.width, videoDimensions.height, effectiveBoxWidth, effectiveBoxHeight, fitMode]);
+
   useEffect(() => {
     if (isFullscreen) return;
     if (effectiveBoxWidth <= 0 || effectiveBoxHeight <= 0) return;
@@ -473,23 +528,28 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
   }, [isFullscreen, effectiveBoxWidth, effectiveBoxHeight]);
 
   const subtitleFontScale = responsiveFontScale
-    ? effectiveBoxWidth / 360
+    ? (videoRect.width > 0 ? videoRect.width : effectiveBoxWidth) / 360
     : (isFullscreen ? effectiveBoxWidth / Math.max(1, windowedBoxSize.width) : 1);
 
   const getOverlayGeometry = useCallback((reg: RegionTrackV1) => {
     const padding = Math.min(24, Math.max(-4, maskPadding));
-    const effectiveLeft = Math.max(0, Math.round(reg.x * effectiveBoxWidth) - padding);
-    const effectiveTop = Math.max(0, Math.round(reg.y * effectiveBoxHeight) - padding);
+    const targetW = videoRect.width > 0 ? videoRect.width : effectiveBoxWidth;
+    const targetH = videoRect.height > 0 ? videoRect.height : effectiveBoxHeight;
+    const offsetX = videoRect.left;
+    const offsetY = videoRect.top;
+
+    const effectiveLeft = Math.max(0, Math.round(offsetX + reg.x * targetW) - padding);
+    const effectiveTop = Math.max(0, Math.round(offsetY + reg.y * targetH) - padding);
     const effectiveWidth = Math.min(
       effectiveBoxWidth - effectiveLeft,
-      Math.round(reg.width * effectiveBoxWidth) + padding * 2
+      Math.round(reg.width * targetW) + padding * 2
     );
     const effectiveHeight = Math.min(
       effectiveBoxHeight - effectiveTop,
-      Math.round(reg.height * effectiveBoxHeight) + padding * 2
+      Math.round(reg.height * targetH) + padding * 2
     );
     return { effectiveLeft, effectiveTop, effectiveWidth, effectiveHeight };
-  }, [effectiveBoxHeight, effectiveBoxWidth, maskPadding]);
+  }, [videoRect, effectiveBoxWidth, effectiveBoxHeight, maskPadding]);
 
   const subtitleTextShadow = subtitleStroke === 'none'
     ? 'none'
@@ -938,19 +998,33 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
               <div
                 key={`sub-overlay-${activeCue.cue_id}`}
                 className={`absolute pointer-events-none flex items-center justify-center z-40 ${
-                  subtitlePlacement === 'bottom' ? 'bottom-[6%] left-0 right-0 px-4' : ''
+                  subtitlePlacement === 'bottom' || (subDisplayRegion && subDisplayRegion.y < 0.45)
+                    ? 'bottom-[6%] left-0 right-0 px-4'
+                    : ''
                 }`}
-                style={subtitlePlacement === 'bottom'
-                  ? { left: 0, right: 0, bottom: '6%', margin: '0 auto' }
-                  : (() => {
-                      const geometry = getOverlayGeometry(subDisplayRegion);
-                      return {
-                        left: `${geometry.effectiveLeft}px`,
-                        top: `${geometry.effectiveTop}px`,
-                        width: `${geometry.effectiveWidth}px`,
-                        height: `${geometry.effectiveHeight}px`,
-                      };
-                    })()}
+                style={
+                  subtitlePlacement === 'bottom' || (subDisplayRegion && subDisplayRegion.y < 0.45)
+                    ? {
+                        left: `${videoRect.left}px`,
+                        width: `${videoRect.width}px`,
+                        bottom: `${Math.max(16, (effectiveBoxHeight - videoRect.top - videoRect.height) + Math.round(videoRect.height * 0.06))}px`,
+                        margin: '0 auto',
+                      }
+                    : (() => {
+                        const geometry = getOverlayGeometry(subDisplayRegion);
+                        const targetW = videoRect.width > 0 ? videoRect.width : effectiveBoxWidth;
+                        // Đảm bảo phụ đề không bao giờ bị bóp nghẹt thành dải hẹp dọc
+                        const minReadableWidth = Math.min(targetW * 0.96, Math.max(geometry.effectiveWidth, Math.min(380, targetW * 0.9)));
+                        const centerX = geometry.effectiveLeft + geometry.effectiveWidth / 2;
+                        const safeLeft = Math.max(videoRect.left + 4, Math.min(videoRect.left + targetW - minReadableWidth - 4, centerX - minReadableWidth / 2));
+                        return {
+                          left: `${safeLeft}px`,
+                          top: `${geometry.effectiveTop}px`,
+                          width: `${minReadableWidth}px`,
+                          minHeight: `${geometry.effectiveHeight}px`,
+                        };
+                      })()
+                }
               >
                 <div className="relative inline-flex items-center justify-center w-full max-w-[92%] px-3 py-1 break-words text-center">
                   {/* Phụ đề dịch tiếng Việt chuẩn điện ảnh - Hỗ trợ tùy biến phông, cỡ chữ, màu sắc */}
@@ -974,16 +1048,24 @@ const VideoPlayerComponent: React.FC<VideoPlayerProps> = ({
             )}
 
             {/* === 5. KHUNG QUÉT SUB (ROI OVERLAY) === */}
-            {showRoi && showRoiOverlay && effectiveBoxWidth > 0 && effectiveBoxHeight > 0 && (
-              <div className="absolute inset-0 pointer-events-none z-50 overflow-visible">
+            {showRoi && showRoiOverlay && videoRect.width > 0 && videoRect.height > 0 && (
+              <div
+                className="absolute pointer-events-none z-50 overflow-visible"
+                style={{
+                  left: `${videoRect.left}px`,
+                  top: `${videoRect.top}px`,
+                  width: `${videoRect.width}px`,
+                  height: `${videoRect.height}px`,
+                }}
+              >
                 <RoiOverlay
                   region={region}
                   onChange={onUpdateRegion}
                   regions={regions}
                   activeRegionId={activeRegionId}
                   onSelectRegion={onSelectRegion}
-                  containerWidth={effectiveBoxWidth}
-                  containerHeight={effectiveBoxHeight}
+                  containerWidth={videoRect.width}
+                  containerHeight={videoRect.height}
                   disabled={interactionMode !== 'roi'}
                 />
               </div>

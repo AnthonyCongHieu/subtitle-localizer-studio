@@ -114,14 +114,22 @@ class FullPipelineOrchestrator:
         return True
 
     def verify_roi_gate(self, wf: FullPipelineWorkflowV1, regions: List[RegionTrackV1]) -> bool:
-        """Kiểm tra vùng ROI phát hiện được."""
+        """Kiểm tra vùng ROI phát hiện được tuân thủ nghiêm ngặt trong [0, 1]."""
         if not regions:
             raise ValueError("ROI gate failed: Không có vùng ROI nào được chỉ định.")
         for r in regions:
-            if r.x < 0.0 or r.x > 1.0 or r.y < 0.0 or r.y > 1.0:
-                raise ValueError(f"ROI gate failed: Tọa độ ROI vượt khoảng [0, 1] (x={r.x}, y={r.y})")
-            if r.width <= 0.0 or r.height <= 0.0 or (r.x + r.width) > 1.05 or (r.y + r.height) > 1.05:
-                raise ValueError(f"ROI gate failed: Kích thước ROI không hợp lệ (w={r.width}, h={r.height})")
+            if r.x < 0.0 or r.x > 1.0:
+                raise ValueError(f"ROI gate failed: Tọa độ x={r.x} không nằm trong [0, 1].")
+            if r.y < 0.0 or r.y > 1.0:
+                raise ValueError(f"ROI gate failed: Tọa độ y={r.y} không nằm trong [0, 1].")
+            if r.width <= 0.0 or r.width > 1.0:
+                raise ValueError(f"ROI gate failed: Chiều rộng width={r.width} không hợp lệ (phải trong (0, 1]).")
+            if r.height <= 0.0 or r.height > 1.0:
+                raise ValueError(f"ROI gate failed: Chiều cao height={r.height} không hợp lệ (phải trong (0, 1]).")
+            if round(r.x + r.width, 6) > 1.0:
+                raise ValueError(f"ROI gate failed: x + width ({r.x} + {r.width} = {r.x + r.width:.4f}) vượt quá 1.0.")
+            if round(r.y + r.height, 6) > 1.0:
+                raise ValueError(f"ROI gate failed: y + height ({r.y} + {r.height} = {r.y + r.height:.4f}) vượt quá 1.0.")
 
         wf.quality_metrics["roi"] = {
             "count": len(regions),
@@ -152,29 +160,57 @@ class FullPipelineOrchestrator:
         }
         return True
 
-    def verify_translation_gate(self, wf: FullPipelineWorkflowV1, cues: List[SubtitleCueV1]) -> bool:
-        """Kiểm tra kết quả dịch sang tiếng đích (mặc định tiếng Việt)."""
+    def verify_translation_gate(
+        self,
+        wf: FullPipelineWorkflowV1,
+        cues: List[SubtitleCueV1],
+        min_coverage: float = 0.98,
+    ) -> bool:
+        """Kiểm tra kết quả dịch sang tiếng đích (mặc định tiếng Việt) với ngưỡng độ bao phủ tối thiểu 98%."""
         if not cues:
             raise ValueError("Translation gate failed: Danh sách cues rỗng.")
-        missing_count = sum(1 for c in cues if not c.translated_text or not c.translated_text.strip())
-        if missing_count == len(cues):
+
+        total = len(cues)
+        empty_cues = [c.cue_id for c in cues if not c.translated_text or not c.translated_text.strip()]
+        translated_count = total - len(empty_cues)
+        coverage = (translated_count / total) if total > 0 else 0.0
+
+        if translated_count == 0:
             raise ValueError("Translation gate failed: 100% câu dịch bị rỗng.")
 
-        # Thắt chặt: Chặn rò rỉ nguyên văn nguồn khi source_lang != target_lang
+        # Ngưỡng bao phủ tối thiểu (mặc định 98%)
+        if coverage < min_coverage:
+            empty_sample = empty_cues[:10]
+            raise ValueError(
+                f"Translation gate failed: Độ bao phủ bản dịch chỉ đạt {coverage * 100.0:.1f}%, "
+                f"dưới ngưỡng tối thiểu yêu cầu {min_coverage * 100.0:.1f}%. "
+                f"Có {len(empty_cues)} cue rỗng: {empty_sample}{'...' if len(empty_cues) > 10 else ''}"
+            )
+
+        # Chặn rò rỉ nguyên văn nguồn khi source_lang != target_lang
         src_lang = getattr(wf.settings, "source_language", "auto")
         tgt_lang = getattr(wf.settings, "target_language", "vi")
         if src_lang not in ("auto", tgt_lang):
-            identical_count = sum(
-                1 for c in cues
+            identical_cues = [
+                c.cue_id for c in cues
                 if c.source_text and c.translated_text and c.source_text.strip() == c.translated_text.strip()
-            )
-            if identical_count == len(cues):
+            ]
+            if len(identical_cues) == total:
                 raise ValueError("Translation gate failed: Toàn bộ bản dịch sao chép 100% nguyên văn nguồn (rò rỉ source text).")
+            elif identical_cues:
+                warn_msg = (
+                    f"Cảnh báo dịch thuật: Có {len(identical_cues)}/{total} câu giữ nguyên văn nguồn "
+                    f"(cần kiểm tra tên riêng / thuật ngữ): {identical_cues[:5]}"
+                )
+                wf.warnings.append(warn_msg)
+                logger.warning(warn_msg)
 
         wf.quality_metrics["translation"] = {
-            "total_cues": len(cues),
-            "translated_cues": len(cues) - missing_count,
-            "coverage_percent": round((len(cues) - missing_count) / len(cues) * 100.0, 1),
+            "total_cues": total,
+            "translated_cues": translated_count,
+            "empty_cues": empty_cues,
+            "coverage_percent": round(coverage * 100.0, 1),
+            "min_coverage_threshold": min_coverage,
         }
         return True
 
@@ -249,8 +285,10 @@ class FullPipelineOrchestrator:
 
         if not has_video:
             raise RuntimeError("Export gate failed: File MP4 không chứa luồng video hợp lệ.")
-        if expect_audio and not has_audio and wf.settings.dubbing_enabled:
-            logger.warning("Export gate note: Lồng tiếng bật nhưng ffprobe không phát hiện luồng audio độc lập.")
+        if wf.settings.dubbing_enabled and not has_audio:
+            raise RuntimeError("Export gate failed: Dubbing được bật nhưng file MP4 xuất không chứa luồng audio (audio stream).")
+        if expect_audio and not has_audio:
+            raise RuntimeError("Export gate failed: Kỳ vọng luồng audio nhưng file MP4 xuất không chứa luồng audio (audio stream).")
 
         wf.quality_metrics["export"] = {
             "path": str(export_path),
@@ -311,12 +349,22 @@ class FullPipelineOrchestrator:
         with self._lock:
             self._cancelled_workflows.discard(workflow_id)
 
-    def retry_workflow(self, workflow_id: str, from_stage: Optional[str] = None) -> bool:
+    def retry_workflow(
+        self,
+        workflow_id: str,
+        from_stage: Optional[str] = None,
+        manual_roi: Optional[Dict[str, float]] = None,
+    ) -> bool:
         """Thử lại workflow bị lỗi hoặc cần xem xét, chỉ reset từ stage được chỉ định."""
         wf = self.repository.get_workflow(workflow_id)
         if not wf:
             return False
         self.clear_cancel(workflow_id)
+
+        if manual_roi:
+            wf.settings.manual_roi = manual_roi
+        if from_stage and from_stage != "downloading":
+            wf.settings.pause_after_download = False
 
         stages_order = ["downloading", "detecting_roi", "ocr", "translating", "dubbing", "exporting"]
         target_stage = from_stage or wf.current_stage or "downloading"
@@ -398,7 +446,14 @@ class FullPipelineOrchestrator:
                 wf.progress = 0.18
                 self.repository.save_workflow(wf)
 
-            # -------------------------------------------------------------
+                if wf.settings.pause_after_download:
+                    wf.transition_to("needs_review")
+                    msg = "Đã tải video thành công. Đang tạm dừng để người dùng kiểm tra thông số và chọn vùng quét OCR."
+                    if msg not in wf.warnings:
+                        wf.warnings.append(msg)
+                    self.repository.save_workflow(wf)
+                    logger.info("Workflow '%s' paused after download as requested by user.", workflow_id)
+                    return
             # Stage 2: Tự động dò ROI (Detecting ROI)
             # -------------------------------------------------------------
             manifest = self.repository.get_project(wf.project_id)
@@ -603,9 +658,8 @@ class FullPipelineOrchestrator:
         wf.thumbnail_url = target_info.get("cover_url") or wf.thumbnail_url
 
         dl_manager = DownloadManager(
-            downloads_dir=project_dir,
             repository=self.repository,
-            proxy=wf.settings.proxy,
+            uploads_dir=project_dir,
         )
         dl_manager.start_download(
             target_info=target_info,
@@ -613,6 +667,7 @@ class FullPipelineOrchestrator:
             auto_create_project=False,
             target_resolution=wf.settings.target_resolution,
             proxy=wf.settings.proxy,
+            strict_proxy=bool(wf.settings.proxy and str(wf.settings.proxy).strip()),
             cookie_source=wf.settings.cookie_source,
         )
 
@@ -623,15 +678,25 @@ class FullPipelineOrchestrator:
                 dl_manager.cancel()
                 raise InterruptedError("Download đã bị người dùng hủy.")
             st = dl_manager.get_status()
-            if not st.get("is_downloading"):
+            if st.get("status") in ("error", "failed"):
+                raise RuntimeError(f"Download thất bại: {st.get('error') or st.get('message') or 'Lỗi tải video'}")
+            if not st.get("is_downloading") and st.get("status") in ("completed", "done"):
                 break
             time.sleep(0.5)
 
-        # Tìm file mp4 tải về
-        candidates = list(project_dir.glob("*.mp4")) + list(project_dir.glob("*.mkv"))
+        # Tìm file mp4/mkv/webm tải về (bao gồm cả thư mục con do downloader tạo)
+        candidates = [
+            f for f in (list(project_dir.rglob("*.mp4")) + list(project_dir.rglob("*.mkv")) + list(project_dir.rglob("*.webm")))
+            if not f.name.endswith(".part") and not f.name.endswith(".ytdl") and not "-localized" in f.name
+        ]
         if not candidates:
             raise RuntimeError("Download hoàn tất nhưng không tìm thấy file video đầu ra.")
-        return max(candidates, key=lambda f: f.stat().st_mtime)
+        best_cand = max(candidates, key=lambda f: f.stat().st_mtime)
+        if best_cand.parent != project_dir:
+            dest = project_dir / best_cand.name
+            shutil.move(str(best_cand), str(dest))
+            return dest
+        return best_cand
 
     def _ensure_project_manifest(self, wf: FullPipelineWorkflowV1, video_path: Path) -> ProjectManifestV1:
         """Tạo hoặc nạp manifest dự án tương ứng."""
@@ -660,7 +725,30 @@ class FullPipelineOrchestrator:
         manifest: ProjectManifestV1,
         video_path: Path,
     ) -> List[RegionTrackV1]:
-        """Dò vùng phụ đề tự động bằng RapidOCR trên các frame đại diện."""
+        """Dò vùng phụ đề tự động bằng RapidOCR trên các frame đại diện hoặc áp dụng vùng thủ công."""
+        # 1. Nếu người dùng chọn vùng thủ công trước hoặc qua settings
+        if wf.settings.manual_roi:
+            m = wf.settings.manual_roi
+            rx = max(0.0, min(0.99, float(m.get("x", 0.08))))
+            ry = max(0.0, min(0.99, float(m.get("y", 0.82))))
+            rw = max(0.01, min(1.0 - rx, float(m.get("width", 0.84))))
+            rh = max(0.01, min(1.0 - ry, float(m.get("height", 0.12))))
+            logger.info("Applying manual ROI from workflow settings: x=%.3f, y=%.3f, w=%.3f, h=%.3f", rx, ry, rw, rh)
+            return [RegionTrackV1(
+                region_id=f"roi-{uuid.uuid4().hex[:8]}",
+                x=rx,
+                y=ry,
+                width=rw,
+                height=rh,
+                valid_start_pts=0.0,
+                valid_end_pts=float("inf"),
+            )]
+
+        # 2. Nếu project manifest đã có regions (do người dùng chỉnh sửa trong studio editor lúc pause)
+        if manifest.regions:
+            logger.info("Reusing %d regions from project manifest", len(manifest.regions))
+            return manifest.regions
+
         import cv2
 
         cap = cv2.VideoCapture(str(video_path))
@@ -673,9 +761,18 @@ class FullPipelineOrchestrator:
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         duration = total_frames / fps if total_frames > 0 else 10.0
 
-        # Lấy các mốc thời gian đại diện để tìm dải phụ đề
-        pts_to_check = [duration * p for p in (0.1, 0.25, 0.5, 0.75, 0.9)]
+        # Lấy 10 mốc thời gian đại diện để tìm dải phụ đề đối thoại
+        pts_to_check = [duration * p for p in (0.08, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.92)]
         best_roi: Optional[RegionTrackV1] = None
+        is_portrait = vh > vw
+        # Phụ đề đối thoại luôn nằm ở nửa dưới khung hình (đặc biệt là 65%-96% chiều cao)
+        min_sub_y = 0.55 if is_portrait else 0.65
+        max_sub_y = 0.96
+        target_lang = (wf.settings.source_language or "zh").lower()
+        dialogue_lang_boxes = []
+        dialogue_boxes = []
+        lang_matched_boxes = []
+        candidate_boxes = []
 
         try:
             from subtitle_localizer.ocr.rapid import RapidOcrProvider
@@ -705,7 +802,6 @@ class FullPipelineOrchestrator:
                 if not res:
                     continue
 
-                boxes = []
                 for item in res:
                     box, text, score = item
                     xs = [pt[0] for pt in box]
@@ -714,26 +810,64 @@ class FullPipelineOrchestrator:
                     norm_h = (max(ys) - min(ys)) / vh
                     norm_x = min(xs) / vw
                     norm_w = (max(xs) - min(xs)) / vw
-                    # Lọc chữ nằm ở dải đối thoại (nửa dưới màn hình)
-                    if 0.45 <= norm_y <= 0.92 and norm_w >= 0.05:
-                        boxes.append((norm_x, norm_y, norm_w, norm_h))
+                    center_x = norm_x + norm_w * 0.5
 
-                if boxes:
-                    min_x = max(0.02, min(b[0] for b in boxes) - 0.02)
-                    min_y = max(0.40, min(b[1] for b in boxes) - 0.015)
-                    max_x = min(0.98, max(b[0] + b[2] for b in boxes) + 0.02)
-                    max_y = min(0.98, max(b[1] + b[3] for b in boxes) + 0.015)
-                    w = max(0.1, max_x - min_x)
-                    h = max(0.06, max_y - min_y)
-                    best_roi = RegionTrackV1(
-                        region_id="roi-auto",
-                        x=round(min_x, 3),
-                        y=round(min_y, 3),
-                        width=round(w, 3),
-                        height=round(h, 3),
-                        mask_enabled=True,
-                    )
-                    break
+                    # Lọc biên ngang: Phụ đề đối thoại/nội dung luôn căn giữa
+                    if center_x < 0.10 or center_x > 0.90 or norm_w < 0.04:
+                        continue
+                    if norm_y > max_sub_y:
+                        continue
+
+                    # 1. Khớp ngôn ngữ nguồn: Chữ Hán/CJK khi source là zh/ja/ko hoặc auto
+                    has_cjk = bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", text or ""))
+                    if (target_lang in ("zh", "ja", "ko", "auto")) and has_cjk:
+                        if norm_y >= min_sub_y:
+                            dialogue_lang_boxes.append((norm_x, norm_y, norm_w, norm_h))
+                        elif norm_y >= 0.15:
+                            lang_matched_boxes.append((norm_x, norm_y, norm_w, norm_h))
+
+                    # 2. Vùng đối thoại nửa dưới (chuẩn phim review/phim truyện)
+                    if norm_y >= min_sub_y:
+                        dialogue_boxes.append((norm_x, norm_y, norm_w, norm_h))
+
+                    # 3. Vùng ứng viên chung (giữa và dưới)
+                    if norm_y >= 0.15:
+                        candidate_boxes.append((norm_x, norm_y, norm_w, norm_h))
+
+            # Ưu tiên 1: Box phụ đề đối thoại khớp ngôn ngữ nguồn ở dải đáy (tránh bắt nhầm watermark/logo trên đỉnh)
+            # Ưu tiên 2: Box đối thoại đáy màn hình nói chung
+            # Ưu tiên 3: Box khớp ngôn ngữ nguồn ở bất kỳ đâu (dành cho video học tiếng, đọc câu giữa màn hình)
+            # Ưu tiên 4: Box ứng viên chung
+            chosen_boxes = []
+            if dialogue_lang_boxes:
+                chosen_boxes = dialogue_lang_boxes
+            elif dialogue_boxes:
+                chosen_boxes = dialogue_boxes
+            elif lang_matched_boxes:
+                chosen_boxes = lang_matched_boxes
+            elif candidate_boxes:
+                chosen_boxes = candidate_boxes
+
+            if chosen_boxes:
+                detected_min_y = min(b[1] for b in chosen_boxes)
+                detected_max_y = max(b[1] + b[3] for b in chosen_boxes)
+                min_y = max(0.04, detected_min_y - 0.02)
+                max_y = min(0.98, detected_max_y + 0.02)
+                # Dải phụ đề review phim/phim truyện luôn cần chiều ngang bao quát đẹp như kênh review chuyên nghiệp
+                detected_min_x = min(b[0] for b in chosen_boxes)
+                detected_max_x = max(b[0] + b[2] for b in chosen_boxes)
+                min_x = max(0.04, min(0.08, detected_min_x - 0.03))
+                max_x = min(0.96, max(0.92, detected_max_x + 0.03))
+                w = round(min(1.0 - min_x, max(0.2, max_x - min_x)), 3)
+                h = round(min(1.0 - min_y, max(0.06, max_y - min_y)), 3)
+                best_roi = RegionTrackV1(
+                    region_id="roi-auto",
+                    x=round(min_x, 3),
+                    y=round(min_y, 3),
+                    width=w,
+                    height=h,
+                    mask_enabled=True,
+                )
 
         cap.release()
 
@@ -790,6 +924,18 @@ class FullPipelineOrchestrator:
                 pts_list=pts_list,
                 language=wf.settings.source_language if wf.settings.source_language != "auto" else "zh",
             )
+            # Fallback nếu crop ROI không bắt được chữ, quét toàn khung hình (full frame)
+            if not observations and roi_tuple is not None:
+                logger.info("Quét OCR với ROI không có kết quả, tự động fallback quét toàn màn hình...")
+                crops_full, pts_full = sampler.sample_video_frames(
+                    video_path=video_path,
+                    roi_norm=(0.0, 0.0, 1.0, 1.0),
+                )
+                observations = ocr_p.recognize(
+                    crops=crops_full,
+                    pts_list=pts_full,
+                    language=wf.settings.source_language if wf.settings.source_language != "auto" else "zh",
+                )
         finally:
             ocr_p.unload()
 
@@ -803,11 +949,11 @@ class FullPipelineOrchestrator:
                     cue_id=f"cue-{idx+1:04d}",
                     start_pts=obs.pts,
                     end_pts=obs.pts + 1.5,
-                    source_text=obs.text,
+                    source_text=obs.normalized_text or obs.raw_text,
                     confidence=obs.confidence,
                 )
                 for idx, obs in enumerate(observations)
-                if obs.text and obs.text.strip()
+                if (obs.normalized_text or obs.raw_text) and (obs.normalized_text or obs.raw_text).strip()
             ]
 
         if not cues:
@@ -848,11 +994,15 @@ class FullPipelineOrchestrator:
                         target_lang=target_lang,
                     )
                     valid_translated = [c for c in res_cues if c.translated_text and c.translated_text.strip()]
-                    if valid_translated:
+                    cov = len(valid_translated) / len(res_cues) if res_cues else 0.0
+                    if cov >= 0.98:
                         successful_cues = res_cues
                         break
                     else:
-                        raise ValueError(f"Provider {provider_name} trả về bản dịch rỗng")
+                        raise ValueError(
+                            f"Provider {provider_name} không đạt ngưỡng bao phủ 98% "
+                            f"({cov * 100.0:.1f}%, {len(valid_translated)}/{len(res_cues)} câu)"
+                        )
                 finally:
                     provider.unload()
             except Exception as exc:
@@ -896,6 +1046,7 @@ class FullPipelineOrchestrator:
                     project_id=manifest.project_id,
                     output_root=self.output_root,
                     options={
+                        "provider": "edge",
                         "voice": wf.settings.voice,
                         "rate": "+0%",
                     },
@@ -936,5 +1087,6 @@ class FullPipelineOrchestrator:
             project_id=manifest.project_id,
             mask_mode=wf.settings.mask_mode if wf.settings.mask_subtitles else "none",
             use_translated=wf.settings.burn_subtitles,
+            voiceover_path=voiceover_path,
         )
         return Path(rendered_str)

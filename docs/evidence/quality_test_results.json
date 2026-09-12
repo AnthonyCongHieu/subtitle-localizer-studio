@@ -1,0 +1,82 @@
+[
+  {
+    "name": "Local File - test1.mp4 (296s, 720p Chinese drama)",
+    "source": "D:\\tesst fim\\test1.mp4",
+    "is_local": true,
+    "dubbing_enabled": true,
+    "start_time": "2026-09-13T00:12:11.162882",
+    "preview_status": "skipped (local file)",
+    "preview_time_s": 0,
+    "create_error": "HTTP Error 422: Unprocessable Entity",
+    "end_time": "2026-09-13T00:12:11.174241",
+    "final_state": "create_failed"
+  },
+  {
+    "name": "YouTube - Flourished Peony EP1 (国色芳华 第1集, 45min)",
+    "source": "https://www.youtube.com/watch?v=pP23e8bupEg",
+    "is_local": false,
+    "dubbing_enabled": true,
+    "start_time": "2026-09-13T00:12:11.174241",
+    "preview_status": 200,
+    "preview_time_s": 2.25,
+    "preview_title": "4K【国色芳华】第1集 | 杨紫、李现主演 | Flourished Peony EP1 | Starring: Yang Zi, Li Xian | ENG SUB",
+    "preview_duration": 2708,
+    "preview_platform": "generic",
+    "workflow_id": "wf-bfad0b72b7",
+    "create_time_s": 0.01,
+    "total_pipeline_time_s": 1296.31,
+    "stage_times": {
+      "downloading": 24.1,
+      "ocr": 78.4,
+      "translating": 784.2,
+      "dubbing": 409.5
+    },
+    "final_state": "needs_review",
+    "project_id": "proj-79ea540e",
+    "artifacts": {
+      "source_video": "D:/subtitle-localizer-studio/outputs/proj_wf-bfad0b72b7/4K【国色芳华】第1集 _ 杨紫、李现主演 _ Flourished Peony EP1 _ Starring_ Yang Zi, Li Xian _ ENG SUB.mp4",
+      "regions": [
+        {
+          "region_id": "roi-auto",
+          "x": 0.85,
+          "y": 0.135,
+          "width": 0.13,
+          "height": 0.105,
+          "mask_enabled": true,
+          "role": "dialogue",
+          "valid_start_pts": 0.0,
+          "valid_end_pts": null,
+          "keyframe_overrides": {},
+          "schema_version": "region-track-v1"
+        }
+      ],
+      "cues_count": 653,
+      "translated_count": 653
+    },
+    "errors": [],
+    "end_time": "2026-09-13T00:33:49.741778"
+  },
+  {
+    "name": "hongguoduanju.com - 糯糯下山第二季 (ByteDance SPA)",
+    "source": "https://hongguoduanju.com/detail?series_id=7677801492920667198",
+    "is_local": false,
+    "dubbing_enabled": true,
+    "start_time": "2026-09-13T00:33:49.741778",
+    "preview_status": 200,
+    "preview_time_s": 2.65,
+    "preview_title": "糯糯下山，师兄们都慌了",
+    "preview_duration": 0,
+    "preview_platform": "hongguo",
+    "workflow_id": "wf-7fc8d5c34c",
+    "create_time_s": 0.02,
+    "total_pipeline_time_s": 45.22,
+    "stage_times": {
+      "downloading": 45.2
+    },
+    "final_state": "needs_review",
+    "project_id": null,
+    "artifacts": {},
+    "errors": [],
+    "end_time": "2026-09-13T00:34:37.636680"
+  }
+]

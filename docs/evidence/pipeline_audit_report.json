@@ -1,0 +1,436 @@
+{
+  "timestamp": 1789244494.1385424,
+  "workflow_id": "wf-3408102550",
+  "project_id": "proj-c056f2ca",
+  "state": "completed",
+  "progress": 1.0,
+  "stages": [
+    {
+      "stage_name": "downloading",
+      "display_name": "Tải video",
+      "status": "completed",
+      "progress": 1.0,
+      "start_time": 1789244449.2580705,
+      "end_time": 1789244456.5316095,
+      "metrics": {},
+      "errors": []
+    },
+    {
+      "stage_name": "detecting_roi",
+      "display_name": "Dò vùng phụ đề",
+      "status": "completed",
+      "progress": 1.0,
+      "start_time": 1789244456.5326495,
+      "end_time": 1789244458.2911005,
+      "metrics": {},
+      "errors": []
+    },
+    {
+      "stage_name": "ocr",
+      "display_name": "Quét chữ OCR",
+      "status": "completed",
+      "progress": 1.0,
+      "start_time": 1789244458.2920973,
+      "end_time": 1789244465.7693236,
+      "metrics": {},
+      "errors": []
+    },
+    {
+      "stage_name": "translating",
+      "display_name": "Dịch phụ đề",
+      "status": "completed",
+      "progress": 1.0,
+      "start_time": 1789244465.7703598,
+      "end_time": 1789244470.384166,
+      "metrics": {},
+      "errors": []
+    },
+    {
+      "stage_name": "dubbing",
+      "display_name": "Lồng tiếng AI",
+      "status": "completed",
+      "progress": 1.0,
+      "start_time": 1789244470.3864841,
+      "end_time": 1789244475.1565075,
+      "metrics": {},
+      "errors": []
+    },
+    {
+      "stage_name": "exporting",
+      "display_name": "Che sub & Xuất MP4",
+      "status": "completed",
+      "progress": 1.0,
+      "start_time": 1789244475.1575325,
+      "end_time": 1789244475.9153037,
+      "metrics": {},
+      "errors": []
+    }
+  ],
+  "quality_metrics": {
+    "download": {
+      "size_bytes": 1968480,
+      "duration": 25.007891,
+      "valid_container": true
+    },
+    "roi": {
+      "count": 1,
+      "primary": {
+        "x": 0.064,
+        "y": 0.293,
+        "w": 0.81,
+        "h": 0.48
+      }
+    },
+    "ocr": {
+      "cues_count": 8,
+      "total_chars": 69
+    },
+    "translation": {
+      "total_cues": 8,
+      "translated_cues": 8,
+      "empty_cues": [],
+      "coverage_percent": 100.0,
+      "min_coverage_threshold": 0.98
+    },
+    "dubbing": {
+      "path": "D:\\subtitle-localizer-studio\\outputs\\proj-c056f2ca\\voiceover_proj-c056f2ca.mp3",
+      "size_bytes": 401283,
+      "valid_speech": true
+    },
+    "export": {
+      "path": "D:\\subtitle-localizer-studio\\outputs\\proj-c056f2ca\\Mandarin Chinese Reading Practice for Beginners-localized.mp4",
+      "size_bytes": 6163289,
+      "duration": 25.007891,
+      "has_video": true,
+      "has_audio": true
+    }
+  },
+  "artifacts": {
+    "source_video": "D:/subtitle-localizer-studio/outputs/proj_wf-3408102550/Mandarin Chinese Reading Practice for Beginners.mp4",
+    "export_mp4": "D:\\subtitle-localizer-studio\\outputs\\proj-c056f2ca\\Mandarin Chinese Reading Practice for Beginners-localized.mp4",
+    "export_mp4_size": 6163289,
+    "export_mp4_duration": 25.007891,
+    "voiceover_path": "D:\\subtitle-localizer-studio\\outputs\\proj-c056f2ca\\voiceover_proj-c056f2ca.mp3",
+    "voiceover_size": 401283,
+    "srt_path": "D:\\subtitle-localizer-studio\\outputs\\proj_wf-3408102550\\Mandarin Chinese Reading Practice for Beginners.vi.srt",
+    "ass_path": "D:\\subtitle-localizer-studio\\outputs\\proj_wf-3408102550\\Mandarin Chinese Reading Practice for Beginners.vi.ass"
+  },
+  "ffprobe": {
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "h264",
+        "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+        "profile": "High",
+        "codec_type": "video",
+        "codec_tag_string": "avc1",
+        "codec_tag": "0x31637661",
+        "mime_codec_string": "avc1.64001e",
+        "width": 640,
+        "height": 360,
+        "coded_width": 640,
+        "coded_height": 360,
+        "has_b_frames": 2,
+        "sample_aspect_ratio": "1:1",
+        "display_aspect_ratio": "16:9",
+        "pix_fmt": "yuv420p",
+        "level": 30,
+        "color_range": "tv",
+        "color_space": "bt709",
+        "color_transfer": "bt709",
+        "color_primaries": "bt709",
+        "chroma_location": "left",
+        "field_order": "progressive",
+        "is_avc": "true",
+        "nal_length_size": "4",
+        "id": "0x1",
+        "r_frame_rate": "30/1",
+        "avg_frame_rate": "30/1",
+        "time_base": "1/15360",
+        "start_pts": 0,
+        "start_time": "0.000000",
+        "duration_ts": 384000,
+        "duration": "25.000000",
+        "bit_rate": "1869328",
+        "bits_per_raw_sample": "8",
+        "nb_frames": "750",
+        "extradata_size": 61,
+        "disposition": {
+          "default": 1,
+          "dub": 0,
+          "original": 0,
+          "comment": 0,
+          "lyrics": 0,
+          "karaoke": 0,
+          "forced": 0,
+          "hearing_impaired": 0,
+          "visual_impaired": 0,
+          "clean_effects": 0,
+          "attached_pic": 0,
+          "timed_thumbnails": 0,
+          "non_diegetic": 0,
+          "captions": 0,
+          "descriptions": 0,
+          "metadata": 0,
+          "dependent": 0,
+          "still_image": 0,
+          "multilayer": 0
+        },
+        "tags": {
+          "language": "und",
+          "handler_name": "ISO Media file produced by Google Inc. Created on: 08/09/2023.",
+          "encoder": "Lavc63.1.101 h264_nvenc"
+        }
+      },
+      {
+        "index": 1,
+        "codec_name": "aac",
+        "codec_long_name": "AAC (Advanced Audio Coding)",
+        "profile": "LC",
+        "codec_type": "audio",
+        "codec_tag_string": "mp4a",
+        "codec_tag": "0x6134706d",
+        "mime_codec_string": "mp4a.40.2",
+        "sample_fmt": "fltp",
+        "sample_rate": "44100",
+        "channels": 2,
+        "channel_layout": "stereo",
+        "bits_per_sample": 0,
+        "initial_padding": 1024,
+        "id": "0x2",
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "time_base": "1/44100",
+        "start_pts": 0,
+        "start_time": "0.000000",
+        "duration_ts": 1102848,
+        "duration": "25.007891",
+        "bit_rate": "93647",
+        "nb_frames": "1078",
+        "extradata_size": 5,
+        "disposition": {
+          "default": 1,
+          "dub": 0,
+          "original": 0,
+          "comment": 0,
+          "lyrics": 0,
+          "karaoke": 0,
+          "forced": 0,
+          "hearing_impaired": 0,
+          "visual_impaired": 0,
+          "clean_effects": 0,
+          "attached_pic": 0,
+          "timed_thumbnails": 0,
+          "non_diegetic": 0,
+          "captions": 0,
+          "descriptions": 0,
+          "metadata": 0,
+          "dependent": 0,
+          "still_image": 0,
+          "multilayer": 0
+        },
+        "tags": {
+          "language": "und",
+          "handler_name": "SoundHandler"
+        }
+      }
+    ],
+    "format": {
+      "filename": "D:\\subtitle-localizer-studio\\outputs\\proj-c056f2ca\\Mandarin Chinese Reading Practice for Beginners-localized.mp4",
+      "nb_streams": 2,
+      "nb_programs": 0,
+      "nb_stream_groups": 0,
+      "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+      "format_long_name": "QuickTime / MOV",
+      "start_time": "0.000000",
+      "duration": "25.007891",
+      "size": "6163289",
+      "bit_rate": "1971630",
+      "probe_score": 100,
+      "tags": {
+        "major_brand": "isom",
+        "minor_version": "512",
+        "compatible_brands": "isomiso2avc1mp41",
+        "encoder": "Lavf63.1.101"
+      }
+    }
+  },
+  "network_logs_count": 363,
+  "network_sample": [
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/settings/pipeline",
+      "has_post_data": false,
+      "timestamp": 1789244435.675493
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/settings/gemini-pool",
+      "has_post_data": false,
+      "timestamp": 1789244435.675493
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/health",
+      "has_post_data": false,
+      "timestamp": 1789244435.675493
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects",
+      "has_post_data": false,
+      "timestamp": 1789244435.675493
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:8899/api/v1/settings/pipeline",
+      "mimeType": "application/json",
+      "timestamp": 1789244435.6760635
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:8899/api/v1/settings/gemini-pool",
+      "mimeType": "application/json",
+      "timestamp": 1789244435.6760635
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:8899/api/v1/health",
+      "mimeType": "application/json",
+      "timestamp": 1789244435.7355094
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/health",
+      "has_post_data": false,
+      "timestamp": 1789244435.7366512
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:8899/api/v1/projects",
+      "mimeType": "application/json",
+      "timestamp": 1789244435.7366512
+    },
+    {
+      "type": "response",
+      "status": 200,
+      "url": "http://127.0.0.1:8899/api/v1/health",
+      "mimeType": "application/json",
+      "timestamp": 1789244435.7457469
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-892206b7/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7457469
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-79ea540e/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7457469
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-35473b6e/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7457469
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-cc76e581/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7457469
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-26be9c40/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7457469
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-149bbd19/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7467434
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-023e2ea2/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7467434
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-13af0862/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7467434
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-1accd50d/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7467434
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-28424c01/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7467434
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-2fc923de/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.7467434
+    },
+    {
+      "type": "request",
+      "method": "GET",
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-640c89f4/video/stream",
+      "has_post_data": false,
+      "timestamp": 1789244435.747547
+    },
+    {
+      "type": "response",
+      "status": 206,
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-79ea540e/video/stream",
+      "mimeType": "video/mp4",
+      "timestamp": 1789244435.7753997
+    },
+    {
+      "type": "response",
+      "status": 206,
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-26be9c40/video/stream",
+      "mimeType": "video/mp4",
+      "timestamp": 1789244435.7766855
+    },
+    {
+      "type": "response",
+      "status": 206,
+      "url": "http://127.0.0.1:8899/api/v1/projects/proj-149bbd19/video/stream",
+      "mimeType": "video/mp4",
+      "timestamp": 1789244435.7777138
+    }
+  ]
+}

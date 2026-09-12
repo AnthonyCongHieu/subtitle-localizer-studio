@@ -341,3 +341,228 @@ class TestFullPipelineEndToEnd(unittest.TestCase):
         self.assertEqual(wf_resumed.get_stage("ocr").status, "completed")
         self.assertEqual(wf_resumed.get_stage("translating").status, "completed")
         self.assertEqual(wf_resumed.get_stage("exporting").status, "completed")
+
+    def test_real_edge_tts_dubbing_and_mux_into_mp4(self) -> None:
+        """P1: Sử dụng Edge TTS thật sinh giọng đọc tiếng Việt, kiểm tra audio hợp lệ và mux vào MP4."""
+        from subtitle_localizer.dubbing.tts import generate_timed_voiceover, is_valid_speech_audio
+        from subtitle_localizer.service.export_service import do_export_mp4
+
+        cues = [
+            SubtitleCueV1(cue_id="c1", start_pts=0.2, end_pts=1.2, source_text="你好", translated_text="Xin chào các bạn"),
+        ]
+        voiceover_file = Path(self.temp_dir.name) / "real_edge_tts.mp3"
+
+        # Sinh giọng đọc thật bằng Edge TTS (không mock)
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                generate_timed_voiceover(
+                    cues=cues,
+                    voice="vi-VN-HoaiMyNeural",
+                    output_path=voiceover_file,
+                    total_duration=2.0,
+                    provider="edge",
+                )
+            )
+        finally:
+            loop.close()
+
+        self.assertTrue(voiceover_file.exists())
+        self.assertGreater(voiceover_file.stat().st_size, 1000)
+        self.assertTrue(is_valid_speech_audio(voiceover_file.read_bytes()))
+
+        # Tạo dự án và xuất MP4 có voiceover
+        proj = ProjectManifestV1(
+            project_id="proj-real-tts",
+            title="Real TTS Project",
+            source_video_path=str(self.sample_video),
+            video_fingerprint="fp-real-tts",
+            source_language="zh",
+            target_language="vi",
+            has_voiceover=True,
+            voiceover_path=str(voiceover_file),
+        )
+        self.repo.save_project(proj)
+        self.repo.save_cues(proj.project_id, cues)
+
+        out_mp4_str = do_export_mp4(
+            repository=self.repo,
+            resolved_output_root=self.output_dir,
+            project_id=proj.project_id,
+            mask_mode="none",
+            voiceover_path=voiceover_file,
+        )
+        out_mp4 = Path(out_mp4_str)
+        self.assertTrue(out_mp4.exists())
+        self.assertGreater(out_mp4.stat().st_size, 1000)
+
+        # Kiểm tra ffprobe: bắt buộc có cả video stream và audio stream
+        probe_cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_format", "-show_streams", str(out_mp4)
+        ]
+        res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, text=True, check=True)
+        probe_json = json.loads(res.stdout)
+        stream_types = [s.get("codec_type") for s in probe_json.get("streams", [])]
+        self.assertIn("video", stream_types)
+        self.assertIn("audio", stream_types)
+
+        # Kiểm tra workflow gate export pass
+        wf = FullPipelineWorkflowV1(
+            workflow_id="wf-real-tts-gate",
+            source_url=str(self.sample_video),
+            settings=FullPipelineSettingsV1(dubbing_enabled=True),
+        )
+        self.assertTrue(self.orchestrator.verify_export_gate(wf, out_mp4, expect_audio=True))
+
+    def test_orchestrator_run_workflow_sync_with_real_dubbing(self) -> None:
+        """P1: Full Orchestrator E2E chạy từ video có phụ đề đến MP4 hoàn chỉnh khi dubbing_enabled=True."""
+        video_file = self._create_synthetic_video_with_subtitles()
+        wf = FullPipelineWorkflowV1(
+            workflow_id="wf-sync-dubbed-e2e",
+            source_url=str(video_file),
+            title="Real E2E Pipeline With Real Dubbing",
+            settings=FullPipelineSettingsV1(
+                source_language="zh",
+                target_language="vi",
+                dubbing_enabled=True,
+                voice="vi-VN-HoaiMyNeural",
+                burn_subtitles=True,
+                mask_subtitles=True,
+                export_srt_ass=True,
+            ),
+        )
+        self.repo.save_workflow(wf)
+
+        # Chạy full pipeline đồng bộ
+        self.orchestrator._run_workflow_sync("wf-sync-dubbed-e2e")
+
+        completed_wf = self.repo.get_workflow("wf-sync-dubbed-e2e")
+        self.assertIsNotNone(completed_wf)
+        self.assertEqual(completed_wf.state, "completed")
+        self.assertEqual(completed_wf.progress, 1.0)
+        self.assertEqual(len(completed_wf.errors), 0)
+
+        # Kiểm tra tất cả 6 stages đều completed
+        for stage_name in ["downloading", "detecting_roi", "ocr", "translating", "dubbing", "exporting"]:
+            st = completed_wf.get_stage(stage_name)
+            self.assertIsNotNone(st, f"Stage {stage_name} missing")
+            self.assertEqual(st.status, "completed", f"Stage {stage_name} status is {st.status}")
+
+        # Kiểm tra artifact voiceover tồn tại
+        self.assertIn("voiceover_path", completed_wf.artifacts)
+        vo_path = Path(completed_wf.artifacts["voiceover_path"])
+        self.assertTrue(vo_path.exists())
+        self.assertGreater(vo_path.stat().st_size, 500)
+
+        # Kiểm tra export MP4 có cả video và audio stream
+        export_mp4 = Path(completed_wf.artifacts["export_mp4"])
+        self.assertTrue(export_mp4.exists())
+        self.assertGreater(export_mp4.stat().st_size, 1000)
+
+        probe_cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_format", "-show_streams", str(export_mp4)
+        ]
+        res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, text=True, check=True)
+        probe_json = json.loads(res.stdout)
+        stream_types = [s.get("codec_type") for s in probe_json.get("streams", [])]
+        self.assertIn("video", stream_types)
+        self.assertIn("audio", stream_types)
+
+    def test_real_online_youtube_full_pipeline_e2e(self) -> None:
+        """P0 & Section 1: Kiểm thử toàn trình với video YouTube online thật đến trạng thái completed.
+        Chuỗi: Download YouTube -> Auto ROI -> RapidOCR -> Translation -> Edge TTS Dubbing -> MP4 Export.
+        """
+        online_url = "https://www.youtube.com/watch?v=za4qeZiJZzY"
+        wf = FullPipelineWorkflowV1(
+            workflow_id="wf-online-youtube-e2e",
+            source_url=online_url,
+            title="Real Online YouTube E2E Test",
+            settings=FullPipelineSettingsV1(
+                source_language="zh",
+                target_language="vi",
+                dubbing_enabled=True,
+                voice="vi-VN-HoaiMyNeural",
+                burn_subtitles=True,
+                mask_subtitles=True,
+                export_srt_ass=True,
+                proxy=None,
+            ),
+        )
+        self.repo.save_workflow(wf)
+
+        # Chạy full pipeline đồng bộ từ URL thật với real Gemini AI translation
+        orig_gemini_env = os.environ.get("TEST_WITH_GEMINI")
+        os.environ["TEST_WITH_GEMINI"] = "1"
+        try:
+            self.orchestrator._run_workflow_sync("wf-online-youtube-e2e")
+        finally:
+            if orig_gemini_env is None:
+                os.environ.pop("TEST_WITH_GEMINI", None)
+            else:
+                os.environ["TEST_WITH_GEMINI"] = orig_gemini_env
+
+        completed_wf = self.repo.get_workflow("wf-online-youtube-e2e")
+        self.assertIsNotNone(completed_wf)
+        self.assertEqual(completed_wf.state, "completed")
+        self.assertEqual(completed_wf.progress, 1.0)
+        self.assertEqual(len(completed_wf.errors), 0)
+
+        # Kiểm tra toàn bộ 6 stages đều hoàn tất thành công
+        for stage_name in ["downloading", "detecting_roi", "ocr", "translating", "dubbing", "exporting"]:
+            st = completed_wf.get_stage(stage_name)
+            self.assertIsNotNone(st, f"Stage {stage_name} missing")
+            self.assertEqual(st.status, "completed", f"Stage {stage_name} status is {st.status}")
+
+        # Kiểm tra Project Manifest thật được tạo và lưu trong DB
+        self.assertIsNotNone(completed_wf.project_id)
+        manifest = self.repo.get_project(completed_wf.project_id)
+        self.assertIsNotNone(manifest)
+        self.assertTrue(manifest.has_voiceover)
+        self.assertTrue(manifest.has_export)
+
+        # Kiểm tra Cues thật trong DB
+        cues = self.repo.get_cues(completed_wf.project_id)
+        self.assertGreaterEqual(len(cues), 1)
+        for c in cues:
+            self.assertTrue(bool(c.source_text and c.source_text.strip()))
+            self.assertTrue(bool(c.translated_text and c.translated_text.strip()))
+
+        # Kiểm tra Video nguồn thật tải về từ YouTube
+        source_vid = Path(completed_wf.artifacts["source_video"])
+        self.assertTrue(source_vid.exists())
+        self.assertGreater(source_vid.stat().st_size, 500000)
+
+        # Kiểm tra Voiceover AI thật sinh bằng Edge TTS
+        vo_path = Path(completed_wf.artifacts["voiceover_path"])
+        self.assertTrue(vo_path.exists())
+        self.assertGreater(vo_path.stat().st_size, 1000)
+
+        # Kiểm tra Phụ đề SRT và ASS thật
+        srt_p = Path(completed_wf.artifacts["srt_path"])
+        self.assertTrue(srt_p.exists())
+        srt_text = srt_p.read_text(encoding="utf-8")
+        self.assertNotIn("\ufffd", srt_text)
+
+        ass_p = Path(completed_wf.artifacts["ass_path"])
+        self.assertTrue(ass_p.exists())
+        ass_text = ass_p.read_text(encoding="utf-8")
+        self.assertNotIn("\ufffd", ass_text)
+
+        # Kiểm tra File MP4 xuất thành phẩm bằng ffprobe
+        export_mp4 = Path(completed_wf.artifacts["export_mp4"])
+        self.assertTrue(export_mp4.exists())
+        self.assertGreater(export_mp4.stat().st_size, 500000)
+
+        probe_cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_format", "-show_streams", str(export_mp4)
+        ]
+        res = subprocess.run(probe_cmd, stdout=subprocess.PIPE, text=True, check=True)
+        probe_json = json.loads(res.stdout)
+        stream_types = [s.get("codec_type") for s in probe_json.get("streams", [])]
+        self.assertIn("video", stream_types)
+        self.assertIn("audio", stream_types)
+        duration = float(probe_json.get("format", {}).get("duration", 0))
+        self.assertGreater(duration, 15.0)

@@ -221,6 +221,12 @@ class ProjectManifestV1:
     updated_at: float = field(default_factory=time.time)
     schema_version: str = "project-manifest-v1"
     media_items: List[Dict[str, Any]] = field(default_factory=list)
+    has_voiceover: bool = False
+    voiceover_path: Optional[str] = None
+    voiceover_file_size_bytes: int = 0
+    has_export: bool = False
+    export_path: Optional[str] = None
+    export_file_size_bytes: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         res = asdict(self)
@@ -252,6 +258,12 @@ class ProjectManifestV1:
             updated_at=float(data.get("updated_at", time.time())),
             schema_version=data.get("schema_version", "project-manifest-v1"),
             media_items=list(data.get("media_items", [])),
+            has_voiceover=bool(data.get("has_voiceover", False)),
+            voiceover_path=data.get("voiceover_path"),
+            voiceover_file_size_bytes=int(data.get("voiceover_file_size_bytes", 0)),
+            has_export=bool(data.get("has_export", False)),
+            export_path=data.get("export_path"),
+            export_file_size_bytes=int(data.get("export_file_size_bytes", 0)),
         )
 
 
@@ -352,6 +364,8 @@ class FullPipelineSettingsV1:
     output_dir: Optional[str] = None
     proxy: Optional[str] = None
     cookie_source: Optional[str] = "none"
+    pause_after_download: bool = False
+    manual_roi: Optional[Dict[str, float]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -374,6 +388,8 @@ class FullPipelineSettingsV1:
             output_dir=data.get("output_dir"),
             proxy=data.get("proxy"),
             cookie_source=data.get("cookie_source", "none"),
+            pause_after_download=bool(data.get("pause_after_download", False)),
+            manual_roi=data.get("manual_roi"),
         )
 
 

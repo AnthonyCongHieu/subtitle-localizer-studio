@@ -568,7 +568,7 @@ def download_cover_file(
     target_file = out_dir / (filename or "cover.jpg")
 
     req = urllib.request.Request(str(cover_url).strip(), headers={"User-Agent": USER_AGENT})
-    with _open_url_with_fallback(req, proxy=proxy, timeout=15) as resp:
+    with _open_url_with_fallback(req, proxy=proxy, timeout=3) as resp:
         content = resp.read()
     target_file.write_bytes(content)
     return target_file

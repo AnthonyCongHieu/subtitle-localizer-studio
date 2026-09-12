@@ -42,6 +42,7 @@ interface StoredStudioState {
   roiRegion?: RegionTrackV1;
   regions?: RegionTrackV1[];
   activeRegionId?: string;
+  previewMask?: boolean;
   maskStyle?: MaskStyleType;
   blurStrength?: number;
   subtitlePlacement?: SubtitlePlacementMode;
@@ -66,7 +67,7 @@ interface StoredStudioState {
   subtitleStroke?: 'none' | 'soft' | 'stroke' | 'glow';
   subtitleLineHeight?: number;
   viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin';
-  downloaderTab?: 'pipeline' | 'search' | 'direct' | 'queue' | 'auth' | 'settings';
+  downloaderTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings' | 'pipeline';
   settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch' | 'router';
 }
 
@@ -98,8 +99,8 @@ export const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin'>(
     () => savedState?.viewMode || 'dashboard'
   );
-  const [downloaderTab, setDownloaderTab] = useState<'pipeline' | 'search' | 'direct' | 'queue' | 'auth' | 'settings'>(
-    () => savedState?.downloaderTab || 'pipeline'
+  const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings' | 'pipeline'>(
+    () => savedState?.downloaderTab || 'search'
   );
   const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch' | 'router'>(
     () => savedState?.settingsTab || 'ocr'
@@ -212,7 +213,7 @@ export const App: React.FC = () => {
   const [isFlippedV, setIsFlippedV] = useState<boolean>(() => Boolean(savedState?.isFlippedV));
   const [rotation, setRotation] = useState<number>(() => (typeof savedState?.rotation === 'number' ? savedState.rotation : 0));
   const [zoomLevel, setZoomLevel] = useState<ZoomMode>(() => savedState?.zoomLevel || 'fit');
-  const [previewMask, setPreviewMask] = useState<boolean>(false);
+  const [previewMask, setPreviewMask] = useState<boolean>(() => (typeof savedState?.previewMask === 'boolean' ? savedState.previewMask : true));
   const [maskStyle, setMaskStyle] = useState<MaskStyleType>(() => savedState?.maskStyle || 'feather_tight');
   const [blurStrength, setBlurStrength] = useState<number>(() => (typeof savedState?.blurStrength === 'number' ? savedState.blurStrength : 20));
   const [subtitlePlacement, setSubtitlePlacement] = useState<SubtitlePlacementMode>(() => savedState?.subtitlePlacement || 'roi');
@@ -251,6 +252,7 @@ export const App: React.FC = () => {
   const dragStartCuesSnapshotRef = useRef<SubtitleCueV1[] | null>(null);
   // Cờ ngăn toast trùng lặp khi dừng quét: handleStopScan set true, WS/polling kiểm tra để bỏ qua toast
   const cancelRequestedRef = useRef<boolean>(false);
+  const lastSavedSignatureRef = useRef<string>('');
 
   // Trạng thái hệ thống và pipeline
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
@@ -904,43 +906,48 @@ export const App: React.FC = () => {
     setActiveProject(proj);
     setLocalVideoFile(null);
 
-    // Khi khôi phục sau F5 (navigate = false), bảo toàn cấu hình người dùng đã lưu trong savedState
+    // Ưu tiên nạp regions chuẩn từ Project manifest
+    if (proj.regions && proj.regions.length > 0) {
+      setRegions(proj.regions);
+      setActiveRegionId(proj.regions[0].region_id);
+    } else if (savedState?.activeProjectId === proj.project_id && savedState.regions && savedState.regions.length > 0) {
+      setRegions(savedState.regions);
+      setActiveRegionId(savedState.activeRegionId || savedState.regions[0].region_id);
+    } else if (savedState?.activeProjectId === proj.project_id && savedState.roiRegion) {
+      setRegions([savedState.roiRegion]);
+      setActiveRegionId(savedState.roiRegion.region_id);
+    } else {
+      const defPreset = getDefaultPreset(presets);
+      const initRoi: RegionTrackV1 = defPreset?.roi ? {
+        region_id: 'roi-main',
+        x: defPreset.roi.x,
+        y: defPreset.roi.y,
+        width: defPreset.roi.width,
+        height: defPreset.roi.height,
+      } : {
+        region_id: 'roi-main',
+        x: 0.08,
+        y: 0.82,
+        width: 0.84,
+        height: 0.12,
+      };
+      setRegions([initRoi]);
+      setActiveRegionId('roi-main');
+    }
+
     if (!navigate && savedState?.activeProjectId === proj.project_id) {
       if (savedState.sourceLang) setSourceLang(savedState.sourceLang);
       if (savedState.targetLang) setTargetLang(savedState.targetLang);
-      if (savedState.regions && savedState.regions.length > 0) {
-        setRegions(savedState.regions);
-        setActiveRegionId(savedState.activeRegionId || savedState.regions[0].region_id);
-      } else if (savedState.roiRegion) {
-        setRegions([savedState.roiRegion]);
-        setActiveRegionId(savedState.roiRegion.region_id);
-      }
     } else {
       setSourceLang(proj.source_language || 'zh');
       setTargetLang(proj.target_language || 'vi');
-
-      if (proj.regions && proj.regions.length > 0) {
-        setRegions(proj.regions);
-        setActiveRegionId(proj.regions[0].region_id);
-      } else {
-        const defPreset = getDefaultPreset(presets);
-        const initRoi: RegionTrackV1 = defPreset?.roi ? {
-          region_id: 'roi-main',
-          x: defPreset.roi.x,
-          y: defPreset.roi.y,
-          width: defPreset.roi.width,
-          height: defPreset.roi.height,
-        } : {
-          region_id: 'roi-main',
-          x: 0.03,
-          y: 0.61,
-          width: 0.94,
-          height: 0.08,
-        };
-        setRegions([initRoi]);
-        setActiveRegionId('roi-main');
-      }
     }
+
+    // Đánh dấu signature ban đầu để không kích hoạt auto-save ghi đè sai thông số
+    lastSavedSignatureRef.current = JSON.stringify({
+      pid: proj.project_id,
+      regions: proj.regions || [],
+    });
 
     if (navigate) {
       const drama = extractDramaInfo(proj.title, proj.source_video_path).dramaTitle;
@@ -1118,6 +1125,7 @@ export const App: React.FC = () => {
       roiRegion: activeRoiRegion,
       regions,
       activeRegionId,
+      previewMask,
       maskStyle,
       blurStrength,
       subtitlePlacement,
@@ -1148,6 +1156,22 @@ export const App: React.FC = () => {
 
     // Tự động đồng bộ ROI và danh sách vùng xuống backend (debounce 500ms) nguyên tử
     if (activeProject?.project_id) {
+      const currentSig = JSON.stringify({
+        pid: activeProject.project_id,
+        regions,
+        roi: activeRoiRegion,
+        aspectRatio,
+        maskStyle,
+        blurStrength,
+        subtitlePlacement,
+        previewMask,
+      });
+
+      // Chỉ gửi lưu khi người dùng thực sự thay đổi cấu hình so với dữ liệu vừa nạp
+      if (lastSavedSignatureRef.current === currentSig) {
+        return;
+      }
+
       const timer = setTimeout(() => {
         setSaveStatus('saving');
         apiClient.saveEditorState(activeProject.project_id, {
@@ -1169,6 +1193,7 @@ export const App: React.FC = () => {
           },
         })
           .then(() => {
+            lastSavedSignatureRef.current = currentSig;
             setSaveStatus('saved');
           })
           .catch((err: any) => {
@@ -1608,7 +1633,7 @@ export const App: React.FC = () => {
           />
         ) : viewMode === 'downloader' ? (
           <VideoDownloaderHub
-            initialTab={downloaderTab || 'pipeline'}
+            initialTab={downloaderTab || 'queue'}
             onTabChange={setDownloaderTab}
             onSwitchToDashboard={() => setViewMode('dashboard')}
             onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}

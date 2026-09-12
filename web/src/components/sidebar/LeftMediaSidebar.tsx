@@ -1112,7 +1112,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                         <select
                           value={editingSpeaker}
                           onChange={(e) => setEditingSpeaker(e.target.value)}
-                          className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200"
+                          className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200 appearance-none"
                           title="Giới tính nhân vật"
                         >
                           <option value="unknown">Giới tính?</option>
@@ -1122,7 +1122,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                         <select
                           value={editingSpeakerRole}
                           onChange={(e) => setEditingSpeakerRole(e.target.value)}
-                          className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200"
+                          className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-[10px] text-slate-200 appearance-none"
                           title="Vai trò"
                         >
                           <option value="main">Chính</option>
@@ -1191,7 +1191,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                     <select
                       value={String((cue.style as any)?.speaker || 'unknown')}
                       onChange={(e) => patchCueStyle(cue, { speaker: e.target.value })}
-                      className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[9px] text-slate-200"
+                      className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[9px] text-slate-200 appearance-none"
                       title="Giới tính"
                     >
                       <option value="unknown">?</option>
@@ -1201,7 +1201,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                     <select
                       value={String((cue.style as any)?.speaker_role || 'main')}
                       onChange={(e) => patchCueStyle(cue, { speaker_role: e.target.value })}
-                      className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[9px] text-slate-200"
+                      className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[9px] text-slate-200 appearance-none"
                       title="Vai trò"
                     >
                       <option value="main">main</option>
