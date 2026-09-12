@@ -73,10 +73,68 @@ class TranslationRuntimeTest(unittest.TestCase):
         from subtitle_localizer.service.pipeline_settings import TranslationSettings
         from subtitle_localizer.translation.real import RealTranslationProvider
 
-        self.assertEqual(TranslationSettings().local_model, "qwen2.5:14b")
+        self.assertEqual(TranslationSettings().local_model, "qwen3:14b")
         provider = RealTranslationProvider()
         self.assertEqual(provider._local_chunk_size(140, 35), 35)
-        self.assertEqual(provider._local_chunk_size(140, 0), 35)
+        # batch_size = 0 -> một request cho cả kịch bản (trong ngân sách ngữ cảnh).
+        self.assertEqual(provider._local_chunk_size(140, 0), 140)
+
+    def test_local_one_shot_budget_keeps_prompt_inside_context(self) -> None:
+        from subtitle_localizer.translation.real import (
+            _LOCAL_ONE_SHOT_SOURCE_CHARS,
+            RealTranslationProvider,
+        )
+
+        provider = RealTranslationProvider()
+        short_script = [
+            SubtitleCueV1(cue_id=f"c{i}", start_pts=float(i), end_pts=float(i + 1), source_text="你好")
+            for i in range(140)
+        ]
+        self.assertEqual(provider._one_shot_cue_limit(short_script, list(range(140))), 140)
+
+        long_script = [
+            SubtitleCueV1(
+                cue_id=f"L{i}",
+                start_pts=float(i),
+                end_pts=float(i + 1),
+                source_text="这是一个非常长的中文字幕句子，用来验证上下文预算。" * 2,
+            )
+            for i in range(400)
+        ]
+        limit = provider._one_shot_cue_limit(long_script, list(range(400)))
+        self.assertGreater(limit, 0)
+        self.assertLess(limit, 400)
+        used = sum(len(long_script[i].source_text) + 12 for i in range(limit))
+        self.assertLessEqual(used, _LOCAL_ONE_SHOT_SOURCE_CHARS)
+
+    def test_local_translation_sends_one_request_for_zero_batch_size(self) -> None:
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from subtitle_localizer.translation.real import RealTranslationProvider
+
+        provider = RealTranslationProvider()
+        cues = [
+            SubtitleCueV1(
+                cue_id=f"c{i}", start_pts=float(i), end_pts=float(i + 1), source_text=f"中文{i}"
+            )
+            for i in range(40)
+        ]
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "\n".join(f"[{i + 1}] Bản dịch {i}" for i in range(40))}}]
+        }).encode("utf-8")
+        response.__enter__.return_value = response
+
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            result = provider._translate_with_local_qwen(
+                cues, "zh", "vi", model="qwen3:14b", endpoint="http://localhost:11434", batch_size=0
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertTrue(all(cue.translated_text for cue in cues))
 
     def test_real_translation_local_qwen_parse(self) -> None:
         from subtitle_localizer.translation.real import RealTranslationProvider
@@ -141,12 +199,15 @@ class TranslationRuntimeTest(unittest.TestCase):
 
         trans = TranslationSettings()
         self.assertEqual(trans.provider, "gemini")
-        self.assertEqual(trans.gemini_model, "gemini-2.5-flash")
+        self.assertEqual(trans.gemini_model, "gemini-3.8-flash")
         self.assertTrue(trans.auto_fallback)
-        self.assertEqual(trans.batch_size, 35)
+        # 0 = một request cho toàn bộ kịch bản (không chia batch)
+        self.assertEqual(trans.batch_size, 0)
 
-        retired_trans = TranslationSettings(gemini_model="gemini-3.8-flash")
-        self.assertEqual(retired_trans.gemini_model, "gemini-2.5-flash")
+        modern_trans = TranslationSettings(gemini_model="gemini-3.8-flash")
+        self.assertEqual(modern_trans.gemini_model, "gemini-3.8-flash")
+        alias_trans = TranslationSettings(gemini_model="3.8")
+        self.assertEqual(alias_trans.gemini_model, "gemini-3.8-flash")
 
         global_s = GlobalPipelineSettings()
         self.assertEqual(global_s.ocr.mode, "local")

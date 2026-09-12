@@ -250,5 +250,48 @@ class TranslationRollingContextTest(unittest.TestCase):
         self.assertIn("KỊCH BẢN GỐC TOÀN BỘ CÂU CHUYỆN", prompt)
 
 
+class RetryAfterNormalizeTest(unittest.TestCase):
+    """worker.py swaps cue objects (normalize_sequential_cues) before retrying."""
+
+    def test_retry_writes_into_live_cue_objects_after_normalize(self) -> None:
+        import dataclasses
+        import json
+        from unittest.mock import MagicMock
+
+        from subtitle_localizer.translation.key_pool import GeminiKeyPool
+
+        provider = RealTranslationProvider()
+        pool = GeminiKeyPool(["key_mock"])
+        cues = [
+            SubtitleCueV1(cue_id="a", start_pts=0.0, end_pts=1.0, source_text="你好"),
+            SubtitleCueV1(cue_id="b", start_pts=1.0, end_pts=2.0, source_text="再见"),
+        ]
+        calls = {"n": 0}
+
+        def fake_urlopen(request, *args, **kwargs):
+            text = "[1] Xin chào" if calls["n"] == 0 else "[1] Tạm biệt"
+            calls["n"] += 1
+            response = MagicMock()
+            response.status = 200
+            response.read.return_value = json.dumps(
+                {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+            ).encode("utf-8")
+            response.__enter__.return_value = response
+            return response
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            provider._translate_with_gemini(cues, "zh", "vi", key_pool=pool)
+
+        # Production replaces the cue list with fresh objects before the retry pass.
+        normalized = normalize_sequential_cues(cues)
+        self.assertTrue(normalized[1].source_text.strip())
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            filled = provider.retry_untranslated_cues(normalized, source_lang="zh", target_lang="vi")
+
+        self.assertGreaterEqual(filled, 1)
+        self.assertEqual(normalized[1].translated_text, "Tạm biệt")
+
+
 if __name__ == "__main__":
     unittest.main()

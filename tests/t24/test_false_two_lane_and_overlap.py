@@ -1,4 +1,5 @@
 import sys
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from subtitle_localizer.dubbing.tts import (
     available_voiceover_slot,
     fade_trim_pcm,
     generate_voiceover_sync,
+    generate_timed_voiceover,
     mix_voice_pcm,
 )
 from subtitle_localizer.reconstruction.builder import normalize_sequential_cues
@@ -228,6 +230,18 @@ class OcrObservationPairingTest(unittest.TestCase):
 
 
 class SingleVoiceMixTest(unittest.TestCase):
+    def test_single_mode_preserves_full_sentence_when_audio_exceeds_next_slot(self) -> None:
+        """A long narrator cue is shifted, never hard-trimmed into the next cue."""
+        sample_rate = 1000
+        first = np.full(900, 0.2, dtype=np.float32)
+        second = np.full(100, 0.4, dtype=np.float32)
+        master = np.zeros(2000, dtype=np.float32)
+        master = mix_voice_pcm(master, first, 0, mode="single", next_start_sample=None)
+        master = mix_voice_pcm(master, second, 900, mode="single", next_start_sample=None)
+        # The first 900 samples must remain; the second starts after it.
+        self.assertGreaterEqual(len(master), 1000)
+        self.assertAlmostEqual(float(master[800]), 0.2, places=3)
+        self.assertAlmostEqual(float(master[900]), 0.4, places=3)
     def test_available_slot_uses_next_start_in_single_mode(self) -> None:
         current = SubtitleCueV1(cue_id="a", start_pts=0.0, end_pts=1.12, source_text="một")
         nxt = SubtitleCueV1(cue_id="b", start_pts=1.00, end_pts=2.12, source_text="hai")

@@ -307,3 +307,237 @@ class BridgeEventV1:
             timestamp=float(data.get("timestamp", time.time())),
             schema_version=data.get("schema_version", "bridge-event-v1"),
         )
+
+
+@dataclass
+class FallbackEventV1:
+    """Ghi nhận sự kiện fallback nhà cung cấp hoặc model."""
+    stage: str
+    from_provider: str
+    error: str
+    to_provider: str
+    timestamp: float = field(default_factory=time.time)
+    success: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> FallbackEventV1:
+        return cls(
+            stage=data.get("stage", ""),
+            from_provider=data.get("from_provider", ""),
+            error=data.get("error", ""),
+            to_provider=data.get("to_provider", ""),
+            timestamp=float(data.get("timestamp", time.time())),
+            success=bool(data.get("success", True)),
+        )
+
+
+@dataclass
+class FullPipelineSettingsV1:
+    """Cấu hình tinh gọn cho quy trình tự động Full Pipeline."""
+    source_language: str = "auto"
+    target_language: str = "vi"
+    target_resolution: str = "best"
+    ocr_quality: str = "auto"
+    translation_quality: str = "auto"
+    dubbing_enabled: bool = True
+    voice: str = "vi-VN-HoaiMyNeural"
+    speed_fit: bool = True
+    burn_subtitles: bool = True
+    mask_subtitles: bool = True
+    mask_mode: str = "blur"
+    export_srt_ass: bool = True
+    output_dir: Optional[str] = None
+    proxy: Optional[str] = None
+    cookie_source: Optional[str] = "none"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> FullPipelineSettingsV1:
+        return cls(
+            source_language=data.get("source_language", "auto"),
+            target_language=data.get("target_language", "vi"),
+            target_resolution=data.get("target_resolution", "best"),
+            ocr_quality=data.get("ocr_quality", "auto"),
+            translation_quality=data.get("translation_quality", "auto"),
+            dubbing_enabled=bool(data.get("dubbing_enabled", True)),
+            voice=data.get("voice", "vi-VN-HoaiMyNeural"),
+            speed_fit=bool(data.get("speed_fit", True)),
+            burn_subtitles=bool(data.get("burn_subtitles", True)),
+            mask_subtitles=bool(data.get("mask_subtitles", True)),
+            mask_mode=data.get("mask_mode", "blur"),
+            export_srt_ass=bool(data.get("export_srt_ass", True)),
+            output_dir=data.get("output_dir"),
+            proxy=data.get("proxy"),
+            cookie_source=data.get("cookie_source", "none"),
+        )
+
+
+@dataclass
+class FullPipelineStageV1:
+    """Quản lý trạng thái và tiến độ của từng stage trong Full Pipeline."""
+    stage_name: str
+    display_name: str = ""
+    status: str = "pending"  # pending, running, completed, failed, skipped, needs_review
+    progress: float = 0.0
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    errors: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> FullPipelineStageV1:
+        return cls(
+            stage_name=data.get("stage_name", ""),
+            display_name=data.get("display_name", ""),
+            status=data.get("status", "pending"),
+            progress=float(data.get("progress", 0.0)),
+            start_time=data.get("start_time"),
+            end_time=data.get("end_time"),
+            metrics=data.get("metrics", {}),
+            errors=data.get("errors", []),
+        )
+
+
+def _get_default_pipeline_stages() -> List[FullPipelineStageV1]:
+    return [
+        FullPipelineStageV1(stage_name="downloading", display_name="Tải video"),
+        FullPipelineStageV1(stage_name="detecting_roi", display_name="Dò vùng phụ đề"),
+        FullPipelineStageV1(stage_name="ocr", display_name="Quét chữ OCR"),
+        FullPipelineStageV1(stage_name="translating", display_name="Dịch phụ đề"),
+        FullPipelineStageV1(stage_name="dubbing", display_name="Lồng tiếng AI"),
+        FullPipelineStageV1(stage_name="exporting", display_name="Che sub & Xuất MP4"),
+    ]
+
+
+@dataclass
+class FullPipelineWorkflowV1:
+    """State machine đại diện cho một tiến trình xử lý tự động từ URL đến Editor."""
+    workflow_id: str
+    source_url: str
+    idempotency_key: Optional[str] = None
+    state: str = "queued"  # queued, downloading, detecting_roi, ocr, translating, dubbing, exporting, completed, retrying, needs_review, failed, cancelled
+    current_stage: str = "downloading"
+    project_id: Optional[str] = None
+    title: str = ""
+    thumbnail_url: str = ""
+    settings: FullPipelineSettingsV1 = field(default_factory=FullPipelineSettingsV1)
+    stages: List[FullPipelineStageV1] = field(default_factory=_get_default_pipeline_stages)
+    progress: float = 0.0
+    retry_count: int = 0
+    fallback_events: List[FallbackEventV1] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+    artifacts: Dict[str, Any] = field(default_factory=dict)
+    quality_metrics: Dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    finished_at: Optional[float] = None
+    schema_version: str = "full-pipeline-workflow-v1"
+
+    # Định nghĩa các chuyển đổi trạng thái hợp lệ
+    VALID_TRANSITIONS: Dict[str, set[str]] = field(default_factory=lambda: {
+        "queued": {"downloading", "cancelled"},
+        "downloading": {"detecting_roi", "failed", "needs_review", "cancelled", "retrying"},
+        "detecting_roi": {"ocr", "failed", "needs_review", "cancelled", "retrying"},
+        "ocr": {"translating", "failed", "needs_review", "cancelled", "retrying"},
+        "translating": {"dubbing", "exporting", "failed", "needs_review", "cancelled", "retrying"},
+        "dubbing": {"exporting", "failed", "needs_review", "cancelled", "retrying"},
+        "exporting": {"completed", "failed", "needs_review", "cancelled", "retrying"},
+        "retrying": {"downloading", "detecting_roi", "ocr", "translating", "dubbing", "exporting", "failed", "cancelled"},
+        "needs_review": {"retrying", "completed", "cancelled"},
+        "failed": {"retrying"},
+        "cancelled": {"retrying"},
+        "completed": set(),
+    })
+
+    def transition_to(self, new_state: str) -> None:
+        """Thực hiện chuyển đổi trạng thái với kiểm tra tính hợp lệ nghiêm ngặt."""
+        allowed = self.VALID_TRANSITIONS.get(self.state, set())
+        if new_state not in allowed:
+            raise ValueError(
+                f"Chuyển đổi trạng thái không hợp lệ: từ '{self.state}' sang '{new_state}'. "
+                f"Các trạng thái được phép: {sorted(list(allowed))}"
+            )
+        self.state = new_state
+        self.updated_at = time.time()
+        if new_state in ("completed", "failed", "cancelled"):
+            self.finished_at = time.time()
+
+    def get_stage(self, stage_name: str) -> Optional[FullPipelineStageV1]:
+        for st in self.stages:
+            if st.stage_name == stage_name:
+                return st
+        return None
+
+    def update_stage(self, stage_name: str, status: str, progress: float = 0.0,
+                     metrics: Optional[Dict[str, Any]] = None, error: Optional[str] = None) -> None:
+        st = self.get_stage(stage_name)
+        if st:
+            st.status = status
+            st.progress = progress
+            if status == "running" and st.start_time is None:
+                st.start_time = time.time()
+            elif status in ("completed", "failed", "skipped", "needs_review"):
+                st.end_time = time.time()
+            if metrics:
+                st.metrics.update(metrics)
+            if error:
+                st.errors.append(error)
+        self.updated_at = time.time()
+
+    def to_dict(self) -> Dict[str, Any]:
+        res = asdict(self)
+        res.pop("VALID_TRANSITIONS", None)
+        return res
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> FullPipelineWorkflowV1:
+        stages_raw = data.get("stages", [])
+        stages = [
+            FullPipelineStageV1.from_dict(s) if isinstance(s, dict) else s
+            for s in stages_raw
+        ] if stages_raw else _get_default_pipeline_stages()
+
+        fallbacks_raw = data.get("fallback_events", [])
+        fallbacks = [
+            FallbackEventV1.from_dict(f) if isinstance(f, dict) else f
+            for f in fallbacks_raw
+        ]
+
+        settings_raw = data.get("settings", {})
+        settings = (
+            FullPipelineSettingsV1.from_dict(settings_raw)
+            if isinstance(settings_raw, dict) else FullPipelineSettingsV1()
+        )
+
+        return cls(
+            workflow_id=data.get("workflow_id", ""),
+            source_url=data.get("source_url", ""),
+            idempotency_key=data.get("idempotency_key"),
+            state=data.get("state", "queued"),
+            current_stage=data.get("current_stage", "downloading"),
+            project_id=data.get("project_id"),
+            title=data.get("title", ""),
+            thumbnail_url=data.get("thumbnail_url", ""),
+            settings=settings,
+            stages=stages,
+            progress=float(data.get("progress", 0.0)),
+            retry_count=int(data.get("retry_count", 0)),
+            fallback_events=fallbacks,
+            warnings=data.get("warnings", []),
+            errors=data.get("errors", []),
+            artifacts=data.get("artifacts", {}),
+            quality_metrics=data.get("quality_metrics", {}),
+            created_at=float(data.get("created_at", time.time())),
+            updated_at=float(data.get("updated_at", time.time())),
+            finished_at=data.get("finished_at"),
+            schema_version=data.get("schema_version", "full-pipeline-workflow-v1"),
+        )

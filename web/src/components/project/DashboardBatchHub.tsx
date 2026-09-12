@@ -3420,9 +3420,11 @@ export const DashboardBatchHub: React.FC<DashboardBatchHubProps> = ({
                                   }
                                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
                                 >
-                                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Khuyên dùng)</option>
+                                  <option value="gemini-3.8-flash">Gemini 3.8 Flash (Khuyên dùng)</option>
+                                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Cũ)</option>
                                   <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
-                                  <option value="qwen2.5:14b">Local Qwen 2.5 14B (khuyên dùng)</option>
+                                  <option value="qwen3:14b">Local Qwen 3 14B (khuyên dùng)</option>
+                                  <option value="qwen2.5:14b">Local Qwen 2.5 14B (dự phòng)</option>
                                 </select>
                               </div>
                               <div>

@@ -52,8 +52,10 @@
   "translation": {
     "provider": "gemini",
     "target_language": "vi",
-    "gemini_model": "gemini-2.5-flash",
-    "local_model": "gemma2:9b",
+    "gemini_model": "gemini-3.8-flash",
+    "local_model": "qwen3:14b",
+    "local_fallback_model": "gemma2:9b",
+    "local_supported": true,
     "local_endpoint": "http://localhost:11434",
     "auto_fallback": true,
     "batch_size": 0,
@@ -74,9 +76,13 @@
     "rate": "+10%",
     "pitch": "+0Hz",
     "ducking_volume": 0.25,
-    "local_rewrite_enabled": false,
+    "local_rewrite_enabled": true,
     "video_rescue_enabled": true,
-    "video_rescue_max_slowdown": 1.25
+    "video_rescue_max_slowdown": 1.25,
+    "edge_concurrency": 64,
+    "capcut_concurrency": 80,
+    "gemini_concurrency": 4,
+    "request_timeout_seconds": 25.0
   },
   "render": {
     "ffmpeg_encoder": "auto",

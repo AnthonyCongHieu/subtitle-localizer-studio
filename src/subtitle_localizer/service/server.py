@@ -32,6 +32,8 @@ from subtitle_localizer.service.pipeline_settings import (
 
 from subtitle_localizer.domain.models import (
     CommandEnvelopeV1,
+    FullPipelineSettingsV1,
+    FullPipelineWorkflowV1,
     ProjectManifestV1,
     RegionTrackV1,
     StageRunV1,
@@ -474,6 +476,36 @@ class ImportCapCutDraftRequest(BaseModel):
     draft_path: Optional[str] = None
 
 
+class FullPipelinePreviewRequest(BaseModel):
+    url: str
+    source_language: Optional[str] = "auto"
+    target_language: Optional[str] = "vi"
+
+
+class FullPipelineCreateRequest(BaseModel):
+    url: str
+    source_language: Optional[str] = "auto"
+    target_language: Optional[str] = "vi"
+    target_resolution: Optional[str] = "best"
+    ocr_quality: Optional[str] = "auto"
+    translation_quality: Optional[str] = "auto"
+    dubbing_enabled: Optional[bool] = True
+    voice: Optional[str] = "vi-VN-HoaiMyNeural"
+    speed_fit: Optional[bool] = True
+    burn_subtitles: Optional[bool] = True
+    mask_subtitles: Optional[bool] = True
+    mask_mode: Optional[str] = "blur"
+    export_srt_ass: Optional[bool] = True
+    output_dir: Optional[str] = None
+    proxy: Optional[str] = None
+    cookie_source: Optional[str] = "none"
+    idempotency_key: Optional[str] = None
+
+
+class FullPipelineRetryRequest(BaseModel):
+    stage: Optional[str] = None
+
+
 def create_app(
     database: Optional[Database] = None,
     repo: Optional[ProjectRepository] = None,
@@ -531,10 +563,25 @@ def create_app(
     db = database or Database("subtitle_localizer.db")
     db.migrate()
     repository = repo or ProjectRepository(db)
+    try:
+        repository.reconcile_active_workflows()
+    except Exception as reconcile_wf_exc:
+        logger.warning("Không thể dọn dẹp workflow kẹt: %s", reconcile_wf_exc)
     ws_manager = WebSocketManager(repository)
     worker = worker or BackgroundWorker(repository)
     resolved_output_root = Path(output_root).resolve()
+    from subtitle_localizer.service.full_pipeline_orchestrator import FullPipelineOrchestrator
+    full_pipeline_orchestrator = FullPipelineOrchestrator(
+        repository=repository,
+        output_root=resolved_output_root,
+        worker=worker,
+    )
+    app.state.full_pipeline_orchestrator = full_pipeline_orchestrator
     running_project_ids: set[str] = set()
+    # One cancellable dubbing task per project; exposed for cancellation and
+    # diagnostics without allowing concurrent writers to share one stage log.
+    active_dubbing_tasks: dict[str, asyncio.Task[Any]] = {}
+    app.state.active_dubbing_tasks = active_dubbing_tasks
     running_lock = threading.Lock()
     lan = LanCoordinator(db)
     lan_artifacts = CoordinatorArtifactStore(resolved_output_root / ".lan-artifacts")
@@ -1172,6 +1219,130 @@ def create_app(
         return {"status": "cancelling"}
 
     # -------------------------------------------------------------------------
+    # Full-Pipeline Workflows (Ticket T28 - Contract AI_FULL_PIPELINE_IMPLEMENTATION_PROMPT.md)
+    # -------------------------------------------------------------------------
+
+    @app.post("/api/v1/workflows/full-pipeline/preview")
+    async def full_pipeline_preview(
+        req: FullPipelinePreviewRequest,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        if not req.url or not req.url.strip():
+            raise HTTPException(status_code=400, detail="URL không được để trống")
+        try:
+            from subtitle_localizer.service.downloader import parse_media_target
+            info = parse_media_target(req.url.strip())
+            return {
+                "url": req.url.strip(),
+                "canonical_url": info.get("url") or req.url.strip(),
+                "platform": info.get("platform", "generic"),
+                "source_platform": info.get("source_platform", info.get("platform", "generic")),
+                "title": info.get("title", "Video từ liên kết"),
+                "cover_url": info.get("cover_url", ""),
+                "thumbnail": info.get("cover_url", ""),
+                "duration": info.get("duration", 0),
+                "total_episodes": info.get("total_episodes", 1),
+                "resolutions": info.get("resolutions", []),
+                "warnings": info.get("warnings", []),
+                "source_language": req.source_language or "auto",
+                "target_language": req.target_language or "vi",
+            }
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Không thể phân tích URL: {e}")
+
+    @app.post("/api/v1/workflows/full-pipeline")
+    async def create_full_pipeline_workflow(
+        req: FullPipelineCreateRequest,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        if not req.url or not req.url.strip():
+            raise HTTPException(status_code=400, detail="URL không được để trống")
+
+        # Kiểm tra idempotency nếu có
+        if req.idempotency_key:
+            existing = repository.find_workflow_by_idempotency_key(req.idempotency_key)
+            if existing:
+                return existing.to_dict()
+
+        settings = FullPipelineSettingsV1(
+            source_language=req.source_language or "auto",
+            target_language=req.target_language or "vi",
+            target_resolution=req.target_resolution or "best",
+            ocr_quality=req.ocr_quality or "auto",
+            translation_quality=req.translation_quality or "auto",
+            dubbing_enabled=req.dubbing_enabled if req.dubbing_enabled is not None else True,
+            voice=req.voice or "vi-VN-HoaiMyNeural",
+            speed_fit=req.speed_fit if req.speed_fit is not None else True,
+            burn_subtitles=req.burn_subtitles if req.burn_subtitles is not None else True,
+            mask_subtitles=req.mask_subtitles if req.mask_subtitles is not None else True,
+            mask_mode=req.mask_mode or "blur",
+            export_srt_ass=req.export_srt_ass if req.export_srt_ass is not None else True,
+            output_dir=req.output_dir,
+            proxy=req.proxy,
+            cookie_source=req.cookie_source or "none",
+        )
+
+        wf_id = f"wf-{uuid.uuid4().hex[:10]}"
+        wf = FullPipelineWorkflowV1(
+            workflow_id=wf_id,
+            source_url=req.url.strip(),
+            idempotency_key=req.idempotency_key,
+            state="queued",
+            current_stage="downloading",
+            settings=settings,
+        )
+        repository.save_workflow(wf)
+        full_pipeline_orchestrator.start_workflow_async(wf_id)
+        return wf.to_dict()
+
+    @app.get("/api/v1/workflows/full-pipeline/{workflow_id}")
+    async def get_full_pipeline_workflow(
+        workflow_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        wf = repository.get_workflow(workflow_id)
+        if not wf:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        return wf.to_dict()
+
+    @app.get("/api/v1/workflows/full-pipeline")
+    async def list_full_pipeline_workflows(
+        limit: int = Query(50, ge=1, le=200),
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        wfs = repository.list_workflows(limit=limit)
+        return {"workflows": [w.to_dict() for w in wfs], "total": len(wfs)}
+
+    @app.post("/api/v1/workflows/full-pipeline/{workflow_id}/cancel")
+    async def cancel_full_pipeline_workflow(
+        workflow_id: str,
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        success = full_pipeline_orchestrator.cancel_workflow(workflow_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        return {"status": "cancelled", "workflow_id": workflow_id}
+
+    @app.post("/api/v1/workflows/full-pipeline/{workflow_id}/retry")
+    async def retry_full_pipeline_workflow(
+        workflow_id: str,
+        req: FullPipelineRetryRequest = FullPipelineRetryRequest(),
+        authorization: Optional[str] = Header(None),
+    ) -> Dict[str, Any]:
+        verify_auth(authorization)
+        success = full_pipeline_orchestrator.retry_workflow(workflow_id, from_stage=req.stage)
+        if not success:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        return {"status": "retrying", "workflow_id": workflow_id, "stage": req.stage}
+
+    # -------------------------------------------------------------------------
     # Queue Management Endpoints (R4)
     # -------------------------------------------------------------------------
 
@@ -1790,6 +1961,9 @@ def create_app(
             raise HTTPException(status_code=404, detail="Project not found")
 
         worker.cancel_project(project_id)
+        dubbing_task = active_dubbing_tasks.get(project_id)
+        if dubbing_task is not None and not dubbing_task.done():
+            dubbing_task.cancel()
         with running_lock:
             running_project_ids.discard(project_id)
 
@@ -1878,6 +2052,18 @@ def create_app(
         manifest = repository.get_project(project_id)
         if not manifest:
             raise HTTPException(status_code=404, detail="Project not found")
+
+        # A dubbing run is a single project-wide job.  Without this guard,
+        # repeated clicks/retries create concurrent TTS writers and overwrite
+        # each other's stage progress (often leaving the UI at 0%).
+        existing_dub_task = active_dubbing_tasks.get(project_id)
+        if existing_dub_task is not None and not existing_dub_task.done():
+            raise HTTPException(status_code=409, detail="Dự án đang lồng tiếng; vui lòng chờ lượt hiện tại kết thúc")
+        # Reserve the project before any I/O (cue loading/settings) so two
+        # requests arriving at the same time cannot both pass the guard.
+        request_task = asyncio.current_task()
+        if request_task is not None:
+            active_dubbing_tasks[project_id] = request_task
 
         cues = repository.get_cues(project_id)
         if not cues:
@@ -2171,6 +2357,8 @@ def create_app(
 
         cues = repository.get_cues(project_id)
         if not cues:
+            if request_task is not None:
+                active_dubbing_tasks.pop(project_id, None)
             raise HTTPException(status_code=400, detail="Dự án chưa có phụ đề để lồng tiếng")
 
         settings = merge_pipeline_settings(overrides=manifest.custom_pipeline_settings)
@@ -2460,149 +2648,40 @@ def create_app(
         subtitle_placement: Optional[str] = "roi",
         blur_strength: Optional[int] = 20,
     ) -> str:
-        project = repository.get_project(project_id)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        if regions_override is not None:
-            project.regions = [RegionTrackV1.from_dict(r) for r in regions_override]
-            repository.save_project(project)
-
-        source_path = Path(project.source_video_path)
-        if not source_path.exists() or not source_path.is_file():
-            raise HTTPException(status_code=404, detail="Source video not found")
-        valid_mask_modes = {
-            "box", "blur", "feather_tight", "optical_blend", "soft_cinema",
-            "feather", "glass", "ambient", "mosaic", "gradient", "crop", "sttn_lama", "none"
-        }
-        if mask_mode not in valid_mask_modes:
-            raise HTTPException(status_code=422, detail="Unsupported mask mode")
-
-        from subtitle_localizer.render.ass import AssExporter
-        from subtitle_localizer.render.export import VideoExporter
-        from subtitle_localizer.render.mask import SubtitleMasker
-        import tempfile
-
-        ass_path: Optional[Path] = None
+        from subtitle_localizer.service.export_service import do_export_mp4
         try:
-            project_output = resolved_output_root / project_id
-            project_output.mkdir(parents=True, exist_ok=True)
-            output_path = project_output / f"{source_path.stem}-localized.mp4"
-            cues = repository.get_cues(project_id)
-
-            import cv2
-            cap = cv2.VideoCapture(str(source_path))
-            vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
-            vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
-            cap.release()
-
-            all_regions = project.regions or []
-            font_size = max(24, int(vh * 0.036))
-            if (subtitle_placement or "roi") == "bottom" or not all_regions:
-                margin_v = int(vh * 0.06)
-            else:
-                # Duy nhất 1 vị trí hiển thị phụ đề: vùng có y lớn nhất (đáy màn hình)
-                sub_region = sorted(all_regions, key=lambda r: getattr(r, "y", 0.0), reverse=True)[0]
-                sub_y = sub_region.y * vh
-                margin_v = max(10, int(vh - sub_y - (sub_region.height * vh)))
-
-            ass_content = AssExporter(
-                font_name="Arial",
-                font_size=font_size,
-                primary_color="&H002DFEFE",
-                outline_color="&H00000000",
-                outline=3,
-                shadow=1,
-                play_res_x=vw,
-                play_res_y=vh,
-                margin_v=margin_v,
-                bold=1,
-            ).export_ass_text(
-                cues,
-                script_title=project.title,
+            rendered_str = do_export_mp4(
+                repository=repository,
+                resolved_output_root=resolved_output_root,
+                project_id=project_id,
+                mask_mode=mask_mode,
                 use_translated=use_translated,
-            )
-
-            # Lọc các vùng được cấu hình làm mờ (mask_enabled != False)
-            all_regions = project.regions or []
-            masked_regions = [r for r in all_regions if getattr(r, "mask_enabled", True) is not False]
-
-            mask_filter = None
-            if mask_mode != "none":
-                if all_regions and not masked_regions:
-                    # Người dùng đã cấu hình vùng quét nhưng tất cả đều chọn "Chỉ Quét Sub / Không làm mờ"
-                    mask_filter = None
-                else:
-                    boxes: list[tuple[int, int, int, int]] = []
-                    if masked_regions:
-                        for reg in masked_regions:
-                            rx1 = max(0, min(vw - 2, int(reg.x * vw)))
-                            ry1 = max(0, min(vh - 2, int(reg.y * vh)))
-                            rx2 = max(rx1 + 2, min(vw, int((reg.x + reg.width) * vw)))
-                            ry2 = max(ry1 + 2, min(vh, int((reg.y + reg.height) * vh)))
-                            boxes.append((rx1, ry1, max(2, rx2 - rx1), max(2, ry2 - ry1)))
-                    else:
-                        boxes.append((0, int(vh * 0.8), vw, max(2, int(vh * 0.2))))
-                    mask_filter = SubtitleMasker().get_multi_filter_string(boxes=boxes, mode=mask_mode, blur_strength=blur_strength or 20)
-
-            with tempfile.NamedTemporaryFile(
-                dir=project_output,
-                prefix=".tmp_subtitles_",
-                suffix=".ass",
-                delete=False,
-            ) as temporary_ass:
-                ass_path = Path(temporary_ass.name)
-            ass_path.write_text(ass_content, encoding="utf-8")
-            rendered_path = VideoExporter().render_video(
-                source_video_path=source_path,
-                output_video_path=output_path,
-                ass_path=ass_path,
-                mask_filter=mask_filter,
-                use_nvenc=True,
                 flip_h=flip_h,
                 flip_v=flip_v,
+                video_x=video_x,
+                video_y=video_y,
+                video_scale=video_scale,
                 rotation=rotation,
+                regions_override=regions_override,
+                subtitle_placement=subtitle_placement,
+                blur_strength=blur_strength,
             )
-
-            # Nếu có file lồng tiếng TTS, tự động hòa trộn vào video xuất kèm audio ducking
-            voiceover_path = project_output / f"voiceover_{project_id}.mp3"
-            if voiceover_path.exists() and voiceover_path.stat().st_size > 0:
-                from subtitle_localizer.dubbing.tts import mix_voiceover_into_video
-                temp_mixed = project_output / f".tmp_dubbed_{output_path.name}"
-                merged_settings = merge_pipeline_settings(overrides=project.custom_pipeline_settings)
-                actual_ducking = getattr(merged_settings.dubbing, "ducking_volume", 0.25)
-                try:
-                    mix_voiceover_into_video(
-                        video_path=rendered_path,
-                        voiceover_path=voiceover_path,
-                        output_path=temp_mixed,
-                        ducking_volume=actual_ducking,
-                    )
-                    if temp_mixed.exists() and temp_mixed.stat().st_size > 0:
-                        temp_mixed.replace(rendered_path)
-                except Exception as ex:
-                    logger.warning(f"Không thể hòa trộn voiceover vào video xuất: {ex}")
-                    if temp_mixed.exists():
-                        temp_mixed.unlink(missing_ok=True)
-
-        except (OSError, RuntimeError) as error:
+        except (ValueError, FileNotFoundError) as err:
+            raise HTTPException(status_code=404 if "not found" in str(err).lower() else 422, detail=str(err))
+        except Exception as error:
             raise HTTPException(status_code=500, detail=f"MP4 export failed: {error}") from error
-        finally:
-            if ass_path is not None:
-                try:
-                    ass_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
 
+        rendered_path = Path(rendered_str)
         if not rendered_path.exists() or not rendered_path.is_file():
             raise HTTPException(status_code=500, detail="MP4 export did not produce an output file")
 
         # Cập nhật trạng thái xuất file thành công vào manifest để UI hiển thị chuẩn xác
-        current_manifest = repository.get_project(project_id) or project
-        current_manifest.has_export = True
-        current_manifest.export_path = str(rendered_path).replace("\\", "/")
-        current_manifest.export_file_size_bytes = rendered_path.stat().st_size if rendered_path.exists() else 0
-        repository.save_project(current_manifest)
+        current_manifest = repository.get_project(project_id)
+        if current_manifest:
+            current_manifest.has_export = True
+            current_manifest.export_path = str(rendered_path).replace("\\", "/")
+            current_manifest.export_file_size_bytes = rendered_path.stat().st_size if rendered_path.exists() else 0
+            repository.save_project(current_manifest)
 
         return str(rendered_path)
 

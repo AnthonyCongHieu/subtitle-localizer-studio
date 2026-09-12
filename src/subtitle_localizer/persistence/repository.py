@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from subtitle_localizer.domain.models import (
     BridgeEventV1,
+    FullPipelineWorkflowV1,
     ProjectManifestV1,
     RegionTrackV1,
     StageRunV1,
     SubtitleCueV1,
 )
 from subtitle_localizer.persistence.database import Database
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectRepository:
@@ -337,6 +341,48 @@ class ProjectRepository:
         with conn:
             conn.execute("DELETE FROM stage_runs WHERE project_id = ?;", (project_id,))
 
+    def reconcile_orphaned_stage_runs(
+        self,
+        reason: str = "interrupted_by_restart",
+        stale_after_seconds: float = 3600.0,
+    ) -> int:
+        """Đánh dấu các stage run còn ``running`` từ tiến trình trước là thất bại.
+
+        Chỉ gọi lúc khởi động ứng dụng: khi đó không còn stage nào thực sự chạy,
+        nên các dòng ``running`` còn lại là tàn dư của lần crash trước đó và sẽ
+        khiến giao diện hiển thị "đang chạy" mãi mãi.
+
+        ``stale_after_seconds`` bảo vệ stage vừa mới bắt đầu: nếu một tiến trình
+        khác đang dùng chung database, dòng ``running`` mới ghi sẽ không bị đụng.
+        """
+        conn = self.db.get_connection()
+        cutoff = time.time() - max(0.0, stale_after_seconds)
+        cursor = conn.execute(
+            "SELECT id, stage_json FROM stage_runs WHERE status = 'running' AND start_time <= ?;",
+            (cutoff,),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return 0
+
+        now = time.time()
+        marked = 0
+        with conn:
+            for row in rows:
+                data = json.loads(row["stage_json"])
+                data["status"] = "failed"
+                data["end_time"] = now
+                errors = list(data.get("errors") or [])
+                errors.append(reason)
+                data["errors"] = errors
+                conn.execute(
+                    "UPDATE stage_runs SET status = ?, stage_json = ?, end_time = ? WHERE id = ?;",
+                    ("failed", json.dumps(data, ensure_ascii=False), now, row["id"]),
+                )
+                marked += 1
+        logger.warning("Đã đánh dấu %s stage run còn 'running' từ tiến trình trước là failed", marked)
+        return marked
+
     def save_event(self, event: BridgeEventV1) -> None:
         """Lưu event vào chuỗi sự kiện WebSocket ordered sequence."""
         conn = self.db.get_connection()
@@ -387,3 +433,105 @@ class ProjectRepository:
         conn = self.db.get_connection()
         row = conn.execute("SELECT COALESCE(MAX(sequence), 0) AS latest FROM bridge_events;").fetchone()
         return int(row["latest"] if row else 0)
+
+    # -------------------------------------------------------------------------
+    # Full Pipeline Workflows (Ticket T28)
+    # -------------------------------------------------------------------------
+    def save_workflow(self, workflow: FullPipelineWorkflowV1) -> None:
+        """Lưu hoặc cập nhật trạng thái FullPipelineWorkflowV1 bền vững."""
+        conn = self.db.get_connection()
+        settings_json = json.dumps(workflow.settings.to_dict(), ensure_ascii=False)
+        workflow_json = json.dumps(workflow.to_dict(), ensure_ascii=False)
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO full_pipeline_workflows (
+                    workflow_id, idempotency_key, state, current_stage,
+                    project_id, settings_json, workflow_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workflow_id) DO UPDATE SET
+                    idempotency_key = excluded.idempotency_key,
+                    state = excluded.state,
+                    current_stage = excluded.current_stage,
+                    project_id = excluded.project_id,
+                    settings_json = excluded.settings_json,
+                    workflow_json = excluded.workflow_json,
+                    updated_at = excluded.updated_at;
+                """,
+                (
+                    workflow.workflow_id,
+                    workflow.idempotency_key,
+                    workflow.state,
+                    workflow.current_stage,
+                    workflow.project_id,
+                    settings_json,
+                    workflow_json,
+                    workflow.created_at,
+                    workflow.updated_at,
+                ),
+            )
+
+    def get_workflow(self, workflow_id: str) -> Optional[FullPipelineWorkflowV1]:
+        """Lấy một workflow theo workflow_id."""
+        conn = self.db.get_connection()
+        cursor = conn.execute(
+            "SELECT workflow_json FROM full_pipeline_workflows WHERE workflow_id = ?;",
+            (workflow_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        data = json.loads(row["workflow_json"])
+        return FullPipelineWorkflowV1.from_dict(data)
+
+    def find_workflow_by_idempotency_key(self, key: str) -> Optional[FullPipelineWorkflowV1]:
+        """Tìm workflow theo idempotency_key để tránh tạo tác vụ trùng."""
+        if not key or not str(key).strip():
+            return None
+        conn = self.db.get_connection()
+        cursor = conn.execute(
+            "SELECT workflow_json FROM full_pipeline_workflows WHERE idempotency_key = ?;",
+            (key.strip(),),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        data = json.loads(row["workflow_json"])
+        return FullPipelineWorkflowV1.from_dict(data)
+
+    def list_workflows(self, limit: int = 50) -> List[FullPipelineWorkflowV1]:
+        """Lấy danh sách các workflow gần nhất."""
+        conn = self.db.get_connection()
+        cursor = conn.execute(
+            "SELECT workflow_json FROM full_pipeline_workflows ORDER BY updated_at DESC LIMIT ?;",
+            (limit,),
+        )
+        rows = cursor.fetchall()
+        result: List[FullPipelineWorkflowV1] = []
+        for r in rows:
+            data = json.loads(r["workflow_json"])
+            result.append(FullPipelineWorkflowV1.from_dict(data))
+        return result
+
+    def reconcile_active_workflows(self) -> int:
+        """Khôi phục các workflow còn kẹt ở trạng thái active khi restart server."""
+        active_states = ("downloading", "detecting_roi", "ocr", "translating", "dubbing", "exporting")
+        conn = self.db.get_connection()
+        placeholders = ",".join("?" for _ in active_states)
+        cursor = conn.execute(
+            f"SELECT workflow_json FROM full_pipeline_workflows WHERE state IN ({placeholders});",
+            active_states,
+        )
+        rows = cursor.fetchall()
+        reconciled_count = 0
+        for r in rows:
+            data = json.loads(r["workflow_json"])
+            wf = FullPipelineWorkflowV1.from_dict(data)
+            # Chuyển sang needs_review kèm cảnh báo server restart để người dùng có thể retry hoặc tiếp tục
+            wf.state = "needs_review"
+            wf.warnings.append(f"Tiến trình bị gián đoạn do máy chủ khởi động lại tại stage '{wf.current_stage}'.")
+            self.save_workflow(wf)
+            reconciled_count += 1
+        if reconciled_count > 0:
+            logger.warning("Đã khôi phục %d workflow active kẹt từ lần chạy trước sang 'needs_review'.", reconciled_count)
+        return reconciled_count

@@ -1,6 +1,7 @@
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -37,6 +38,46 @@ class ProxyAndStagePersistenceTest(unittest.TestCase):
             self.temp_dir.cleanup()
         except Exception:
             pass
+
+    def test_orphaned_running_stage_is_reconciled_on_startup(self) -> None:
+        project_id = "proj-orphan-stage"
+        self.repo.save_project(
+            ProjectManifestV1(
+                project_id=project_id,
+                title="Orphan Stage Test",
+                source_video_path=str(Path(self.temp_dir.name) / "orphan.mp4"),
+                video_fingerprint="fp-orphan",
+                source_language="zh",
+                target_language="vi",
+            )
+        )
+        stage = StageRunV1(
+            stage_name="translation",
+            status="running",
+            progress=0.4,
+            start_time=time.time() - 7200.0,
+        )
+        self.repo.save_stage_run(project_id, stage)
+        self.assertEqual(self.repo.get_stage_runs(project_id)[0].status, "running")
+
+        # A stage that started moments ago may belong to another live process and
+        # must be left alone.
+        fresh = StageRunV1(stage_name="ocr", status="running", progress=0.1)
+        self.repo.save_stage_run(project_id, fresh)
+
+        # Restarting the app must not leave a crashed stage "running" forever.
+        create_app(
+            database=self.db,
+            repo=self.repo,
+            auth_token="test-token-proxy",
+            output_root=self.output_root,
+        )
+
+        reconciled = self.repo.get_stage_runs(project_id)[0]
+        self.assertEqual(reconciled.status, "failed")
+        self.assertIsNotNone(reconciled.end_time)
+        self.assertTrue(reconciled.errors)
+        self.assertEqual(self.repo.get_stage_runs(project_id)[1].status, "running")
 
     def test_video_proxy_endpoint(self) -> None:
         from fastapi.testclient import TestClient

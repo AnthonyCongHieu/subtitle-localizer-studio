@@ -33,7 +33,7 @@ async def run_project_dubbing(repository: Any, project_id: str, output_root: Pat
     voice_female = options.get("voice_female") or getattr(settings.dubbing, "voice_female", "vi-VN-HoaiMyNeural")
     prompt_style = options.get("prompt_style") or getattr(settings.dubbing, "gemini_prompt_style", "dramatic")
     local_llm_endpoint = options.get("local_llm_endpoint") or getattr(settings.translation, "local_endpoint", "http://localhost:11434")
-    local_llm_model = options.get("local_llm_model") or getattr(settings.translation, "local_model", "qwen2.5:14b")
+    local_llm_model = options.get("local_llm_model") or getattr(settings.translation, "local_model", "qwen3:14b")
     local_rewrite_enabled = bool(options.get("local_rewrite_enabled", getattr(settings.dubbing, "local_rewrite_enabled", False)))
     project_output = Path(output_root).resolve() / project_id
     project_output.mkdir(parents=True, exist_ok=True)

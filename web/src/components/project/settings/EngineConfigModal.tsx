@@ -59,7 +59,7 @@ export const EngineConfigModal: React.FC<EngineConfigModalProps> = ({
           source_lang: 'vi',
           target_lang: 'en',
           provider: 'gemini',
-          gemini_model: model || 'gemini-2.5-flash',
+          gemini_model: model || 'gemini-3.8-flash',
           prompt_tone: 'literal',
           use_glossary: false,
         });
@@ -79,7 +79,7 @@ export const EngineConfigModal: React.FC<EngineConfigModalProps> = ({
       } else if (protocol === 'ollama') {
         // Test Ollama local endpoint
         const res = await apiClient.testLocalLlmConnection({
-          model: model || 'qwen2.5:14b',
+          model: model || 'qwen3:14b',
           endpoint: baseUrl || 'http://localhost:11434',
         });
         const latency = Date.now() - startTime;

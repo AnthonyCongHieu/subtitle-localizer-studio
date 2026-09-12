@@ -10,6 +10,10 @@ def test_video_rescue_caps_factor_and_shifts_following_cues():
     plan = build_video_rescue_plan(cues, {"a": 2.0}, max_slowdown=1.25)
     assert plan[0].factor == 1.25
     shifted = retime_cues_for_video_rescue(cues, plan)
+    # Segment cue "a" itself is extended by 1.25x (5.0 -> 6.25s)
+    assert shifted[0].start_pts == 0.0
+    assert shifted[0].end_pts == 6.25
+    # Following cue "b" is shifted by added_seconds (+1.25s)
     assert shifted[1].start_pts == 6.25
     assert shifted[1].end_pts == 7.25
 

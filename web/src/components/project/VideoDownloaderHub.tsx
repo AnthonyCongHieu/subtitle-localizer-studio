@@ -15,6 +15,7 @@ import {
 } from '../../api/client';
 import { ProjectManifestV1 } from '../../types/api';
 import { EpisodeSelectorGrid } from './EpisodeSelectorGrid';
+import { FullPipelineTab } from './FullPipelineTab';
 import {
   Download,
   Link,
@@ -65,8 +66,9 @@ export interface VideoDownloaderHubProps {
   onRefreshProjects: () => void;
   onBatchProjectsCreated?: (newProjects: ProjectManifestV1[]) => void;
   onOpenSettings?: () => void;
-  initialTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings';
-  onTabChange?: (tab: 'search' | 'direct' | 'queue' | 'auth' | 'settings') => void;
+  onSelectProject?: (project: ProjectManifestV1) => void;
+  initialTab?: 'pipeline' | 'search' | 'direct' | 'queue' | 'auth' | 'settings';
+  onTabChange?: (tab: 'pipeline' | 'search' | 'direct' | 'queue' | 'auth' | 'settings') => void;
 }
 
 export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
@@ -75,12 +77,13 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
   onRefreshProjects,
   onBatchProjectsCreated,
   onOpenSettings: _onOpenSettings,
-  initialTab = 'search',
+  onSelectProject,
+  initialTab = 'pipeline',
   onTabChange,
 }) => {
   const loggerCount = useAppLoggerCount();
   // Tab điều hướng chính
-  const [activeTab, setActiveTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'pipeline' | 'search' | 'direct' | 'queue' | 'auth' | 'settings'>(initialTab);
 
   useEffect(() => {
     if (initialTab && initialTab !== activeTab) {
@@ -1260,6 +1263,23 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
       {/* ========================================================================= */}
       <div className="shrink-0 bg-slate-900 border-b border-slate-800 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+          {/* TAB 0: TỰ ĐỘNG HÓA AI (FULL PIPELINE) */}
+          <button
+            id="tab-pipeline-button"
+            onClick={() => setActiveTab('pipeline')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm ${
+              activeTab === 'pipeline'
+                ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-indigo-600/30 ring-1 ring-indigo-400'
+                : 'bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/60'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+            <span>Tự Động Hóa AI</span>
+            <span className="px-1.5 py-0.2 rounded bg-indigo-950/70 border border-indigo-400/40 text-[10px] font-bold text-indigo-300">
+              1-Click Pipeline
+            </span>
+          </button>
+
           {/* TAB 1: SEARCH-FIRST (BILIBILI) */}
           <button
             onClick={() => setActiveTab('search')}
@@ -1350,6 +1370,22 @@ export const VideoDownloaderHub: React.FC<VideoDownloaderHubProps> = ({
       {/* 3. KHU VỰC NỘI DUNG CHÍNH (CUỘN ĐỘC LẬP) */}
       {/* ========================================================================= */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* ======================================================================= */}
+        {/* PHÂN LOẠI 0: TỰ ĐỘNG HÓA AI (FULL PIPELINE) */}
+        {/* ======================================================================= */}
+        {activeTab === 'pipeline' && (
+          <FullPipelineTab
+            onOpenProject={(proj) => {
+              if (onSelectProject) {
+                onSelectProject(proj);
+              } else if (onSwitchToStudio) {
+                onSwitchToStudio();
+              }
+            }}
+            onRefreshProjects={onRefreshProjects}
+          />
+        )}
+
         {/* ======================================================================= */}
         {/* PHÂN LOẠI 1: TÌM KIẾM TRƯỚC KHI TẢI (SEARCH-FIRST PLATFORMS) */}
         {/* ======================================================================= */}

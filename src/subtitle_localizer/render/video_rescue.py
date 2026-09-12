@@ -46,12 +46,13 @@ def build_video_rescue_plan(cues: Iterable[object], overflow_by_id: dict[str, fl
 
 
 def retime_cues_for_video_rescue(cues: Iterable[object], plan: Iterable[VideoRescueSegment]) -> list[object]:
-    """Return copied cues with cumulative slowdown offsets applied."""
+    """Return copied cues with cumulative slowdown offsets and segment expansions applied."""
     offsets = sorted(plan, key=lambda s: s.start)
     out = []
     for cue in sorted(cues, key=lambda c: float(c.start_pts)):
         shift = sum(s.added_seconds for s in offsets if s.end <= float(cue.start_pts))
-        if shift <= 0:
+        matching_seg = next((s for s in offsets if s.cue_id == str(getattr(cue, "cue_id", ""))), None)
+        if shift <= 0 and matching_seg is None:
             out.append(cue)
             continue
         if hasattr(cue, "model_copy"):
@@ -61,6 +62,10 @@ def retime_cues_for_video_rescue(cues: Iterable[object], plan: Iterable[VideoRes
         else:
             clone = deepcopy(cue)
         clone.start_pts = float(clone.start_pts) + shift
-        clone.end_pts = float(clone.end_pts) + shift
+        if matching_seg is not None:
+            duration = (float(cue.end_pts) - float(cue.start_pts)) * matching_seg.factor
+            clone.end_pts = clone.start_pts + duration
+        else:
+            clone.end_pts = float(clone.end_pts) + shift
         out.append(clone)
     return out

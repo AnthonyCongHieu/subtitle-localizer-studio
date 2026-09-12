@@ -630,7 +630,14 @@ class CapCutTTSClient:
                         pass
                 return json.loads(raw.decode("utf-8"))
 
-        create_res = await asyncio.to_thread(_post_sync, url_new, headers_new, body_new)
+        # Bound the blocking HTTP call by the same per-task budget used by the
+        # polling loop; otherwise urllib's 60s socket timeout can outlive a
+        # short TTS request timeout and make the whole dub look frozen.
+        http_timeout = max(0.1, min(60.0, float(timeout)))
+        create_res = await asyncio.wait_for(
+            asyncio.to_thread(_post_sync, url_new, headers_new, body_new),
+            timeout=http_timeout,
+        )
         if not _is_success_ret(create_res.get("ret")):
             raise self._provider_error(create_res, "CapCut TTS tạo task thất bại")
 
@@ -645,20 +652,28 @@ class CapCutTTSClient:
 
         # 2. Vòng lặp thăm dò (polling) kết quả
         start_time = time.time()
-        poll_interval = 0.5
+        # Fast first response while backing off for longer-running tasks.
+        # This reduces idle latency without creating an unbounded request storm.
+        poll_interval = 0.20
 
         while time.time() - start_time < timeout:
             await asyncio.sleep(poll_interval)
             url_query, headers_query, body_query = self.build_query_request(task_id, token)
-            query_res = await asyncio.to_thread(_post_sync, url_query, headers_query, body_query)
+            query_res = await asyncio.wait_for(
+                asyncio.to_thread(_post_sync, url_query, headers_query, body_query),
+                timeout=http_timeout,
+            )
             if not _is_success_ret(query_res.get("ret")):
                 raise self._provider_error(query_res, "CapCut TTS truy vấn task thất bại")
 
             q_tasks = (query_res.get("data") or {}).get("tasks") or []
             if not q_tasks:
+                poll_interval = min(0.8, poll_interval * 1.5)
                 continue
 
             status = str(q_tasks[0].get("status") or "").strip().lower()
+            if status not in ("success", "succeed", "failed", "failure", "error"):
+                poll_interval = min(0.8, poll_interval * 1.35)
             if status in ("success", "succeed"):
                 raw_payload = q_tasks[0].get("payload") or q_tasks[0].get("resp") or "{}"
                 payload_dict = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
@@ -684,7 +699,10 @@ class CapCutTTSClient:
                         with urllib.request.urlopen(req_dl, timeout=60) as r:
                             return r.read()
 
-                    audio_bytes = await asyncio.to_thread(_download_audio, audio_url)
+                    audio_bytes = await asyncio.wait_for(
+                        asyncio.to_thread(_download_audio, audio_url),
+                        timeout=http_timeout,
+                    )
                     if audio_bytes:
                         return audio_bytes
 

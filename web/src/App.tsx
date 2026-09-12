@@ -66,7 +66,7 @@ interface StoredStudioState {
   subtitleStroke?: 'none' | 'soft' | 'stroke' | 'glow';
   subtitleLineHeight?: number;
   viewMode?: 'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin';
-  downloaderTab?: 'search' | 'direct' | 'queue' | 'auth' | 'settings';
+  downloaderTab?: 'pipeline' | 'search' | 'direct' | 'queue' | 'auth' | 'settings';
   settingsTab?: 'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch' | 'router';
 }
 
@@ -98,8 +98,8 @@ export const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'dashboard' | 'studio' | 'queue' | 'downloader' | 'settings' | 'admin'>(
     () => savedState?.viewMode || 'dashboard'
   );
-  const [downloaderTab, setDownloaderTab] = useState<'search' | 'direct' | 'queue' | 'auth' | 'settings'>(
-    () => savedState?.downloaderTab || 'search'
+  const [downloaderTab, setDownloaderTab] = useState<'pipeline' | 'search' | 'direct' | 'queue' | 'auth' | 'settings'>(
+    () => savedState?.downloaderTab || 'pipeline'
   );
   const [settingsTab, setSettingsTab] = useState<'ocr' | 'translation' | 'dubbing' | 'render' | 'device' | 'batch' | 'router'>(
     () => savedState?.settingsTab || 'ocr'
@@ -1608,19 +1608,20 @@ export const App: React.FC = () => {
           />
         ) : viewMode === 'downloader' ? (
           <VideoDownloaderHub
-            initialTab={downloaderTab || 'queue'}
+            initialTab={downloaderTab || 'pipeline'}
             onTabChange={setDownloaderTab}
             onSwitchToDashboard={() => setViewMode('dashboard')}
             onSwitchToStudio={activeProject ? () => setViewMode('studio') : undefined}
+            onSelectProject={selectProject}
             onOpenSettings={() => {
               setSettingsTab('ocr');
               setViewMode('settings');
             }}
-          onRefreshProjects={loadProjects}
-          onBatchProjectsCreated={(newProjs) => {
-            setProjects((prev) => [...prev, ...newProjs]);
-          }}
-        />
+            onRefreshProjects={loadProjects}
+            onBatchProjectsCreated={(newProjs) => {
+              setProjects((prev) => [...prev, ...newProjs]);
+            }}
+          />
       ) : viewMode === 'queue' ? (
         <DownloadQueueHub onSwitchToDashboard={() => setViewMode('dashboard')} />
       ) : viewMode === 'settings' ? (

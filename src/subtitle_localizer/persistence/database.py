@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 MIGRATIONS = {
     1: """
@@ -145,6 +145,22 @@ MIGRATIONS = {
     ALTER TABLE lan_jobs ADD COLUMN artifacts_json TEXT;
     ALTER TABLE lan_jobs ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 1;
     CREATE INDEX IF NOT EXISTS idx_lan_jobs_lease ON lan_jobs(lease_expires_at);
+    """,
+    5: """
+    CREATE TABLE IF NOT EXISTS full_pipeline_workflows (
+        workflow_id TEXT PRIMARY KEY,
+        idempotency_key TEXT UNIQUE,
+        state TEXT NOT NULL,
+        current_stage TEXT NOT NULL,
+        project_id TEXT,
+        settings_json TEXT NOT NULL,
+        workflow_json TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_fp_workflows_state ON full_pipeline_workflows(state);
+    CREATE INDEX IF NOT EXISTS idx_fp_workflows_updated ON full_pipeline_workflows(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_fp_workflows_idem ON full_pipeline_workflows(idempotency_key);
     """,
 }
 

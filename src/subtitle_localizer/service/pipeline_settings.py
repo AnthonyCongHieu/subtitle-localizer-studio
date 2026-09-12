@@ -120,12 +120,20 @@ OcrSettings = ExtractionSettings
 class TranslationSettings(BaseModel):
     provider: str = "gemini"
     target_language: str = "vi"  # "vi" | "en" | "zh" | "none"
-    gemini_model: str = "gemini-2.5-flash"  # "gemini-2.5-flash" | "gemini-3.7-flash"
-    # Benchmark sweet-spot on the RTX 5080: Qwen 2.5 14B (Pipeline V3/V4).
-    local_model: str = "qwen2.5:14b"  # "qwen2.5:14b" | "qwen2.5:7b-instruct" | "qwen2.5:3b-instruct"
+    # gemini-2.5-flash đã ngừng cấp cho tài khoản mới (HTTP 404 "no longer
+    # available to new users"), nên mặc định dùng dòng 3.8 Flash.
+    gemini_model: str = "gemini-3.8-flash"
+    # Local slot 1 prioritizes quality; slot 2 is the fast rescue profile.
+    local_model: str = "qwen3:14b"
+    local_fallback_model: str = "gemma2:9b"
+    # Hardware setup writes false when the host is below the minimum Local
+    # gate. Keep the field permissive for older hand-written config files.
+    local_supported: bool = True
     local_endpoint: str = "http://localhost:11434"  # Ollama / llama.cpp / OpenAI-compatible endpoint
     auto_fallback: bool = True
-    batch_size: int = 35
+    # 0 = gửi toàn bộ kịch bản trong MỘT request (không chia batch). Gemini luôn
+    # dịch một lần cho cả kịch bản; local model dùng giá trị này làm trần chunk.
+    batch_size: int = 0
     prompt_tone: str = "dramatic"  # "dramatic" | "daily" | "humorous" | "literal"
     use_glossary: bool = True
     # auto: infer from dialogue. couple_anh_em: force anh-em for romance shorts.
@@ -135,11 +143,19 @@ class TranslationSettings(BaseModel):
     character_context: str = ""
 
     @root_validator(pre=True)
-    def normalize_retired_gemini_models(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def normalize_gemini_model_aliases(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         values = dict(values or {})
         model = values.get("gemini_model")
-        if model in {"gemini-3.8-flash", "3.8", "gemini-3.8"}:
-            values["gemini_model"] = "gemini-2.5-flash"
+        # Older clients sent bare versions ("3.8"); normalize them to real model
+        # ids instead of forcing a retired model that newer keys cannot serve.
+        aliases = {
+            "3.7": "gemini-3.7-flash",
+            "gemini-3.7": "gemini-3.7-flash",
+            "3.8": "gemini-3.8-flash",
+            "gemini-3.8": "gemini-3.8-flash",
+        }
+        if isinstance(model, str) and model.strip() in aliases:
+            values["gemini_model"] = aliases[model.strip()]
         return values
 
 
@@ -155,9 +171,13 @@ class DubbingSettings(BaseModel):
     rate: str = "+0%"
     pitch: str = "+0Hz"
     ducking_volume: float = 0.25
-    local_rewrite_enabled: bool = False
+    local_rewrite_enabled: bool = True
     video_rescue_enabled: bool = True
     video_rescue_max_slowdown: float = 1.25
+    edge_concurrency: int = Field(default=64, ge=1, le=128)
+    capcut_concurrency: int = Field(default=80, ge=1, le=128)
+    gemini_concurrency: int = Field(default=4, ge=1, le=128)
+    request_timeout_seconds: float = Field(default=25.0, gt=0.1, le=300.0)
 
 
 class BatchConfigSettings(BaseModel):

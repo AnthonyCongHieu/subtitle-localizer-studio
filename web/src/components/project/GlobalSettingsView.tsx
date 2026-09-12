@@ -221,11 +221,12 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     translation: {
       provider: 'gemini',
       target_language: 'vi',
-      gemini_model: 'gemini-2.5-flash',
-      local_model: 'qwen2.5:14b',
+      gemini_model: 'gemini-3.8-flash',
+      local_model: 'qwen3:14b',
       local_endpoint: 'http://localhost:11434',
       auto_fallback: true,
-      batch_size: 35,
+      // 0 = một request cho toàn bộ kịch bản (không chia batch)
+      batch_size: 0,
       prompt_tone: 'dramatic',
       use_glossary: true,
       addressing_mode: 'auto',
@@ -366,7 +367,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
     try {
       const res = await apiClient.testLocalLlmConnection({
         endpoint: settings.translation.local_endpoint || 'http://localhost:11434',
-        model: settings.translation.local_model || 'qwen2.5:14b',
+        model: settings.translation.local_model || 'qwen3:14b',
       });
       setLocalLlmTestResult(res);
     } catch (err: any) {
@@ -1050,7 +1051,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
         target_lang: 'vi',
         provider: settings.translation.provider,
         gemini_model: settings.translation.gemini_model,
-        local_model: settings.translation.local_model || 'qwen2.5:14b',
+        local_model: settings.translation.local_model || 'qwen3:14b',
         local_endpoint: settings.translation.local_endpoint || 'http://localhost:11434',
         auto_fallback: settings.translation.auto_fallback ?? true,
         prompt_tone: settings.translation.prompt_tone,
@@ -2985,7 +2986,8 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                           }
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-amber-500/60 transition"
                         >
-                          <option value="gemini-2.5-flash">Gemini 2.5 Flash — Khuyên dùng (Ổn định, siêu nhanh)</option>
+                          <option value="gemini-3.8-flash">Gemini 3.8 Flash — Khuyên dùng (Key pool tương thích rộng)</option>
+                          <option value="gemini-2.5-flash">Gemini 2.5 Flash — Cũ (nhiều key mới trả 404)</option>
                           <option value="gemini-3.7-flash">Gemini 3.7 Flash — Logic mạnh</option>
                           <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
                           <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
@@ -3015,7 +3017,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                       <div>
                         <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block mb-1.5">Model</label>
                         <select
-                          value={settings.translation.local_model || 'qwen2.5:14b'}
+                          value={settings.translation.local_model || 'qwen3:14b'}
                           onChange={(e) =>
                             setSettings({
                               ...settings,
@@ -3024,7 +3026,8 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                           }
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 text-xs focus:outline-none focus:border-cyan-500/60 transition"
                         >
-                          <option value="qwen2.5:14b">qwen2.5:14b — Khuyên dùng (benchmark sweet-spot)</option>
+                          <option value="qwen3:14b">qwen3:14b — Khuyên dùng (đã benchmark)</option>
+                          <option value="qwen2.5:14b">qwen2.5:14b — Dự phòng (benchmark cũ)</option>
                           <option value="qwen2.5:3b-instruct">qwen2.5:3b — Siêu nhẹ (VRAM ~2.2 GB)</option>
                           <option value="qwen2.5:14b-instruct">qwen2.5:14b — Cao cấp (Cần GPU lớn)</option>
                         </select>
@@ -3050,7 +3053,7 @@ export const GlobalSettingsView: React.FC<GlobalSettingsViewProps> = ({
                     <div className="flex items-center justify-between p-3 rounded-lg bg-slate-950/80 border border-slate-800/60">
                       <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
                         <span>💡</span>
-                        <code className="text-cyan-300/80 font-mono px-1 py-0.5 bg-slate-900 rounded text-[10px]">ollama run qwen2.5:7b</code>
+                        <code className="text-cyan-300/80 font-mono px-1 py-0.5 bg-slate-900 rounded text-[10px]">ollama run qwen3:14b</code>
                       </div>
                       <div className="flex items-center gap-2">
                         <button

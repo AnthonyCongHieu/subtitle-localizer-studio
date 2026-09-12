@@ -407,6 +407,8 @@ class DubbingAndWaveformTest(unittest.TestCase):
         real_sleep = asyncio.sleep
 
         for provider, limit in limits.items():
+            from subtitle_localizer.dubbing.tts import set_provider_concurrency
+            set_provider_concurrency(provider, limit)
             active = 0
             peak = 0
 
@@ -456,6 +458,11 @@ class DubbingAndWaveformTest(unittest.TestCase):
 
             self.assertLessEqual(peak, limit, provider)
             self.assertEqual(peak, limit, provider)
+
+        from subtitle_localizer.dubbing.tts import set_provider_concurrency
+        set_provider_concurrency("edge", 4)
+        set_provider_concurrency("capcut", 2)
+        set_provider_concurrency("gemini", 4)
 
 
 if __name__ == "__main__":

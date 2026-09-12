@@ -232,7 +232,7 @@ def check_and_fix_configs(root_dir: Path = ROOT_DIR) -> Dict[str, bool]:
     return results
 
 
-def ensure_local_model(model: str = "qwen2.5:7b-instruct") -> bool:
+def ensure_local_model(model: str = "gemma2:9b") -> bool:
     """Verify the local translation model before advertising host readiness."""
     ollama = shutil.which("ollama")
     if not ollama:
@@ -251,6 +251,30 @@ def ensure_local_model(model: str = "qwen2.5:7b-instruct") -> bool:
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"[!] Không kiểm tra được local model: {exc}")
         return False
+
+
+def ensure_local_models(models: tuple[str, ...] | None = None) -> bool:
+    """Ensure both measured Local profiles are installed before startup.
+
+    Startup keeps API as the active provider, but verifies both local profiles
+    so a user can switch to Local or use fallback without a surprise download.
+    ``SL_AUTO_PULL_MODEL=0`` turns this into a non-mutating readiness check.
+    """
+    if models is None:
+        configured = ROOT_DIR / "pipeline_settings.json"
+        try:
+            data = json.loads(configured.read_text(encoding="utf-8"))
+            translation = data.get("translation", {})
+            models = tuple(dict.fromkeys(
+                str(name).strip() for name in (
+                    translation.get("local_model", "gemma2:9b"),
+                    translation.get("local_fallback_model", "gemma2:9b"),
+                ) if str(name).strip()
+            ))
+        except (OSError, ValueError, TypeError):
+            models = ("gemma2:9b",)
+    results = [ensure_local_model(model) for model in models]
+    return all(results)
 
 
 def check_database(db_path: Path | str = ROOT_DIR / "subtitle_localizer.db") -> Tuple[bool, str]:
@@ -417,7 +441,9 @@ def run_preflight_checks(root_dir: Path = ROOT_DIR, auto_fix: bool = True, port:
     # 4. Config files
     configs = check_and_fix_configs(root_dir)
     print(f"[✅] [4/6] Cấu hình local: Đã đồng bộ (Env: OK, local model profile: OK).")
-    ensure_local_model()
+    local_ready = ensure_local_models()
+    if not local_ready:
+        print("[⚠️] Một hoặc nhiều Local model chưa sẵn sàng; API vẫn là provider mặc định, fallback sẽ báo lỗi rõ ràng nếu cần.")
 
     # 5. Database
     db_ok, db_msg = check_database(root_dir / "subtitle_localizer.db")
@@ -556,9 +582,6 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
 
         signal.signal(signal.SIGINT, _cleanup)
         try:
-            # Use Uvicorn's import-string reloader in dev mode so backend
-            # edits restart the API process automatically.  Passing the
-            # already-created app object would silently disable reload.
             src_path = str(SRC_DIR)
             current_pythonpath = os.environ.get("PYTHONPATH", "")
             if src_path not in current_pythonpath.split(os.pathsep):
@@ -568,8 +591,6 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
             uvicorn.run(
                 "subtitle_localizer.service.server:create_app",
                 factory=True,
-                reload=True,
-                reload_dirs=[str(SRC_DIR)],
                 host="0.0.0.0",
                 port=port,
                 log_level="info",
@@ -594,8 +615,6 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
             uvicorn.run(
                 "subtitle_localizer.service.server:create_app",
                 factory=True,
-                reload=True,
-                reload_dirs=[str(SRC_DIR)],
                 host="0.0.0.0",
                 port=port,
                 log_level="info",

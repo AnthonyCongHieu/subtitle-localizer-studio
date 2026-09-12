@@ -39,7 +39,7 @@ def call(endpoint: str, model: str, prompt: str, ctx: int, temperature: float) -
     with urllib.request.urlopen(req, timeout=300) as r: return str(json.loads(r.read().decode()).get("message",{}).get("content", ""))
 
 def main() -> int:
-    ap=argparse.ArgumentParser(); ap.add_argument("--models",required=True); ap.add_argument("--batch",type=int,default=8); ap.add_argument("--ctx",type=int,default=4096); ap.add_argument("--retry",type=int,default=1); ap.add_argument("--temperature",type=float,default=0.1); ap.add_argument("--endpoint",default="http://localhost:11434"); ap.add_argument("--output",type=Path,default=ROOT/"benchmarks/results/ocr_api_head_to_head.json")
+    ap=argparse.ArgumentParser(); ap.add_argument("--models",required=True); ap.add_argument("--batch",type=int,default=8); ap.add_argument("--ctx",type=int,default=4096); ap.add_argument("--retry",type=int,default=1); ap.add_argument("--temperature",type=float,default=0.1); ap.add_argument("--thinking",action="store_true"); ap.add_argument("--endpoint",default="http://localhost:11434"); ap.add_argument("--output",type=Path,default=ROOT/"benchmarks/results/ocr_api_head_to_head.json")
     ap.add_argument("--dataset",type=Path,default=ROOT/"GEMINI_10CLIPS_CONSOLIDATED_GROUND_TRUTH.json"); a=ap.parse_args()
     rows=load(a.dataset); provider=RealTranslationProvider(); out=[]
     for model in [x.strip() for x in a.models.split(",") if x.strip()]:
@@ -48,7 +48,7 @@ def main() -> int:
             ix=list(range(pos,min(pos+a.batch,len(rows))))
             items=[f"[{j+1}] {rows[i]['source']}" for j,i in enumerate(ix)]
             prompt=provider._build_narrative_prompt(items,"zh","vi",prompt_tone="dramatic",batch_ordinal=pos//a.batch+1,batch_total=(len(rows)+a.batch-1)//a.batch)+"\nCẤM KÝ TỰ HÁN. CHỈ TRẢ CÁC DÒNG [số] bản dịch tiếng Việt."
-            if model.lower().startswith("qwen3"):
+            if model.lower().startswith("qwen3") and not a.thinking:
                 prompt += "\n/no_think"
             try:
                 raw=call(a.endpoint,model,prompt,a.ctx,a.temperature); cues=[SubtitleCueV1(cue_id=str(i),start_pts=0,end_pts=0,source_text=rows[i]["source"]) for i in ix]; provider._apply_model_response(cues,list(range(len(cues))),raw)
@@ -58,7 +58,7 @@ def main() -> int:
             for i,pred in enumerate(preds):
                 if pred.strip() and not HAN.search(pred): continue
                 prompt=provider._build_narrative_prompt([f"[1] {rows[i]['source']}"],"zh","vi",prompt_tone="literal",batch_ordinal=1,batch_total=1)+"\nCHỈ TRẢ MỘT CÂU TIẾNG VIỆT. CẤM KÝ TỰ HÁN, KHÔNG GIẢI THÍCH."
-                if model.lower().startswith("qwen3"):
+                if model.lower().startswith("qwen3") and not a.thinking:
                     prompt += "\n/no_think"
                 try:
                     raw=call(a.endpoint,model,prompt,a.ctx,a.temperature); cue=SubtitleCueV1(cue_id="1",start_pts=0,end_pts=0,source_text=rows[i]["source"]); provider._apply_model_response([cue],[0],raw); preds[i]=_refine_subtitles(str(cue.translated_text or ""),rows[i]["source"],preserve_existing=True)

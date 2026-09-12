@@ -5,14 +5,57 @@ import os
 from pathlib import Path
 import re
 import sys
-from typing import Dict, List, Optional
+import threading
+from typing import Any, Dict, List, Optional
 
 from subtitle_localizer.domain.models import ModelDescriptorV1, SubtitleCueV1
 from subtitle_localizer.translation.base import TranslationProvider
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
+DEFAULT_LOCAL_MODEL = "qwen3:14b"
+
+# Gemini request policy. Pooled API keys belong to different account cohorts, so
+# a model a legacy key can serve may 404 for a newer key (and vice versa).
+# Try the configured model first, then fall forward to broadly available models.
+_GEMINI_FALLBACK_MODELS = ("gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash")
+# Only Gemini 2.5 accepts ``thinkingConfig``; 3.x Flash rejects it with
+# HTTP 400 INVALID_ARGUMENT, so the payload is retried without it.
+_GEMINI_THINKING_MODEL_PREFIX = "gemini-2.5"
+_GEMINI_NO_MODEL_COOLDOWN_SECONDS = 3600.0
+_GEMINI_INVALID_KEY_COOLDOWN_SECONDS = 86400.0
+_GEMINI_REQUEST_TIMEOUT = 180.0
+# Trần thời gian cho một lượt dịch cả kịch bản: tránh treo nhiều giờ khi mạng
+# bị "blackhole" im lặng (mỗi key × 3 model × timeout đều hết hạn).
+_GEMINI_SCRIPT_BUDGET_SECONDS = 900.0
+
+# Local Ollama / OpenAI-compatible LLM policy.
+_LOCAL_LLM_CONTEXT_TOKENS = 16384
+# Ngân sách ký tự nguồn cho MỘT request Ollama. Prompt thực tế ~= 3000 ký tự
+# khung + phần kịch bản, nên 5000 ký tự nguồn vẫn nằm gọn trong num_ctx 16k
+# token (tiếng Trung ~1 token/ký tự) mà vẫn đủ chỗ cho câu trả lời.
+_LOCAL_ONE_SHOT_SOURCE_CHARS = 5000
+
+
+def _first_choice_content(res: Dict[str, Any]) -> str:
+    """OpenAI-compatible chat response -> assistant text (never raises)."""
+    choices = res.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return ""
+    message = choices[0].get("message") or {}
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    return content if isinstance(content, str) else ""
+
+
+def _ollama_message_content(res: Dict[str, Any]) -> str:
+    """Native Ollama ``/api/chat`` response -> assistant text (never raises)."""
+    message = res.get("message") or {}
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    return content if isinstance(content, str) else ""
 
 # Từ điển ngữ cảnh hội thoại và tiếng lóng video tiếng Trung sang tiếng Việt tự nhiên
 DEFAULT_CHINESE_VIETNAMESE_GLOSSARY: Dict[str, str] = {
@@ -282,11 +325,22 @@ class RealTranslationProvider(TranslationProvider):
     def __init__(self) -> None:
         self.is_loaded = False
         self._cache: Dict[str, str] = {}
+        # A batch engine closure captures the cue list of one job, so the binding
+        # must stay per-thread: the provider is a shared singleton.
+        self._engine_state = threading.local()
+
+    @property
+    def _batch_engine_fn(self):
+        return getattr(self._engine_state, "fn", None)
+
+    @_batch_engine_fn.setter
+    def _batch_engine_fn(self, engine) -> None:
+        self._engine_state.fn = engine
 
     def get_descriptor(self) -> ModelDescriptorV1:
         return ModelDescriptorV1(
             id="ollama-qwen-local",
-            source_url="https://ollama.com/library/qwen2.5",
+            source_url="https://ollama.com/library/qwen3",
             version_or_commit=DEFAULT_LOCAL_MODEL,
             sha256="0" * 64,
             format="api",
@@ -303,13 +357,29 @@ class RealTranslationProvider(TranslationProvider):
 
     @staticmethod
     def _local_chunk_size(total_cues: int, configured_batch_size: Optional[int]) -> int:
-        """Keep local prompts small enough that Ollama returns every cue marker."""
+        """Kích thước lô cho Ollama.
+
+        ``batch_size > 0`` là cấu hình tường minh của người dùng -> tôn trọng.
+        ``batch_size`` 0/None nghĩa là "dịch cả kịch bản trong một request".
+        """
         if total_cues <= 0:
             return 1
-        configured = int(configured_batch_size or 35)
-        if configured <= 0:
-            configured = 35
-        return min(total_cues, configured)
+        configured = int(configured_batch_size or 0)
+        if configured > 0:
+            return min(total_cues, configured)
+        return total_cues
+
+    @staticmethod
+    def _one_shot_cue_limit(
+        cues: List[SubtitleCueV1], indices: List[int]
+    ) -> int:
+        """Số cue tối đa còn vừa ngân sách ký tự của một request Ollama."""
+        used = 0
+        for count, idx in enumerate(indices, start=1):
+            used += len(cues[idx].source_text or "") + 12  # marker "[123] " + newline
+            if used > _LOCAL_ONE_SHOT_SOURCE_CHARS:
+                return max(1, count - 1)
+        return len(indices)
 
 
     def _cjk_ratio(self, text: str) -> float:
@@ -799,7 +869,12 @@ class RealTranslationProvider(TranslationProvider):
             prior_context_lines: list[str] | None = None,
             batch_ordinal: int = 1,
             batch_total: int = 1,
+            target_cues: Optional[List[SubtitleCueV1]] = None,
         ) -> bool:
+            # ``retry_untranslated_cues`` may be handed a fresh cue list (the
+            # worker normalizes cues before retrying), so always write into the
+            # list that is live right now instead of the captured closure one.
+            live_cues = target_cues if target_cues is not None else cues
             prompt = self._build_narrative_prompt(
                 batch_items,
                 source_lang,
@@ -817,52 +892,86 @@ class RealTranslationProvider(TranslationProvider):
                     {"role": "system", "content": "You are a professional subtitle localization assistant."},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.2,
+                # Deterministic low-temperature decoding improves subtitle
+                # consistency while retaining enough variation for natural
+                # Vietnamese phrasing.  Ollama options are also mirrored in
+                # the native payload below.
+                "temperature": 0.1,
+                # Thinking models spend part of the budget on reasoning, so keep
+                # enough head-room for the answers of the whole batch.
+                "max_tokens": max(1024, len(batch_items) * 256),
                 "stream": False,
             }
             req_data = json.dumps(payload_openai).encode("utf-8")
             req = urllib.request.Request(chat_url, data=req_data, headers={"Content-Type": "application/json"})
 
+            openai_error: Exception | None = None
             try:
                 with urllib.request.urlopen(req, timeout=90) as resp:
                     status_code = getattr(resp, "status", getattr(resp, "code", 200))
                     if status_code == 200:
                         res_json = json.loads(resp.read().decode("utf-8"))
-                        text_content = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        text_content = _first_choice_content(res_json)
                         if text_content:
-                            updated = self._apply_model_response(cues, chunk_indices, text_content)
-                            return updated > 0
+                            updated = self._apply_model_response(live_cues, chunk_indices, text_content)
+                            if updated > 0:
+                                return True
             except Exception as ex_openai:
-                try:
-                    ollama_native_url = f"{base_url.replace('/v1', '')}/api/chat"
-                    payload_ollama = {
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": False,
-                    }
-                    req_native = urllib.request.Request(
-                        ollama_native_url,
-                        data=json.dumps(payload_ollama).encode("utf-8"),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    with urllib.request.urlopen(req_native, timeout=90) as resp2:
-                        status_code2 = getattr(resp2, "status", getattr(resp2, "code", 200))
-                        if status_code2 == 200:
-                            res_json2 = json.loads(resp2.read().decode("utf-8"))
-                            text_content2 = res_json2.get("message", {}).get("content", "")
-                            if text_content2:
-                                updated2 = self._apply_model_response(cues, chunk_indices, text_content2)
-                                return updated2 > 0
-                except Exception as ex_native:
-                    logger.warning(f"Local Qwen call to {base_url} failed: {ex_openai} | {ex_native}")
-                    return False
+                openai_error = ex_openai
+
+            # Ollama's OpenAI-compatible endpoint can answer 200 with empty
+            # content while a thinking model (Qwen3) spends the whole budget on
+            # reasoning. Retry the native /api/chat API, which accepts
+            # think=false, and also cover 200-without-content responses.
+            try:
+                ollama_native_url = f"{base_url.replace('/v1', '')}/api/chat"
+                payload_ollama = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "options": {
+                        "temperature": 0.1,
+                        # 4096 truncated long batches into empty text.
+                        "num_ctx": _LOCAL_LLM_CONTEXT_TOKENS,
+                        "num_predict": max(512, len(batch_items) * 192),
+                        "seed": 42,
+                    },
+                    "keep_alive": "10m",
+                    "stream": False,
+                }
+                if model.lower().startswith("qwen3"):
+                    payload_ollama["think"] = False
+                req_native = urllib.request.Request(
+                    ollama_native_url,
+                    data=json.dumps(payload_ollama).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req_native, timeout=90) as resp2:
+                    status_code2 = getattr(resp2, "status", getattr(resp2, "code", 200))
+                    if status_code2 == 200:
+                        res_json2 = json.loads(resp2.read().decode("utf-8"))
+                        text_content2 = _ollama_message_content(res_json2)
+                        if text_content2:
+                            updated2 = self._apply_model_response(live_cues, chunk_indices, text_content2)
+                            if updated2 > 0:
+                                return True
+            except Exception as ex_native:
+                logger.warning(
+                    "Local LLM call to %s failed: %s | %s", base_url, openai_error, ex_native
+                )
+                return False
             return False
 
         all_indices = [i for i, c in enumerate(cues) if c.source_text.strip()]
         if not all_indices:
             return True
 
-        chunk_size = self._local_chunk_size(len(all_indices), batch_size)
+        configured_batch = int(batch_size or 0)
+        if configured_batch > 0:
+            chunk_size = min(len(all_indices), configured_batch)
+        else:
+            # batch_size = 0 nghĩa là "dịch cả kịch bản trong một request"; kịch
+            # bản dài hơn ngân sách ngữ cảnh của Ollama mới bị chia nhỏ.
+            chunk_size = max(1, self._one_shot_cue_limit(cues, all_indices))
 
         batch_ranges = list(range(0, len(all_indices), chunk_size))
         batch_total = max(1, len(batch_ranges))
@@ -876,6 +985,7 @@ class RealTranslationProvider(TranslationProvider):
                 prior_context_lines=kwargs.get("prior_context_lines"),
                 batch_ordinal=kwargs.get("batch_ordinal", 1),
                 batch_total=kwargs.get("batch_total", 1),
+                target_cues=kwargs.get("cues"),
             )
 
         self._batch_engine_fn = _engine
@@ -900,6 +1010,69 @@ class RealTranslationProvider(TranslationProvider):
 
         return success_any
 
+    @staticmethod
+    def _gemini_model_chain(gemini_model: str) -> List[str]:
+        """Configured model first, then broadly available Flash fallbacks."""
+        chain: List[str] = []
+        for candidate in (gemini_model, *_GEMINI_FALLBACK_MODELS):
+            name = (candidate or "").strip()
+            if name and name not in chain:
+                chain.append(name)
+        return chain
+
+    @staticmethod
+    def _handle_gemini_http_error(pool: Any, key: str, target_model: str, http_err: Any) -> str:
+        """Route one Gemini failure and return the caller's loop directive.
+
+        - ``"next_model"``: 404, this account cannot see ``target_model`` -> the
+          same key is retried with the next fallback model.
+        - ``"next_key"``: 429/401/403/503/5xx, the key is busy or dead -> it was
+          put on cooldown when appropriate and the caller rotates.
+
+        HTTP 400 is handled by the caller: it is a request-level failure, so the
+        healthy keys must not be quarantined because of it.
+        """
+        import time
+
+        code = http_err.code
+        if code == 429:
+            err_body = ""
+            try:
+                err_body = http_err.read().decode("utf-8", errors="ignore").lower()
+            except Exception:
+                pass
+
+            retry_header = http_err.headers.get("Retry-After") if http_err.headers else None
+            cooldown_secs = 60.0
+            if retry_header and str(retry_header).isdigit():
+                cooldown_secs = float(retry_header)
+
+            if any(term in err_body for term in ("per day", "daily", "requestsperday", "rpd")):
+                pool.mark_daily_quota_exhausted(key)
+            else:
+                pool.mark_rate_limited(key, cooldown_seconds=cooldown_secs, reason="rate_limit_exceeded")
+            return "next_key"
+        if code in (401, 403):
+            pool.mark_rate_limited(
+                key,
+                cooldown_seconds=_GEMINI_INVALID_KEY_COOLDOWN_SECONDS,
+                reason=f"http_{code}_invalid",
+            )
+            return "next_key"
+        if code == 404:
+            logger.info(
+                "Model %s không khả dụng cho key ...%s; chuyển model khác.",
+                target_model,
+                key[-6:],
+            )
+            return "next_model"
+        if code == 503:
+            logger.warning(f"Model {target_model} 503 Overloaded trên key ...{key[-6:]}, xoay tiếp key...")
+            time.sleep(1.0)
+            return "next_key"
+        logger.warning("Gemini HTTP %s (%s) trên key ...%s", code, target_model, key[-6:])
+        return "next_key"
+
     def _translate_with_gemini(
         self,
         cues: List[SubtitleCueV1],
@@ -907,7 +1080,7 @@ class RealTranslationProvider(TranslationProvider):
         target_lang: str,
         api_keys: Optional[List[str]] = None,
         key_pool: Optional[Any] = None,
-        gemini_model: str = "gemini-2.5-flash",
+        gemini_model: str = "gemini-3.8-flash",
         prompt_tone: str = "dramatic",
         batch_size: Optional[int] = None,
     ) -> bool:
@@ -927,20 +1100,48 @@ class RealTranslationProvider(TranslationProvider):
         if pool.total_keys == 0:
             return False
 
-        if gemini_model in {"gemini-3.8-flash", "3.8", "gemini-3.8"}:
-            gemini_model = "gemini-2.5-flash"
+        models_to_try = self._gemini_model_chain(gemini_model)
 
-        models_to_try = [gemini_model]
-        if gemini_model != "gemini-2.5-flash":
-            models_to_try.append("gemini-2.5-flash")
+        def _extract_candidate_text(res: Dict[str, Any]) -> str:
+            candidates = res.get("candidates") or []
+            if not candidates or not isinstance(candidates[0], dict):
+                return ""
+            content = candidates[0].get("content")
+            if not isinstance(content, dict):
+                return ""
+            parts = content.get("parts") or []
+            return "".join(part.get("text", "") for part in parts if isinstance(part, dict))
 
-        def _translate_batch(
+        def _payload_variants(prompt: str, target_model: str) -> List[bytes]:
+            """Rich generationConfig first, then a minimal payload.
+
+            Gemini 3.x Flash rejects ``thinkingConfig`` with HTTP 400
+            INVALID_ARGUMENT, so the same key is retried with a smaller payload
+            before it is blamed for a malformed request.
+            """
+            generation_config: Dict[str, Any] = {
+                "temperature": 0.2,
+                "maxOutputTokens": 65536,
+            }
+            if target_model.startswith(_GEMINI_THINKING_MODEL_PREFIX):
+                generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+            contents = [{"parts": [{"text": prompt}]}]
+            payloads = [
+                {"contents": contents, "generationConfig": generation_config},
+                {"contents": contents},
+            ]
+            return [json.dumps(payload).encode("utf-8") for payload in payloads]
+
+        def _translate_script(
             batch_items: List[str],
             chunk_indices: List[int],
             prior_context_lines: list[str] | None = None,
             batch_ordinal: int = 1,
             batch_total: int = 1,
+            target_cues: Optional[List[SubtitleCueV1]] = None,
         ) -> bool:
+            """Dịch một khối kịch bản đã đánh số bằng MỘT request Gemini."""
+            live_cues = target_cues if target_cues is not None else cues
             prompt = self._build_narrative_prompt(
                 batch_items,
                 source_lang,
@@ -952,120 +1153,112 @@ class RealTranslationProvider(TranslationProvider):
                 addressing_mode=getattr(pipe_settings, "addressing_mode", "auto"),
                 character_context=getattr(pipe_settings, "character_context", "")
             )
-            # Tắt thinkingBudget để không bị lãng phí token suy luận ngầm và không bị cụt response
-            payload = json.dumps({
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.2,
-                    "maxOutputTokens": 65536,
-                    "thinkingConfig": {"thinkingBudget": 0},
-                },
-            }).encode("utf-8")
+            # Payload không phụ thuộc key -> dựng một lần cho cả lần dịch.
+            variants_by_model = {m: _payload_variants(prompt, m) for m in models_to_try}
 
-            for target_m in models_to_try:
-                max_attempts = min(pool.total_keys, 10)
-                for _ in range(max_attempts):
-                    key = pool.get_next_key(wait_timeout=5.0)
-                    if not key:
-                        logger.warning("Toàn bộ API Keys trong pool đều đang cooldown hoặc bận")
-                        break
+            # Duyệt một vòng qua pool: mỗi key khả dụng chỉ thử tối đa một lần cho
+            # cả kịch bản, nên một dãy key chết không đốt hết ngân sách trước khi
+            # chạm tới các key còn sống.
+            tried_keys: set[str] = set()
+            # Mỗi key khả dụng được thử tối đa một lần nên vòng lặp tự hội tụ sau
+            # tối đa ``total_keys`` vòng, không cần trần cứng (trần cũ 64 làm pool
+            # lớn hơn 64 key bỏ sót key sống).
+            deadline = time.time() + _GEMINI_SCRIPT_BUDGET_SECONDS
+            while len(tried_keys) < pool.total_keys:
+                if time.time() > deadline:
+                    logger.warning(
+                        "Vượt ngân sách %.0fs cho một lượt dịch Gemini; dừng để fallback.",
+                        _GEMINI_SCRIPT_BUDGET_SECONDS,
+                    )
+                    return False
+                key = pool.get_next_key(wait_timeout=5.0)
+                if not key or key in tried_keys:
+                    logger.warning("Toàn bộ API Keys trong pool đều đang cooldown hoặc bận")
+                    return False
+                tried_keys.add(key)
 
+                unavailable_models = 0
+                for target_m in models_to_try:
+                    variants = variants_by_model[target_m]
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_m}:generateContent?key={key}"
-                    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-                    try:
-                        with urllib.request.urlopen(req, timeout=180) as resp:
-                            status_code = getattr(resp, "status", getattr(resp, "code", 200))
-                            if status_code == 200:
-                                res = json.loads(resp.read().decode("utf-8"))
-                                cand = res.get("candidates", [{}])[0]
-                                parts = cand.get("content", {}).get("parts", [])
-                                text_content = "".join(p.get("text", "") for p in parts)
-                                if text_content:
-                                    updated = self._apply_model_response(cues, chunk_indices, text_content)
-                                    if updated > 0:
-                                        return True
-                    except urllib.error.HTTPError as http_err:
-                        if http_err.code == 429:
-                            err_body = ""
-                            try:
-                                err_body = http_err.read().decode("utf-8", errors="ignore").lower()
-                            except Exception:
-                                pass
-
-                            retry_header = http_err.headers.get("Retry-After")
-                            cooldown_secs = 60.0
-                            if retry_header and retry_header.isdigit():
-                                cooldown_secs = float(retry_header)
-
-                            if any(term in err_body for term in ("per day", "daily", "requestsperday", "rpd")):
-                                pool.mark_daily_quota_exhausted(key)
-                            else:
-                                pool.mark_rate_limited(key, cooldown_seconds=cooldown_secs, reason="rate_limit_exceeded")
-                        elif http_err.code in (400, 403):
-                            pool.mark_rate_limited(key, cooldown_seconds=86400.0, reason=f"http_{http_err.code}_invalid")
-                        elif http_err.code == 503:
-                            logger.warning(f"Model {target_m} 503 Overloaded trên key ...{key[-6:]}, xoay tiếp key...")
-                            time.sleep(1.0)
-                            continue
+                    variant_index = 0
+                    model_unavailable = False
+                    while variant_index < len(variants):
+                        req = urllib.request.Request(
+                            url,
+                            data=variants[variant_index],
+                            headers={"Content-Type": "application/json"},
+                        )
+                        try:
+                            with urllib.request.urlopen(req, timeout=_GEMINI_REQUEST_TIMEOUT) as resp:
+                                status_code = getattr(resp, "status", getattr(resp, "code", 200))
+                                if status_code == 200:
+                                    text_content = _extract_candidate_text(json.loads(resp.read().decode("utf-8")))
+                                    if text_content:
+                                        updated = self._apply_model_response(live_cues, chunk_indices, text_content)
+                                        if updated > 0:
+                                            return True
+                                break
+                        except urllib.error.HTTPError as http_err:
+                            if http_err.code == 400 and variant_index < len(variants) - 1:
+                                # Model từ chối generationConfig đầy đủ -> thử lại cùng
+                                # key với payload tối giản trước khi loại key.
+                                variant_index += 1
+                                continue
+                            if http_err.code == 400:
+                                # 400 là lỗi của request (prompt/payload), không phải
+                                # của key: dừng hẳn thay vì cách ly từng key còn sống.
+                                logger.error(
+                                    "Gemini từ chối request 400 INVALID_ARGUMENT (%s); dừng gọi Gemini cho kịch bản này.",
+                                    target_m,
+                                )
+                                return False
+                            directive = self._handle_gemini_http_error(pool, key, target_m, http_err)
+                            model_unavailable = directive == "next_model"
+                            break
+                        except Exception as err:
+                            logger.warning(f"Gemini API request failed ({target_m}): {err}")
+                            break
+                    if model_unavailable:
+                        # Key này không thấy model -> thử model kế tiếp cùng key.
+                        unavailable_models += 1
                         continue
-                    except Exception as err:
-                        logger.warning(f"Gemini API request failed ({target_m}): {err}")
-                        continue
+                    break
+                if unavailable_models == len(models_to_try):
+                    # Không model nào phục vụ được account này -> tạm treo key để
+                    # các lần dịch sau không đốt ngân sách vào nó nữa.
+                    pool.mark_rate_limited(
+                        key,
+                        cooldown_seconds=_GEMINI_NO_MODEL_COOLDOWN_SECONDS,
+                        reason="http_404_model_unavailable",
+                    )
             return False
 
         all_indices = [i for i, c in enumerate(cues) if c.source_text.strip()]
         if not all_indices:
             return True
 
-        # Gemini 2.5 Flash: input 1,048,576 / output 65,536 tokens.
-        # Gửi TOÀN BỘ kịch bản 1 request (không chia batch) để giữ ngữ cảnh nhân vật.
-        # batch_size chỉ dùng khi set tường minh khác 35/0 (debug); mặc định = full.
-        if batch_size and batch_size not in (35, 0) and int(batch_size) < len(all_indices):
-            chunk_size = int(batch_size)
-            logger.warning(
-                "Gemini batch_size=%s được set tường minh — chia %s câu (không khuyến nghị).",
-                batch_size,
-                chunk_size,
-            )
-        else:
-            chunk_size = len(all_indices)
+        # Hợp đồng production: gửi TOÀN BỘ kịch bản trong MỘT request để giữ
+        # ngữ cảnh nhân vật (Gemini 2.5+ Flash: input 1,048,576 token).
+        # ``batch_size`` vẫn được nhận để tương thích ngược nhưng không còn
+        # chia nhỏ request dịch chính.
+        batch_items = [
+            f"[{pos}] {cues[i].source_text.strip()}"
+            for pos, i in enumerate(all_indices, start=1)
+        ]
 
-        batch_ranges = list(range(0, len(all_indices), chunk_size))
-        batch_total = max(1, len(batch_ranges))
-        prior_context_lines: list[str] = []
-        all_succeeded = True
-
-        def _engine(batch_items, chunk_indices, **kwargs):
-            return _translate_batch(
-                batch_items,
-                chunk_indices,
+        def _engine(items, indices, **kwargs):
+            return _translate_script(
+                items,
+                indices,
                 prior_context_lines=kwargs.get("prior_context_lines"),
                 batch_ordinal=kwargs.get("batch_ordinal", 1),
                 batch_total=kwargs.get("batch_total", 1),
+                target_cues=kwargs.get("cues"),
             )
 
         self._batch_engine_fn = _engine
-        try:
-            for batch_no, start_idx in enumerate(batch_ranges, start=1):
-                chunk_indices = all_indices[start_idx : start_idx + chunk_size]
-                batch_items = [
-                    f"[{pos}] {cues[i].source_text.strip()}"
-                    for pos, i in enumerate(chunk_indices, start=1)
-                ]
-                ok = _translate_batch(
-                    batch_items,
-                    chunk_indices,
-                    prior_context_lines=prior_context_lines or None,
-                    batch_ordinal=batch_no,
-                    batch_total=batch_total,
-                )
-                if not ok:
-                    all_succeeded = False
-                prior_context_lines = self._build_prior_context_lines(cues)
-        finally:
-            self._batch_engine_fn = _engine
-
-        return all_succeeded
+        return _engine(batch_items, all_indices)
 
     def translate_cues(
         self,
@@ -1075,6 +1268,9 @@ class RealTranslationProvider(TranslationProvider):
     ) -> List[SubtitleCueV1]:
         if not cues:
             return cues
+
+        # Không tái sử dụng batch engine còn sót lại từ lần gọi trước trên thread này.
+        self._batch_engine_fn = None
 
         import os
         import sys
@@ -1123,7 +1319,7 @@ class RealTranslationProvider(TranslationProvider):
                         source_lang,
                         target_lang,
                         key_pool=pool,
-                        gemini_model=getattr(pipe_settings, "gemini_model", "gemini-2.5-flash"),
+                        gemini_model=getattr(pipe_settings, "gemini_model", "gemini-3.8-flash"),
                         prompt_tone=getattr(pipe_settings, "prompt_tone", "dramatic"),
                         batch_size=getattr(pipe_settings, "batch_size", None),
                     )
@@ -1139,31 +1335,35 @@ class RealTranslationProvider(TranslationProvider):
                 "total_keys": pool.total_keys, "active_keys": pool.total_keys,
             }
             gemini_zero_keys = int(status.get("total_keys", 0)) == 0 or int(status.get("active_keys", 0)) == 0
-        if not is_pytest and (provider in ("local", "local_model") or gemini_zero_keys or (not translated_ok and auto_fallback)):
-            local_model = getattr(pipe_settings, "local_model", DEFAULT_LOCAL_MODEL)
+        local_supported = bool(getattr(pipe_settings, "local_supported", True))
+        if not is_pytest and local_supported and (provider in ("local", "local_model") or gemini_zero_keys or (not translated_ok and auto_fallback)):
+            local_model = getattr(pipe_settings, "local_model", "qwen3:14b")
+            rescue_model = getattr(pipe_settings, "local_fallback_model", "gemma2:9b")
             local_endpoint = getattr(pipe_settings, "local_endpoint", "http://localhost:11434")
             prompt_tone = getattr(pipe_settings, "prompt_tone", "dramatic")
             endpoints_to_try = [local_endpoint]
             if "localhost" not in local_endpoint and "127.0.0.1" not in local_endpoint:
                 endpoints_to_try.append("http://localhost:11434")
 
-            for ep in endpoints_to_try:
-                try:
-                    if provider not in ("local", "local_model"):
-                        logger.info(f"Đang dịch bằng Local AI (Qwen 2.5) tại endpoint {ep}...")
-                    translated_ok = self._translate_with_local_qwen(
-                        cues,
-                        source_lang,
-                        target_lang,
-                        model=local_model,
-                        endpoint=ep,
-                        prompt_tone=prompt_tone,
-                        batch_size=getattr(pipe_settings, "batch_size", None),
-                    )
-                    if translated_ok:
-                        break
-                except Exception as ex:
-                    logger.warning(f"Local Qwen call to {ep} failed: {ex}")
+            # Slot 1 is quality-first Qwen3; slot 2 is Gemma rescue.  A model
+            # is considered unsuccessful when its whole batch call fails; cue-
+            # level invalid/weak outputs are repaired by the retry pass below.
+            for model_slot, candidate_model in enumerate((local_model, rescue_model), start=1):
+                if translated_ok:
+                    break
+                for ep in endpoints_to_try:
+                    try:
+                        if provider not in ("local", "local_model"):
+                            logger.info("Đang dịch Local slot %s (%s) tại %s...", model_slot, candidate_model, ep)
+                        translated_ok = self._translate_with_local_qwen(
+                            cues, source_lang, target_lang, model=candidate_model,
+                            endpoint=ep, prompt_tone=prompt_tone,
+                            batch_size=getattr(pipe_settings, "batch_size", None),
+                        )
+                        if translated_ok:
+                            break
+                    except Exception as ex:
+                        logger.warning("Local slot %s (%s) tại %s failed: %s", model_slot, candidate_model, ep, ex)
 
         # 3. Nếu cấu hình là local nhưng local thất bại, và auto_fallback=True: cứu hộ sang Gemini
         if not is_pytest and not translated_ok and provider in ("local", "local_model") and auto_fallback:
@@ -1176,7 +1376,7 @@ class RealTranslationProvider(TranslationProvider):
                         source_lang,
                         target_lang,
                         key_pool=pool,
-                        gemini_model=getattr(pipe_settings, "gemini_model", "gemini-2.5-flash"),
+                        gemini_model=getattr(pipe_settings, "gemini_model", "gemini-3.8-flash"),
                         prompt_tone=getattr(pipe_settings, "prompt_tone", "dramatic"),
                         batch_size=getattr(pipe_settings, "batch_size", None),
                     )

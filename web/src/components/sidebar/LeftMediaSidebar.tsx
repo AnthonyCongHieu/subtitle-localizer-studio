@@ -71,6 +71,7 @@ interface LeftMediaSidebarProps {
   scanProgress?: number | null;
   statusMessage?: string | null;
   isDubbing?: boolean;
+  dubbingProgress?: { done: number; total: number; percent: number } | null;
   onDubAll?: () => Promise<void>;
   width?: number;
 }
@@ -105,6 +106,7 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   scanProgress,
   statusMessage,
   isDubbing: externalIsDubbing,
+  dubbingProgress,
   onDubAll: externalOnDubAll,
   width,
 }) => {
@@ -1571,7 +1573,9 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 {(externalIsDubbing ?? isDubbingAll) ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950" />
-                    <span>Đang Lồng Tiếng Toàn Bộ Video...</span>
+                    <span>{dubbingProgress && dubbingProgress.total > 0
+                      ? `Đang Lồng Tiếng ${dubbingProgress.done}/${dubbingProgress.total} (${dubbingProgress.percent}%)...`
+                      : 'Đang Lồng Tiếng Toàn Bộ Video...'}</span>
                   </>
                 ) : (
                   <>

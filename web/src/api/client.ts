@@ -1281,6 +1281,81 @@ export class StudioApiClient {
   async deleteAdminJob(jobId: string): Promise<void> {
     return this.adminRequest<void>(`/admin/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }, 'Không thể xóa job');
   }
+
+  // -------------------------------------------------------------------------
+  // Full Pipeline Automation (Ticket T28)
+  // -------------------------------------------------------------------------
+  async previewFullPipeline(data: { url: string; source_language?: string; target_language?: string }): Promise<FullPipelinePreviewResponse> {
+    const res = await fetch(`${API_BASE}/workflows/full-pipeline/preview`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Không thể phân tích liên kết' }));
+      throw new Error(err.detail || 'Không thể phân tích liên kết');
+    }
+    return res.json();
+  }
+
+  async createFullPipelineWorkflow(payload: FullPipelineCreatePayload): Promise<FullPipelineWorkflow> {
+    const res = await fetch(`${API_BASE}/workflows/full-pipeline`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Không thể khởi tạo quy trình tự động' }));
+      throw new Error(err.detail || 'Không thể khởi tạo quy trình tự động');
+    }
+    return res.json();
+  }
+
+  async getFullPipelineWorkflow(workflowId: string): Promise<FullPipelineWorkflow> {
+    const res = await fetch(`${API_BASE}/workflows/full-pipeline/${encodeURIComponent(workflowId)}`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Không thể lấy thông tin workflow' }));
+      throw new Error(err.detail || 'Không thể lấy thông tin workflow');
+    }
+    return res.json();
+  }
+
+  async listFullPipelineWorkflows(limit: number = 50): Promise<{ workflows: FullPipelineWorkflow[]; total: number }> {
+    const res = await fetch(`${API_BASE}/workflows/full-pipeline?limit=${limit}`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) {
+      return { workflows: [], total: 0 };
+    }
+    return res.json();
+  }
+
+  async cancelFullPipelineWorkflow(workflowId: string): Promise<{ status: string; workflow_id: string }> {
+    const res = await fetch(`${API_BASE}/workflows/full-pipeline/${encodeURIComponent(workflowId)}/cancel`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Không thể hủy workflow' }));
+      throw new Error(err.detail || 'Không thể hủy workflow');
+    }
+    return res.json();
+  }
+
+  async retryFullPipelineWorkflow(workflowId: string, stage?: string): Promise<{ status: string; workflow_id: string; stage?: string }> {
+    const res = await fetch(`${API_BASE}/workflows/full-pipeline/${encodeURIComponent(workflowId)}/retry`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ stage }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Không thể thử lại workflow' }));
+      throw new Error(err.detail || 'Không thể thử lại workflow');
+    }
+    return res.json();
+  }
 }
 
 export interface DirectoryValidateResponse {
@@ -1844,6 +1919,88 @@ export interface TestTranslationResult {
   translated: string;
   provider_used: string;
   latency_ms: number;
+}
+
+export interface FullPipelineSettings {
+  source_language?: string;
+  target_language?: string;
+  target_resolution?: string;
+  ocr_quality?: string;
+  translation_quality?: string;
+  dubbing_enabled?: boolean;
+  voice?: string;
+  speed_fit?: boolean;
+  burn_subtitles?: boolean;
+  mask_subtitles?: boolean;
+  mask_mode?: string;
+  export_srt_ass?: boolean;
+  output_dir?: string;
+  proxy?: string;
+  cookie_source?: string;
+  idempotency_key?: string;
+}
+
+export interface FullPipelineCreatePayload extends FullPipelineSettings {
+  url: string;
+}
+
+export interface FullPipelineStage {
+  stage_name: string;
+  display_name: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'needs_review';
+  progress: number;
+  start_time?: number;
+  end_time?: number;
+  metrics?: Record<string, any>;
+  errors?: string[];
+}
+
+export interface FallbackEvent {
+  stage: string;
+  from_provider: string;
+  error: string;
+  to_provider: string;
+  timestamp: number;
+  success: boolean;
+}
+
+export interface FullPipelineWorkflow {
+  workflow_id: string;
+  source_url: string;
+  idempotency_key?: string;
+  state: 'queued' | 'downloading' | 'detecting_roi' | 'ocr' | 'translating' | 'dubbing' | 'exporting' | 'completed' | 'retrying' | 'needs_review' | 'failed' | 'cancelled';
+  current_stage: string;
+  project_id?: string | null;
+  title: string;
+  thumbnail_url?: string;
+  settings: FullPipelineSettings;
+  stages: FullPipelineStage[];
+  progress: number;
+  retry_count: number;
+  fallback_events: FallbackEvent[];
+  warnings: string[];
+  errors: string[];
+  artifacts: Record<string, any>;
+  quality_metrics: Record<string, any>;
+  created_at: number;
+  updated_at: number;
+  finished_at?: number | null;
+}
+
+export interface FullPipelinePreviewResponse {
+  url: string;
+  canonical_url: string;
+  platform: string;
+  source_platform: string;
+  title: string;
+  cover_url: string;
+  thumbnail: string;
+  duration: number;
+  total_episodes: number;
+  resolutions: Array<{ id: string; label: string; size_mb?: number }>;
+  warnings: string[];
+  source_language: string;
+  target_language: string;
 }
 
 export const apiClient = new StudioApiClient();

@@ -131,6 +131,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           return (
             <button
               key={item.id}
+              data-nav-id={item.id}
               onClick={() => onNavigate(item.id)}
               title={isCollapsed ? item.label : undefined}
               className={`w-full flex items-center rounded-xl transition-all duration-200 cursor-pointer border ${

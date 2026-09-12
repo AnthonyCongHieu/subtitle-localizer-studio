@@ -11,6 +11,9 @@ import unicodedata
 import weakref
 import json
 import urllib.request
+import urllib.error
+import hashlib
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -813,11 +816,41 @@ def mix_voice_pcm(
     return master
 
 
-# CapCut returns transient 1000/system-busy when parallel task creation is too
-# aggressive. Keep its cloud queue single-flight; Edge/Gemini remain concurrent.
-_PROVIDER_CONCURRENCY_LIMITS = {"edge": 1, "capcut": 1, "gemini": 4}
-_PROVIDER_PACING_SECONDS = {"edge": 0.10, "capcut": 0.50, "gemini": 0.0}
+# Configurable provider concurrency limits. CapCut uses a conservative 3-way
+# queue: faster than single-flight while leaving room for its transient 1000
+# (system busy) response, which is retried/fallbacked explicitly.
+# Tuned for single-voice throughput from repeated real-provider benchmarks. The
+# semaphore remains the hard safety cap; callers can lower limits at runtime.
+_DEFAULT_PROVIDER_CONCURRENCY_LIMITS = {"edge": 8, "capcut": 4, "gemini": 4}
+_PROVIDER_CONCURRENCY_LIMITS: Dict[str, int] = dict(_DEFAULT_PROVIDER_CONCURRENCY_LIMITS)
+_PROVIDER_PACING_SECONDS = {"edge": 0.05, "capcut": 0.10, "gemini": 0.0}
 _PROVIDER_SEMAPHORES: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[str, asyncio.Semaphore]]" = weakref.WeakKeyDictionary()
+_PROVIDER_ACTIVE: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[str, int]]" = weakref.WeakKeyDictionary()
+_PROVIDER_PENDING_LIMITS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[str, int]]" = weakref.WeakKeyDictionary()
+
+
+def set_provider_concurrency(provider: str, limit: int) -> None:
+    """Set a provider limit without invalidating semaphores used by active jobs.
+
+    A running job keeps its semaphore for the lifetime of that job.  Replacing a
+    semaphore while tasks are waiting on it would create a second independent
+    gate and could exceed the configured provider limit.  New limits therefore
+    apply immediately only when that provider is idle; otherwise they are
+    applied after the last active call exits.
+    """
+    limit = max(1, min(128, int(limit)))
+    _PROVIDER_CONCURRENCY_LIMITS[provider] = limit
+    for loop, sem_dict in list(_PROVIDER_SEMAPHORES.items()):
+        active = _PROVIDER_ACTIVE.get(loop, {}).get(provider, 0)
+        if active == 0 and not getattr(sem_dict.get(provider), "_waiters", ()):
+            sem_dict[provider] = asyncio.Semaphore(limit)
+        else:
+            _PROVIDER_PENDING_LIMITS.setdefault(loop, {})[provider] = limit
+
+
+def get_provider_concurrency(provider: str) -> int:
+    """Return configured concurrency limit for the specified provider."""
+    return _PROVIDER_CONCURRENCY_LIMITS.get(provider, 2)
 
 
 def _provider_semaphore(provider: str) -> asyncio.Semaphore:
@@ -830,17 +863,33 @@ def _provider_semaphore(provider: str) -> asyncio.Semaphore:
             for name, limit in _PROVIDER_CONCURRENCY_LIMITS.items()
         }
         _PROVIDER_SEMAPHORES[loop] = semaphores
+        _PROVIDER_ACTIVE[loop] = {name: 0 for name in semaphores}
+        _PROVIDER_PENDING_LIMITS[loop] = {}
+    elif provider not in semaphores:
+        semaphores[provider] = asyncio.Semaphore(_PROVIDER_CONCURRENCY_LIMITS.get(provider, 2))
     return semaphores[provider]
 
 
 async def _run_provider_call(provider: str, operation: Any) -> Any:
     """Run a provider operation under its global per-event-loop concurrency cap."""
-    async with _provider_semaphore(provider):
-        result = await operation()
-        pacing = _PROVIDER_PACING_SECONDS[provider]
-        if pacing > 0:
-            await asyncio.sleep(pacing)
-        return result
+    loop = asyncio.get_running_loop()
+    sem = _provider_semaphore(provider)
+    active = _PROVIDER_ACTIVE.setdefault(loop, {})
+    async with sem:
+        active[provider] = active.get(provider, 0) + 1
+        try:
+            result = await operation()
+        finally:
+            active[provider] -= 1
+            pending = _PROVIDER_PENDING_LIMITS.get(loop, {}).get(provider)
+            if pending is not None and active[provider] == 0 and not getattr(sem, "_waiters", ()):
+                _PROVIDER_SEMAPHORES[loop][provider] = asyncio.Semaphore(pending)
+                _PROVIDER_PENDING_LIMITS[loop].pop(provider, None)
+    # Pacing is executed outside the semaphore lock so other concurrent tasks are not blocked
+    pacing = _PROVIDER_PACING_SECONDS.get(provider, 0.0)
+    if pacing > 0:
+        await asyncio.sleep(pacing)
+    return result
 
 
 async def _synthesize_edge_tts(
@@ -848,8 +897,9 @@ async def _synthesize_edge_tts(
     voice: str = "vi-VN-NamMinhNeural",
     rate: str = "+0%",
     max_retries: int = 3,
+    timeout: float = 25.0,
 ) -> bytes:
-    """Sinh file âm thanh từ văn bản bằng Microsoft Edge Neural TTS."""
+    """Sinh file âm thanh từ văn bản bằng Microsoft Edge Neural TTS có timeout và jitter retry."""
     import edge_tts
 
     clean_text = text.strip()
@@ -863,24 +913,38 @@ async def _synthesize_edge_tts(
     attempts = max(1, int(max_retries))
     for attempt in range(attempts):
         try:
-            communicate = edge_tts.Communicate(clean_text, actual_voice, rate=rate)
-            audio_chunks = bytearray()
-            async for chunk in communicate.stream():
-                if chunk.get("type") == "audio":
-                    data = chunk.get("data", b"")
-                    if not isinstance(data, (bytes, bytearray)):
-                        raise RuntimeError("Edge-TTS trả về chunk âm thanh không hợp lệ")
-                    audio_chunks.extend(data)
-
-            if len(audio_chunks) > 0:
+            async def _stream():
+                communicate = edge_tts.Communicate(clean_text, actual_voice, rate=rate)
+                audio_chunks = bytearray()
+                async for chunk in communicate.stream():
+                    if chunk.get("type") == "audio":
+                        data = chunk.get("data", b"")
+                        if not isinstance(data, (bytes, bytearray)):
+                            raise RuntimeError("Edge-TTS trả về chunk âm thanh không hợp lệ")
+                        audio_chunks.extend(data)
                 return bytes(audio_chunks)
+
+            audio_data = await asyncio.wait_for(_stream(), timeout=timeout)
+            if len(audio_data) > 0:
+                return audio_data
             raise RuntimeError("Edge-TTS trả về luồng âm thanh rỗng")
+        except asyncio.CancelledError:
+            raise
         except (ValueError, TypeError) as error:
             logger.warning(
                 "Edge-TTS từ chối tham số voice=%s rate=%s: %s: %s",
                 actual_voice, rate, type(error).__name__, error,
             )
             return b""
+        except asyncio.TimeoutError as error:
+            if attempt == attempts - 1:
+                logger.warning(
+                    "Edge-TTS hết thời gian chờ sau %d lần (voice=%s, timeout=%.1fs): %s",
+                    attempts, actual_voice, timeout, error,
+                )
+                return b""
+            delay = (0.75 * (2 ** attempt)) + random.uniform(0.0, 0.35)
+            await asyncio.sleep(delay)
         except Exception as error:
             if attempt == attempts - 1:
                 logger.warning(
@@ -1006,17 +1070,43 @@ async def synthesize_text(
     max_retries: int = 3,
     provider: str = "edge",
     prompt_style: str = "dramatic",
+    request_timeout: float = 25.0,
 ) -> bytes:
     """
     Sinh file âm thanh từ văn bản hỗ trợ Multi-Provider (Edge-TTS, CapCut, Gemini).
     Tự động kích hoạt Fallback sang Edge-TTS nếu Provider ngoài gặp sự cố mạng/quota.
     """
+    try:
+        request_timeout = float(request_timeout)
+    except (TypeError, ValueError) as error:
+        raise ValueError("request_timeout phải là số dương") from error
+    if not 0.1 <= request_timeout <= 300.0:
+        raise ValueError("request_timeout phải nằm trong khoảng 0.1..300 giây")
+
     clean_text = normalize_tts_text(text)
     if not clean_text:
         return b""
 
     prov = resolve_tts_provider(voice, preferred_provider=provider)
     voice = normalize_voice_for_provider(voice, prov)
+    # Deterministic on-disk cache avoids retransmitting identical single-mode cues.
+    # It is content addressed and opt-out via SUBTITLE_TTS_CACHE_DIR="".
+    cache_root = os.environ.get("SUBTITLE_TTS_CACHE_DIR")
+    if cache_root is None:
+        # Production default is on; tests stay isolated unless they opt in.
+        cache_root = "" if "PYTEST_CURRENT_TEST" in os.environ else str(Path("cache") / "tts")
+    cache_file: Path | None = None
+    if cache_root:
+        cache_key = hashlib.sha256(json.dumps(
+            {"text": clean_text, "provider": prov, "voice": voice, "rate": rate,
+             "style": prompt_style}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        cache_file = Path(cache_root) / f"{cache_key}.bin"
+        try:
+            cached = cache_file.read_bytes()
+            if cached:
+                return cached
+        except (FileNotFoundError, OSError):
+            pass
     audio_data: bytes = b""
     primary_error: Exception | None = None
 
@@ -1024,7 +1114,7 @@ async def synthesize_text(
         if prov == "capcut":
             async def _capcut_call() -> bytes:
                 client = CapCutTTSClient()
-                return await client.synthesize(clean_text, voice=voice, rate=rate)
+                return await client.synthesize(clean_text, voice=voice, rate=rate, timeout=request_timeout)
 
             audio_data = await _run_provider_call("capcut", _capcut_call)
         elif prov == "gemini":
@@ -1037,7 +1127,7 @@ async def synthesize_text(
         else:
             async def _edge_call() -> bytes:
                 return await _synthesize_edge_tts(
-                    clean_text, voice=voice, rate=rate, max_retries=max_retries
+                    clean_text, voice=voice, rate=rate, max_retries=max_retries, timeout=request_timeout
                 )
 
             audio_data = await _run_provider_call("edge", _edge_call)
@@ -1061,6 +1151,7 @@ async def synthesize_text(
                 voice="vi-VN-NamMinhNeural",
                 rate=rate,
                 max_retries=max_retries,
+                timeout=request_timeout,
             )
 
         audio_data = await _run_provider_call("edge", _edge_fallback)
@@ -1068,6 +1159,15 @@ async def synthesize_text(
     if not audio_data:
         logger.warning("Không nhận được audio từ %s/Edge-TTS; thử Windows SAPI cục bộ.", prov)
         audio_data = await _synthesize_windows_sapi(clean_text)
+
+    if audio_data and cache_file is not None:
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache_file.with_suffix(".tmp")
+            tmp.write_bytes(audio_data)
+            tmp.replace(cache_file)
+        except OSError:
+            logger.debug("Không ghi được TTS cache", exc_info=True)
 
     if audio_data and output_path:
         out = Path(output_path)
@@ -1445,6 +1545,48 @@ async def rewrite_spoken_text_local(text: str, *, endpoint: str = "http://localh
         logger.info("Local speech rewrite unavailable: %s", error)
         return ""
     return candidate if _rewrite_preserves_anchors(original, candidate) else ""
+
+
+async def rewrite_spoken_text_gemini(text: str, *, model: str = "gemini-2.5-flash", timeout: float = 12.0) -> str:
+    """Rewrite one spoken line with Gemini using the configured rotating key pool."""
+    original = clean_subtitle_text(text)
+    if not original:
+        return ""
+    from subtitle_localizer.translation.key_pool import get_global_gemini_pool
+    key = get_global_gemini_pool().get_next_key(wait_timeout=0.0)
+    if not key:
+        return ""
+    prompt = (
+        "Rút gọn câu tiếng Việt sau ít nhất 25% để đọc lồng tiếng nhanh hơn. "
+        "Giữ nguyên nghĩa, phủ định, tên riêng và mọi con số. Chỉ trả về một câu.\n"
+        f"Câu gốc: {original}"
+    )
+    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
+                          "generationConfig": {"temperature": 0.1, "maxOutputTokens": 256}}).encode("utf-8")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    def _call() -> str:
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        parts = (((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+        return "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
+    try:
+        candidate = clean_subtitle_text(await asyncio.to_thread(_call))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, urllib.error.URLError):
+        return ""
+    if not _rewrite_preserves_anchors(original, candidate):
+        return ""
+    reduction = 1.0 - (len(candidate) / max(1, len(original)))
+    return candidate if reduction >= 0.25 else ""
+
+
+async def rewrite_spoken_text_api_then_local(text: str, **local_kwargs: Any) -> tuple[str, str]:
+    """Prefer Gemini; use local Ollama only if Gemini fails or shortens <25%."""
+    gemini = await rewrite_spoken_text_gemini(text)
+    if gemini:
+        return gemini, "gemini_api"
+    local = await rewrite_spoken_text_local(text, **local_kwargs)
+    return (local, "local_model") if local else ("", "")
 
 
 def assign_turn_taking_speaker_ids(cues: List[SubtitleCueV1], mode: str = "multi") -> List[SubtitleCueV1]:
@@ -1829,6 +1971,7 @@ async def generate_timed_voiceover(
     local_llm_endpoint: str = "http://localhost:11434",
     local_llm_model: str = "qwen2.5:14b",
     local_rewrite_enabled: bool = False,
+    request_timeout: float = 25.0,
 ) -> Path:
     """
     Sinh toàn bộ giọng thuyết minh cho các câu phụ đề theo đúng mốc thời gian start_pts của video.
@@ -1907,8 +2050,12 @@ async def generate_timed_voiceover(
                     c.style["spoken_text"] = rule_candidate
                     c.style["timing_rewrite"] = "safe_rule"
                     estimate = estimate_speech_seconds(cleaned, base_rate)
-            if estimate > slot_dur * min(max_stretch_rate, 1.30):
-                rewritten = await rewrite_spoken_text_local(
+            if (
+                estimate > slot_dur * min(max_stretch_rate, 1.30)
+                and local_rewrite_enabled
+                and _local_rewrite_enabled()
+            ):
+                rewritten, rewrite_source = await rewrite_spoken_text_api_then_local(
                     cleaned,
                     endpoint=os.environ.get("SUBTITLE_LOCAL_LLM_ENDPOINT", local_llm_endpoint),
                     model=os.environ.get("SUBTITLE_LOCAL_LLM_MODEL", local_llm_model),
@@ -1916,7 +2063,7 @@ async def generate_timed_voiceover(
                 if rewritten:
                     cleaned = rewritten
                     c.style["spoken_text"] = rewritten
-                    c.style["timing_rewrite"] = "local_model"
+                    c.style["timing_rewrite"] = rewrite_source
         if not auto_detect_speakers:
             # Keep explicit style labels only; avoid pronoun heuristic overrides later
             pass
@@ -1943,9 +2090,12 @@ async def generate_timed_voiceover(
         cues_out_dir.mkdir(parents=True, exist_ok=True)
 
     # Giới hạn batch ngoài limiter theo provider để không tạo quá nhiều coroutine đang chờ.
-    batch_sem = asyncio.Semaphore(max(1, int(batch_size)))
+    prov_limit = get_provider_concurrency(provider)
+    batch_sem = asyncio.Semaphore(max(int(batch_size), prov_limit * 2))
     completed_count = 0
     total_valid = len(valid_cues)
+    job_started = time.perf_counter()
+    job_audio_seconds = sum(max(0.0, float(c.end_pts) - float(c.start_pts)) for c, _ in valid_cues)
 
     async def _fetch_single(i: int, c: SubtitleCueV1, text: str):
         nonlocal completed_count
@@ -1971,13 +2121,29 @@ async def generate_timed_voiceover(
                     pass
             return i, c, text, b""
         async with batch_sem:
-            audio_bytes = await synthesize_text(
-                text,
-                voice=target_v,
-                rate=rate,
-                provider=provider,
-                prompt_style=prompt_style,
-            )
+            # request_timeout applies to one provider attempt.  A provider can
+            # still retry/fallback, so cap the whole cue as well; otherwise a
+            # single CapCut task can keep the complete 140-cue job apparently
+            # stuck for many minutes.
+            cue_timeout = max(1.0, min(90.0, float(request_timeout) * 2.0))
+            try:
+                audio_bytes = await asyncio.wait_for(
+                    synthesize_text(
+                        text,
+                        voice=target_v,
+                        rate=rate,
+                        provider=provider,
+                        prompt_style=prompt_style,
+                        request_timeout=request_timeout,
+                    ),
+                    timeout=cue_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "TTS cue %s vượt thời gian tối đa %.1fs; bỏ qua cue để job tiếp tục",
+                    c.cue_id, cue_timeout,
+                )
+                audio_bytes = b""
             completed_count += 1
             if progress_callback is not None:
                 try:
@@ -1986,11 +2152,51 @@ async def generate_timed_voiceover(
                     pass
             return i, c, text, audio_bytes
 
-    tasks = [_fetch_single(i, c, t) for i, (c, t) in enumerate(valid_cues)]
-    results = await asyncio.gather(*tasks)
+    # Single-mode uses bounded workers to avoid allocating one waiting coroutine per cue.
+    # Multi-mode keeps the legacy ordering/concurrency path for overlap semantics.
+    if mode == "single" and len(valid_cues) > max(8, int(batch_size)):
+        queue: asyncio.Queue[tuple[int, SubtitleCueV1, str] | None] = asyncio.Queue(maxsize=max(4, int(batch_size)))
+        results = []
+
+        async def _worker() -> None:
+            while True:
+                item = await queue.get()
+                try:
+                    if item is None:
+                        return
+                    results.append(await _fetch_single(*item))
+                finally:
+                    queue.task_done()
+
+        workers = [asyncio.create_task(_worker()) for _ in range(max(1, min(prov_limit, int(batch_size))))]
+        cancelled = False
+        try:
+            for i, (c, t) in enumerate(valid_cues):
+                await queue.put((i, c, t))
+            await queue.join()
+        except asyncio.CancelledError:
+            cancelled = True
+            for worker in workers:
+                worker.cancel()
+            raise
+        finally:
+            if not cancelled:
+                for _ in workers:
+                    await queue.put(None)
+            await asyncio.gather(*workers, return_exceptions=True)
+    else:
+        task_objects = [asyncio.create_task(_fetch_single(i, c, t)) for i, (c, t) in enumerate(valid_cues)]
+        try:
+            results = await asyncio.gather(*task_objects)
+        except asyncio.CancelledError:
+            for t in task_objects:
+                if not t.done():
+                    t.cancel()
+            raise
     results.sort(key=lambda r: r[0])
 
     successful_cues = 0
+    voice_cursor_sample = 0
     for result_index, (idx, cue, cleaned_text, mp3_res) in enumerate(results):
         if not mp3_res:
             logger.warning(f"Bỏ qua câu {cue.cue_id} do không nhận được audio")
@@ -2017,7 +2223,7 @@ async def generate_timed_voiceover(
         # Last-resort semantic compression based on measured provider output.
         # Re-synthesize once; never truncate the original audio/text silently.
         if preserve_text and speech_dur > slot_dur * min(max_stretch_rate, 1.30) and local_rewrite_enabled and _local_rewrite_enabled():
-            rewritten = await rewrite_spoken_text_local(
+            rewritten, rewrite_source = await rewrite_spoken_text_api_then_local(
                 cleaned_text,
                 endpoint=os.environ.get("SUBTITLE_LOCAL_LLM_ENDPOINT", local_llm_endpoint),
                 model=os.environ.get("SUBTITLE_LOCAL_LLM_MODEL", local_llm_model),
@@ -2036,7 +2242,7 @@ async def generate_timed_voiceover(
                     pcm_samples = retry_pcm
                     cleaned_text = rewritten
                     cue.style["spoken_text"] = rewritten
-                    cue.style["timing_rewrite"] = "local_model_measured"
+                    cue.style["timing_rewrite"] = f"{rewrite_source}_measured"
                     speech_dur = len(pcm_samples) / sample_rate
         # Khi người dùng chọn tốc độ chung (ví dụ +15%), giữ cùng một hệ số
         # cho toàn video; không cộng thêm auto-fit khác nhau theo từng cue.
@@ -2058,13 +2264,28 @@ async def generate_timed_voiceover(
             # Lưu đồng thời theo mã cue_id để endpoint GET /api/v1/projects/{id}/cues/{cue_id}/audio phát tức thì
             _encode_pcm_to_mp3(pcm_samples, cues_out_dir / f"{cue.cue_id}.mp3", sample_rate=sample_rate)
 
-        start_sample = max(0, int(cue.start_pts * sample_rate))
+        requested_start_sample = max(0, int(cue.start_pts * sample_rate))
+        start_sample = requested_start_sample
         next_start_sample = None if next_cue is None else max(0, int(next_cue.start_pts * sample_rate))
         allow_overlap = False
         if mode == "multi" and next_cue is not None and cues_truly_overlap(cue, next_cue):
             id_a = str((cue.style or {}).get("speaker_id") or "")
             id_b = str((next_cue.style or {}).get("speaker_id") or "")
             allow_overlap = bool(id_a and id_b and id_a != id_b)
+        # A single narrator must never be hard-trimmed at the next subtitle
+        # boundary. If the provider audio still exceeds the slot after the
+        # bounded time-stretch, queue it after the previous sentence instead.
+        # This preserves the complete sentence and prevents two narrator clips
+        # from being mixed together. Explicit multi-speaker overlap remains
+        # governed by allow_overlap above.
+        sequential_lane = mode == "single" or not allow_overlap
+        if sequential_lane:
+            start_sample = max(requested_start_sample, voice_cursor_sample)
+            next_start_sample = None
+        if start_sample > requested_start_sample:
+            cue.style["timing_warning"] = (
+                f"voice_shifted:{(start_sample - requested_start_sample) / sample_rate:.3f}s"
+            )
         master_buffer = mix_voice_pcm(
             master_buffer,
             pcm_samples,
@@ -2074,6 +2295,8 @@ async def generate_timed_voiceover(
             allow_overlap=allow_overlap,
             preserve_full_text=preserve_full_text,
         )
+        if sequential_lane:
+            voice_cursor_sample = start_sample + len(pcm_samples)
 
     if successful_cues == 0:
         raise ValueError("Không có câu TTS nào tạo được âm thanh hợp lệ; không xuất master im lặng.")
@@ -2089,6 +2312,14 @@ async def generate_timed_voiceover(
 
     # Xuất ra file MP3 đồng bộ
     out = _encode_pcm_to_mp3(master_buffer, output_path, sample_rate=sample_rate)
+    wall_seconds = max(1e-9, time.perf_counter() - job_started)
+    success_ratio = successful_cues / max(1, total_valid)
+    if mode == "single":
+        logger.info(
+            "Single TTS metrics: cues=%d success=%.3f wall=%.3fs audio=%.3fs RTF=%.3f",
+            total_valid, success_ratio, wall_seconds, job_audio_seconds,
+            job_audio_seconds / wall_seconds,
+        )
     logger.info(f"Đã xuất file âm thanh thuyết minh đồng bộ: {out}")
     return out
 

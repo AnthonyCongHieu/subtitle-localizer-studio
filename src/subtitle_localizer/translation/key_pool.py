@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Pool gồm nhiều nhóm tài khoản: model mới có thể 404 với nhóm cũ và ngược lại,
+# nên health-check phải probe lần lượt trước khi kết luận key hỏng.
+_HEALTH_CHECK_MODELS = ("gemini-3.8-flash", "gemini-2.5-flash")
+
 
 def mask_api_key(key: str) -> str:
     """Che giấu phần lớn ký tự của API key để hiển thị an toàn trên giao diện hoặc log."""
@@ -234,92 +238,115 @@ class GeminiKeyPool:
             }
 
     def check_key_health(self, key: str, timeout: float = 6.0) -> Dict[str, Any]:
-        """Kiểm tra thực tế trạng thái hoạt động của key đối với Google Gemini API."""
+        """Kiểm tra thực tế trạng thái hoạt động của key đối với Google Gemini API.
+
+        Một model bị khai tử với nhóm tài khoản này (HTTP 404) không có nghĩa key
+        hỏng, nên probe lần lượt các model trong ``_HEALTH_CHECK_MODELS``.
+        """
         import urllib.request
         import urllib.error
 
         t0 = time.time()
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
         payload = json.dumps({
             "contents": [{"parts": [{"text": "hi"}]}],
             "generationConfig": {"maxOutputTokens": 1}
         }).encode("utf-8")
-        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
 
         result: Dict[str, Any] = {
             "masked_key": mask_api_key(key),
             "last_checked": time.time(),
         }
 
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                status_code = getattr(resp, "status", getattr(resp, "code", 200))
-                latency_ms = round((time.time() - t0) * 1000, 1)
-                result.update({
-                    "status": "ok",
-                    "status_label": "Khả dụng",
-                    "latency_ms": latency_ms,
-                    "message": f"Hoạt động tốt ({latency_ms}ms)",
-                })
-                with self._lock:
-                    self._cooldowns.pop(key, None)
-                    self._reasons.pop(key, None)
-                    self._health[key] = result
-                return result
-        except urllib.error.HTTPError as err:
-            latency_ms = round((time.time() - t0) * 1000, 1)
-            err_body = ""
+        last_error: Optional[Any] = None
+        for model_name in _HEALTH_CHECK_MODELS:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={key}"
+            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
             try:
-                err_body = err.read().decode("utf-8", errors="ignore").lower()
-            except Exception:
-                pass
-
-            if err.code == 429:
-                if any(t in err_body for t in ("per day", "daily", "requestsperday", "rpd")):
-                    self.mark_daily_quota_exhausted(key)
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    latency_ms = round((time.time() - t0) * 1000, 1)
                     result.update({
-                        "status": "daily_exhausted",
-                        "status_label": "Hết quota ngày",
+                        "status": "ok",
+                        "status_label": "Khả dụng",
                         "latency_ms": latency_ms,
-                        "message": "Đã chạm hạn ngạch ngày (1,500 RPD)",
+                        "message": f"Hoạt động tốt ({latency_ms}ms)",
+                        "model": model_name,
+                    })
+                    with self._lock:
+                        self._cooldowns.pop(key, None)
+                        self._reasons.pop(key, None)
+                        self._health[key] = result
+                    return result
+            except urllib.error.HTTPError as err:
+                latency_ms = round((time.time() - t0) * 1000, 1)
+                err_body = ""
+                try:
+                    err_body = err.read().decode("utf-8", errors="ignore").lower()
+                except Exception:
+                    pass
+
+                if err.code == 404:
+                    # Model đã khai tử với nhóm tài khoản này -> thử model kế tiếp.
+                    last_error = err
+                    continue
+
+                if err.code == 429:
+                    if any(t in err_body for t in ("per day", "daily", "requestsperday", "rpd")):
+                        self.mark_daily_quota_exhausted(key)
+                        result.update({
+                            "status": "daily_exhausted",
+                            "status_label": "Hết quota ngày",
+                            "latency_ms": latency_ms,
+                            "message": "Đã chạm hạn ngạch ngày (1,500 RPD)",
+                        })
+                    else:
+                        self.mark_rate_limited(key, cooldown_seconds=60.0, reason="rate_limit_exceeded")
+                        result.update({
+                            "status": "cooldown",
+                            "status_label": "Tạm nghỉ 429",
+                            "latency_ms": latency_ms,
+                            "message": "Nghẽn RPM 15 req/phút (60s)",
+                        })
+                elif err.code in (400, 403):
+                    self.mark_rate_limited(key, cooldown_seconds=86400.0 * 365, reason="invalid_key")
+                    result.update({
+                        "status": "invalid",
+                        "status_label": "Không hợp lệ",
+                        "latency_ms": latency_ms,
+                        "message": f"Lỗi xác thực HTTP {err.code} (Key sai/bị khóa)",
                     })
                 else:
-                    self.mark_rate_limited(key, cooldown_seconds=60.0, reason="rate_limit_exceeded")
                     result.update({
-                        "status": "cooldown",
-                        "status_label": "Tạm nghỉ 429",
+                        "status": "error",
+                        "status_label": f"HTTP {err.code}",
                         "latency_ms": latency_ms,
-                        "message": "Nghẽn RPM 15 req/phút (60s)",
+                        "message": f"HTTP {err.code}: {err.reason}",
                     })
-            elif err.code in (400, 403):
-                self.mark_rate_limited(key, cooldown_seconds=86400.0 * 365, reason="invalid_key")
+                with self._lock:
+                    self._health[key] = result
+                return result
+            except Exception as e:
+                latency_ms = round((time.time() - t0) * 1000, 1)
                 result.update({
-                    "status": "invalid",
-                    "status_label": "Không hợp lệ",
+                    "status": "network_error",
+                    "status_label": "Lỗi mạng",
                     "latency_ms": latency_ms,
-                    "message": f"Lỗi xác thực HTTP {err.code} (Key sai/bị khóa)",
+                    "message": str(e),
                 })
-            else:
-                result.update({
-                    "status": "error",
-                    "status_label": f"HTTP {err.code}",
-                    "latency_ms": latency_ms,
-                    "message": f"HTTP {err.code}: {err.reason}",
-                })
-            with self._lock:
-                self._health[key] = result
-            return result
-        except Exception as e:
-            latency_ms = round((time.time() - t0) * 1000, 1)
-            result.update({
-                "status": "network_error",
-                "status_label": "Lỗi mạng",
-                "latency_ms": latency_ms,
-                "message": str(e),
-            })
-            with self._lock:
-                self._health[key] = result
-            return result
+                with self._lock:
+                    self._health[key] = result
+                return result
+
+        latency_ms = round((time.time() - t0) * 1000, 1)
+        code = getattr(last_error, "code", 404)
+        result.update({
+            "status": "error",
+            "status_label": f"HTTP {code}",
+            "latency_ms": latency_ms,
+            "message": "Không model nào khả dụng cho key này (404 toàn bộ model probe)",
+        })
+        with self._lock:
+            self._health[key] = result
+        return result
 
     def verify_all_keys(self, max_workers: int = 8) -> List[Dict[str, Any]]:
         """Kiểm tra sức khỏe song song toàn bộ các keys trong pool."""

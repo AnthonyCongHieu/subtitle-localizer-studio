@@ -45,6 +45,7 @@ interface StudioHeaderProps {
   isTranslating?: boolean;
   onDubAll?: () => void;
   isDubbing?: boolean;
+  dubbingProgress?: { done: number; total: number; percent: number } | null;
   onExportVideo?: () => void;
   cuesCount?: number;
   cues?: SubtitleCueV1[];
@@ -77,6 +78,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
   isTranslating = false,
   onDubAll,
   isDubbing = false,
+  dubbingProgress = null,
   onExportVideo,
   cuesCount = 0,
   cues = [],
@@ -327,7 +329,9 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
               {isDubbing ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950 shrink-0" />
-                  <span>Đang Đọc...</span>
+                  <span>{dubbingProgress && dubbingProgress.total > 0
+                    ? `Đọc ${dubbingProgress.done}/${dubbingProgress.total} (${dubbingProgress.percent}%)`
+                    : 'Đang Đọc...'}</span>
                 </>
               ) : hasDubDone ? (
                 <span className="flex items-center justify-center gap-1 whitespace-nowrap">
