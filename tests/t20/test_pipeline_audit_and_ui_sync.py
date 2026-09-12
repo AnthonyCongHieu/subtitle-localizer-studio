@@ -49,6 +49,13 @@ class PipelineAuditAndUiSyncTest(unittest.TestCase):
         self.assertIn("onDubAll={handleDubAll}", app_content)
         self.assertIn("isTranslating={isTranslatingAll}", app_content)
         self.assertIn("isDubbing={isDubbingAll}", app_content)
+        self.assertIn("Single source of truth for dubbing state", app_content)
+        self.assertIn("latest.status === 'completed'", app_content)
+
+        sidebar_file = REPOSITORY_ROOT / "web" / "src" / "components" / "sidebar" / "LeftMediaSidebar.tsx"
+        sidebar_content = sidebar_file.read_text(encoding="utf-8")
+        self.assertIn("onDubAll?: () => Promise<void>", sidebar_content)
+        self.assertIn("externalIsDubbing ?? isDubbingAll", sidebar_content)
 
     def test_smpte_grid_toggle_and_overlay(self) -> None:
         player_file = REPOSITORY_ROOT / "web" / "src" / "components" / "player" / "VideoPlayer.tsx"

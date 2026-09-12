@@ -119,9 +119,9 @@ def test_cli_build_web_check_only():
 
 
 def test_host_and_worker_launchers_exist():
-    """MVP distribution includes one-click host and copy-to-machine worker launchers."""
-    assert (ROOT_DIR / "start-host.bat").exists()
-    assert (ROOT_DIR / "start-worker.bat").exists()
+    """MVP distribution includes unified studio launcher and copy-to-machine worker launcher."""
+    assert (ROOT_DIR / "KHOI_DONG_STUDIO.bat").exists()
+    assert (ROOT_DIR / "worker" / "start-worker.bat").exists()
 
 
 def test_local_worker_factory_uses_loopback_by_default(monkeypatch, tmp_path):

@@ -155,6 +155,9 @@ class DubbingSettings(BaseModel):
     rate: str = "+0%"
     pitch: str = "+0Hz"
     ducking_volume: float = 0.25
+    local_rewrite_enabled: bool = False
+    video_rescue_enabled: bool = True
+    video_rescue_max_slowdown: float = 1.25
 
 
 class BatchConfigSettings(BaseModel):

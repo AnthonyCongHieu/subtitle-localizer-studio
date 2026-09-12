@@ -184,6 +184,12 @@ class TranslationContextFidelityTests(unittest.TestCase):
         holes = provider.list_untranslated_indices(cues, target_lang="vi")
         self.assertEqual(holes, [0])
 
+    def test_rejects_short_cjk_residue_in_vietnamese(self) -> None:
+        from subtitle_localizer.translation.real import RealTranslationProvider
+
+        provider = RealTranslationProvider()
+        self.assertTrue(provider._is_invalid_translation("Một đồng nghiệp kéo dây耳机", "同事扯掉耳机线", target_lang="vi"))
+
     def test_translation_settings_defaults_are_video_agnostic(self) -> None:
         from subtitle_localizer.service.pipeline_settings import TranslationSettings
 

@@ -2185,6 +2185,9 @@ def create_app(
         auto_detect_speakers = (body or {}).get("auto_detect_speakers")
         if auto_detect_speakers is None:
             auto_detect_speakers = bool(getattr(settings.dubbing, "auto_detect_speakers", True))
+        local_llm_endpoint = getattr(settings.translation, "local_endpoint", "http://localhost:11434")
+        local_llm_model = getattr(settings.translation, "local_model", "qwen2.5:14b")
+        local_rewrite_enabled = bool(getattr(settings.dubbing, "local_rewrite_enabled", False))
 
         # Lưu cài đặt lồng tiếng (Đơn giọng / Đa giọng, giọng chọn) riêng cho video này
         if body:
@@ -2206,7 +2209,11 @@ def create_app(
         cues_dir = project_output / "cues"
         cues_dir.mkdir(parents=True, exist_ok=True)
 
-        repository.save_stage_run(project_id, StageRunV1(stage_name="dubbing", status="running", progress=0.0, metrics={"label": "Đang tạo lồng tiếng"}))
+        repository.save_stage_run(project_id, StageRunV1(
+            stage_name="dubbing", status="running", progress=0.0,
+            metrics={"label": f"Đang khởi tạo TTS (0/{len(cues)} câu)", "completed_cues": 0,
+                     "total_cues": len(cues), "percent": 0},
+        ))
 
         duration = 0.0
         try:
@@ -2256,8 +2263,13 @@ def create_app(
                 auto_detect_speakers=bool(auto_detect_speakers),
                 max_stretch_rate=1.30,
                 preserve_full_text=False,
-                uniform_speed=abs(float(rate.lstrip("+-").rstrip("%") or 0)) > 0.01 if isinstance(rate, str) else float(rate or 1.0) != 1.0,
+                # A user-selected rate is the global baseline; per-cue auto-fit
+                # must still run after the provider returns actual audio.
+                uniform_speed=False,
                 progress_callback=_save_dubbing_progress,
+                local_llm_endpoint=local_llm_endpoint,
+                local_llm_model=local_llm_model,
+                local_rewrite_enabled=local_rewrite_enabled,
             )
             if (not out_voiceover.exists() or out_voiceover.stat().st_size == 0) and generated_voiceover:
                 candidate = Path(generated_voiceover)

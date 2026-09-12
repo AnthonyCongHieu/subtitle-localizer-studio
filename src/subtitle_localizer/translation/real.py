@@ -392,6 +392,10 @@ class RealTranslationProvider(TranslationProvider):
             return True
         if self._normalize_compare_text(text) == self._normalize_compare_text(own_source):
             return True
+        # Vietnamese output must not retain even short Han-character spans.
+        # A ratio threshold lets leaks such as ``dây耳机`` pass unnoticed.
+        if (target_lang or "vi").lower().startswith("vi") and re.search(r"[\u4e00-\u9fff]", text):
+            return True
         if self._cjk_ratio(text) >= 0.45:
             return True
         # Target Vietnamese but model drifted to English mid-batch.
@@ -1106,7 +1110,13 @@ class RealTranslationProvider(TranslationProvider):
         if not is_pytest and (provider in ("gemini", "auto") or not provider):
             from subtitle_localizer.translation.key_pool import get_global_gemini_pool
             pool = get_global_gemini_pool()
-            if pool.total_keys > 0:
+            pool_status = pool.get_status() if hasattr(pool, "get_status") else {
+                "total_keys": pool.total_keys, "active_keys": pool.total_keys,
+            }
+            # Do not spend a request/timeout when the pool already reports no
+            # usable keys; route directly to local for automation continuity.
+            gemini_available = int(pool_status.get("active_keys", 0)) > 0
+            if pool.total_keys > 0 and gemini_available:
                 try:
                     translated_ok = self._translate_with_gemini(
                         cues,
@@ -1121,7 +1131,15 @@ class RealTranslationProvider(TranslationProvider):
                     logger.warning(f"Gemini translation failed: {ex}")
 
         # 2. Nếu Gemini thất bại hoặc provider là local: Chạy mô hình Local AI (Qwen 2.5 Local / Remote LAN)
-        if not is_pytest and (provider in ("local", "local_model") or (not translated_ok and auto_fallback)):
+        gemini_zero_keys = False
+        if not is_pytest and provider in ("gemini", "auto"):
+            from subtitle_localizer.translation.key_pool import get_global_gemini_pool
+            pool = get_global_gemini_pool()
+            status = pool.get_status() if hasattr(pool, "get_status") else {
+                "total_keys": pool.total_keys, "active_keys": pool.total_keys,
+            }
+            gemini_zero_keys = int(status.get("total_keys", 0)) == 0 or int(status.get("active_keys", 0)) == 0
+        if not is_pytest and (provider in ("local", "local_model") or gemini_zero_keys or (not translated_ok and auto_fallback)):
             local_model = getattr(pipe_settings, "local_model", DEFAULT_LOCAL_MODEL)
             local_endpoint = getattr(pipe_settings, "local_endpoint", "http://localhost:11434")
             prompt_tone = getattr(pipe_settings, "prompt_tone", "dramatic")

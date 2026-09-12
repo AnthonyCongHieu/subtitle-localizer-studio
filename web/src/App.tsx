@@ -34,6 +34,7 @@ import { AdminLanView } from './components/admin/AdminLanView';
 import { AppSidebar } from './components/layout/AppSidebar';
 import { useTimelineShortcuts } from './hooks/useTimelineShortcuts';
 import { extractDramaInfo } from './utils/drama';
+import { RefreshCw, RotateCw } from 'lucide-react';
 
 const STUDIO_STORAGE_KEY = 'sub_studio_active_state_v1';
 
@@ -260,6 +261,10 @@ export const App: React.FC = () => {
   const [scanProgress, setScanProgress] = useState<number | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [serverRestartNotification, setServerRestartNotification] = useState<{
+    show: boolean;
+    countdown: number;
+  }>({ show: false, countdown: 2 });
 
   // Lắng nghe tiến trình phần trăm % từ Active Tasks để đồng bộ tức thời lên UI
   useEffect(() => {
@@ -1251,9 +1256,25 @@ export const App: React.FC = () => {
       }
     });
 
+    const unsubRestart = wsClient.onServerRestart(() => {
+      appLogger.info('Phát hiện máy chủ khởi động lại với phiên bản mã nguồn mới.', 'Hệ thống');
+      setServerRestartNotification({ show: true, countdown: 2 });
+      let seconds = 2;
+      const timer = setInterval(() => {
+        seconds -= 1;
+        if (seconds <= 0) {
+          clearInterval(timer);
+          window.location.reload();
+        } else {
+          setServerRestartNotification({ show: true, countdown: seconds });
+        }
+      }, 1000);
+    });
+
     return () => {
       unsubStatus();
       unsub();
+      unsubRestart();
       if (localUrlRef.current) {
         URL.revokeObjectURL(localUrlRef.current);
       }
@@ -1479,7 +1500,7 @@ export const App: React.FC = () => {
     }
   }, [activeProject, cues.length, loadCues]);
 
-  // Bước 3: Lồng tiếng toàn bộ video bằng TTS
+  // Bước 3: Lồng tiếng toàn bộ video bằng TTS (Single source of truth for dubbing state)
   const [isDubbingAll, setIsDubbingAll] = useState(false);
   const handleDubAll = useCallback(async () => {
     if (!activeProject) return;
@@ -1504,6 +1525,8 @@ export const App: React.FC = () => {
           setStatusMessage(`Lỗi lồng tiếng: ${latest.errors?.[0] || 'Tạo voice thất bại'}`);
         } else if (latest.status === 'running') {
           setStatusMessage(`Đang lồng tiếng ${percent}%${done != null && total ? ` (${done}/${total} câu)` : ''}...`);
+        } else if (latest.status === 'completed') {
+          setStatusMessage('Lồng tiếng hoàn tất!');
         }
       } catch {}
     }, 1000);
@@ -1571,7 +1594,7 @@ export const App: React.FC = () => {
         }}
         hasActiveProject={Boolean(activeProject)}
         activeProjectTitle={activeProject?.title}
-        isBackendOnline={true}
+        isBackendOnline={Boolean(backendOnline)}
       />
 
       {/* ========================================================================= */}
@@ -1999,6 +2022,28 @@ export const App: React.FC = () => {
       {/* Lớp bảo vệ chuột trong suốt khi đang co giãn panel (Ngăn video/iframe bắt chuột gây giật lag) */}
       {(isResizingLeft || isResizingRight || isResizingBottom) && (
         <div className="fixed inset-0 z-50 select-none bg-transparent" />
+      )}
+
+      {/* Thông Báo Máy Chủ Cập Nhật Mã Nguồn & Nút Bấm F5 Tải Lại Ngay */}
+      {serverRestartNotification.show && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] animate-in slide-in-from-top-4 duration-300">
+          <div className="flex items-center gap-3 px-5 py-3 rounded-2xl bg-indigo-950/95 border border-indigo-500/50 shadow-2xl backdrop-blur-md text-white font-medium text-sm">
+            <RotateCw className="w-5 h-5 text-indigo-400 animate-spin" />
+            <div className="flex flex-col">
+              <span className="font-bold text-indigo-200">Máy chủ vừa cập nhật mã nguồn!</span>
+              <span className="text-xs text-slate-300">
+                Tự động làm mới trang sau {serverRestartNotification.countdown}s...
+              </span>
+            </div>
+            <button
+              onClick={() => window.location.reload()}
+              className="ml-3 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition shadow cursor-pointer flex items-center gap-1.5"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              F5 Tải lại ngay
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

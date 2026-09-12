@@ -232,7 +232,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                 <span className="text-[11px] font-bold text-slate-200">
                   {isBackendOnline ? 'Engine Online' : 'Mất kết nối'}
                 </span>
-                <span className="text-[9px] text-slate-500 font-mono">127.0.0.1:5000</span>
+                <span className="text-[9px] text-slate-500 font-mono">
+                  {typeof window !== 'undefined' && window.location.host ? window.location.host : '127.0.0.1:8899'}
+                </span>
               </div>
             )}
           </div>

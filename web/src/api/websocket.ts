@@ -69,8 +69,7 @@ export class StudioWebSocketClient {
             const newServerId = data?.server_id;
             if (newServerId) {
               if (this.currentServerId && this.currentServerId !== newServerId) {
-                console.warn('[Studio] Máy chủ đã cập nhật/khởi động lại. Đang tự động tải lại giao diện...');
-                window.location.reload();
+                this.triggerServerRestart();
                 return;
               }
               this.currentServerId = newServerId;
@@ -86,8 +85,7 @@ export class StudioWebSocketClient {
           const event: BridgeEventV1 = JSON.parse(e.data);
           // Kiểm tra sự kiện khởi động server hoặc cập nhật phiên bản server
           if (event.event_type === 'server_restarted') {
-            console.warn('[Studio] Nhận tín hiệu server cập nhật. Đang tự động tải lại giao diện...');
-            window.location.reload();
+            this.triggerServerRestart();
             return;
           }
           if (event.sequence) {
@@ -128,6 +126,33 @@ export class StudioWebSocketClient {
   send(data: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
+    }
+  }
+
+  private restartListeners: (() => void)[] = [];
+  private isRestartPending: boolean = false;
+
+  onServerRestart(callback: () => void): () => void {
+    this.restartListeners.push(callback);
+    return () => {
+      this.restartListeners = this.restartListeners.filter((l) => l !== callback);
+    };
+  }
+
+  private triggerServerRestart() {
+    if (this.isRestartPending) return;
+    this.isRestartPending = true;
+    console.warn('[Studio] Máy chủ đã cập nhật/khởi động lại. Đang chuẩn bị tải lại giao diện...');
+    if (this.restartListeners.length > 0) {
+      this.restartListeners.forEach((listener) => {
+        try {
+          listener();
+        } catch (err) {
+          console.error('Lỗi trong restartListener:', err);
+        }
+      });
+    } else {
+      setTimeout(() => window.location.reload(), 1500);
     }
   }
 

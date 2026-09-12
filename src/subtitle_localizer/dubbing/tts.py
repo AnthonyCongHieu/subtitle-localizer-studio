@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import unicodedata
 import weakref
+import json
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +26,13 @@ from subtitle_localizer.dubbing.capcut_tts import (
 from subtitle_localizer.dubbing.gemini_tts import GEMINI_VOICE_CATALOG, GeminiTTSClient
 
 logger = logging.getLogger(__name__)
+
+
+def _local_rewrite_enabled() -> bool:
+    """Disable network-dependent fallback under pytest unless explicitly enabled."""
+    return os.environ.get("SUBTITLE_LOCAL_REWRITE", "1") == "1" and (
+        "PYTEST_CURRENT_TEST" not in os.environ or os.environ.get("SUBTITLE_LOCAL_REWRITE_IN_TESTS") == "1"
+    )
 
 EDGE_VOICE_CATALOG: List[Dict[str, Any]] = [
     # --- 🇻🇳 TIẾNG VIỆT ---
@@ -1393,6 +1402,51 @@ def adapt_spoken_text_for_slot(
     return spoken, meta
 
 
+def _rewrite_preserves_anchors(original: str, rewritten: str) -> bool:
+    """Conservative guard for local-model speech shortening."""
+    if not rewritten or len(rewritten) >= len(original):
+        return False
+    # Never allow the model to silently drop numbers or explicit negation.
+    for token in re.findall(r"\d+(?:[\.,]\d+)*|không|chẳng|chưa|đừng|không thể", original.lower()):
+        if token not in rewritten.lower():
+            return False
+    return True
+
+
+async def rewrite_spoken_text_local(text: str, *, endpoint: str = "http://localhost:11434",
+                                    model: str = "qwen2.5:14b", timeout: float = 8.0) -> str:
+    """Ask the configured local Ollama model for a shorter VI spoken line.
+
+    This is deliberately a single, bounded fallback call; callers must validate
+    the result and retain the original text when the local service is unavailable.
+    """
+    original = clean_subtitle_text(text)
+    if not original:
+        return ""
+    prompt = (
+        "Rút gọn câu tiếng Việt sau để đọc lồng tiếng nhanh hơn. Giữ nguyên ngữ nghĩa, "
+        "phủ định, tên riêng và mọi số. Không thêm thông tin. Chỉ trả về đúng một câu.\n"
+        f"Câu gốc: {original}"
+    )
+    payload = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False}).encode("utf-8")
+
+    def _call() -> str:
+        req = urllib.request.Request(
+            endpoint.rstrip("/") + "/api/chat", data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return str(body.get("message", {}).get("content", "")).strip()
+
+    try:
+        candidate = clean_subtitle_text(await asyncio.to_thread(_call))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        logger.info("Local speech rewrite unavailable: %s", error)
+        return ""
+    return candidate if _rewrite_preserves_anchors(original, candidate) else ""
+
+
 def assign_turn_taking_speaker_ids(cues: List[SubtitleCueV1], mode: str = "multi") -> List[SubtitleCueV1]:
     """Fill missing speaker_id using adjacency turn-taking for same-gender accuracy."""
     mode_n = normalize_dubbing_mode(mode)
@@ -1769,8 +1823,12 @@ async def generate_timed_voiceover(
     prompt_style: str = "dramatic",
     progress_callback: Optional[Any] = None,
     auto_detect_speakers: bool = True,
-    preserve_full_text: bool = True,
+    preserve_full_text: bool = False,
     uniform_speed: bool = False,
+    preserve_text: bool = True,
+    local_llm_endpoint: str = "http://localhost:11434",
+    local_llm_model: str = "qwen2.5:14b",
+    local_rewrite_enabled: bool = False,
 ) -> Path:
     """
     Sinh toàn bộ giọng thuyết minh cho các câu phụ đề theo đúng mốc thời gian start_pts của video.
@@ -1818,7 +1876,7 @@ async def generate_timed_voiceover(
         # Only auto-adapt when spoken_text was not manually provided
         existing_spoken = clean_subtitle_text(str(style.get("spoken_text") or ""))
         manual_spoken = bool(existing_spoken) and _cjk_ratio_text(existing_spoken) < 0.3
-        if not manual_spoken:
+        if not manual_spoken and not preserve_text:
             # Drop unusable stale spoken_text so adapt persists VI script.
             if existing_spoken and isinstance(c.style, dict):
                 c.style.pop("spoken_text", None)
@@ -1838,6 +1896,27 @@ async def generate_timed_voiceover(
                 c.style["timing_warning"] = adapt_meta["timing_warning"]
             elif "timing_warning" in c.style and not adapt_meta.get("adapted"):
                 c.style.pop("timing_warning", None)
+        elif not manual_spoken:
+            # Full-text policy: use the local model only as a bounded semantic
+            # compression fallback; never truncate the original silently.
+            estimate = estimate_speech_seconds(cleaned, base_rate)
+            if estimate > slot_dur * min(max_stretch_rate, 1.30) and local_rewrite_enabled and _local_rewrite_enabled():
+                rule_candidate = compress_vietnamese_for_speech(cleaned, aggressiveness=1)
+                if rule_candidate != cleaned and estimate_speech_seconds(rule_candidate, base_rate) < estimate:
+                    cleaned = rule_candidate
+                    c.style["spoken_text"] = rule_candidate
+                    c.style["timing_rewrite"] = "safe_rule"
+                    estimate = estimate_speech_seconds(cleaned, base_rate)
+            if estimate > slot_dur * min(max_stretch_rate, 1.30):
+                rewritten = await rewrite_spoken_text_local(
+                    cleaned,
+                    endpoint=os.environ.get("SUBTITLE_LOCAL_LLM_ENDPOINT", local_llm_endpoint),
+                    model=os.environ.get("SUBTITLE_LOCAL_LLM_MODEL", local_llm_model),
+                )
+                if rewritten:
+                    cleaned = rewritten
+                    c.style["spoken_text"] = rewritten
+                    c.style["timing_rewrite"] = "local_model"
         if not auto_detect_speakers:
             # Keep explicit style labels only; avoid pronoun heuristic overrides later
             pass
@@ -1935,6 +2014,30 @@ async def generate_timed_voiceover(
                 # Treat as non-overlap for slot budgeting to avoid false spill
                 slot_mode = "single"
         slot_dur = available_voiceover_slot(cue, next_cue, slot_mode)
+        # Last-resort semantic compression based on measured provider output.
+        # Re-synthesize once; never truncate the original audio/text silently.
+        if preserve_text and speech_dur > slot_dur * min(max_stretch_rate, 1.30) and local_rewrite_enabled and _local_rewrite_enabled():
+            rewritten = await rewrite_spoken_text_local(
+                cleaned_text,
+                endpoint=os.environ.get("SUBTITLE_LOCAL_LLM_ENDPOINT", local_llm_endpoint),
+                model=os.environ.get("SUBTITLE_LOCAL_LLM_MODEL", local_llm_model),
+            )
+            if rewritten and rewritten != cleaned_text:
+                retry_bytes = await synthesize_text(
+                    rewritten, voice=resolve_cue_voice(cue, rewritten, mode=mode, voice=voice,
+                    voice_male=voice_male, voice_female=voice_female, provider=provider),
+                    rate=rate, provider=provider, prompt_style=prompt_style,
+                )
+                try:
+                    retry_pcm = decode_and_validate_audio(retry_bytes, sample_rate=sample_rate)
+                except ValueError:
+                    retry_pcm = np.array([], dtype=np.float32)
+                if len(retry_pcm) > 0 and len(retry_pcm) < len(pcm_samples):
+                    pcm_samples = retry_pcm
+                    cleaned_text = rewritten
+                    cue.style["spoken_text"] = rewritten
+                    cue.style["timing_rewrite"] = "local_model_measured"
+                    speech_dur = len(pcm_samples) / sample_rate
         # Khi người dùng chọn tốc độ chung (ví dụ +15%), giữ cùng một hệ số
         # cho toàn video; không cộng thêm auto-fit khác nhau theo từng cue.
         speed_factor = 1.0 if uniform_speed else calculate_slot_stretch(
@@ -2004,6 +2107,10 @@ def generate_voiceover_sync(
     provider: str = "edge",
     prompt_style: str = "dramatic",
     auto_detect_speakers: bool = True,
+    preserve_text: bool = True,
+    local_llm_endpoint: str = "http://localhost:11434",
+    local_llm_model: str = "qwen2.5:14b",
+    local_rewrite_enabled: bool = False,
 ) -> Path:
     """Wrapper đồng bộ để gọi từ luồng worker thông thường."""
     try:
@@ -2027,6 +2134,9 @@ def generate_voiceover_sync(
                         provider=provider,
                         prompt_style=prompt_style,
                         auto_detect_speakers=auto_detect_speakers,
+                        preserve_text=preserve_text,
+                        local_llm_endpoint=local_llm_endpoint, local_llm_model=local_llm_model,
+                        local_rewrite_enabled=local_rewrite_enabled,
                     ),
                 ).result()
         else:
@@ -2045,6 +2155,9 @@ def generate_voiceover_sync(
                     provider=provider,
                     prompt_style=prompt_style,
                     auto_detect_speakers=auto_detect_speakers,
+                    preserve_text=preserve_text,
+                    local_llm_endpoint=local_llm_endpoint, local_llm_model=local_llm_model,
+                    local_rewrite_enabled=local_rewrite_enabled,
                 )
             )
     except RuntimeError:
@@ -2063,6 +2176,9 @@ def generate_voiceover_sync(
                 provider=provider,
                 prompt_style=prompt_style,
                 auto_detect_speakers=auto_detect_speakers,
+                preserve_text=preserve_text,
+                local_llm_endpoint=local_llm_endpoint, local_llm_model=local_llm_model,
+                local_rewrite_enabled=local_rewrite_enabled,
             )
         )
 

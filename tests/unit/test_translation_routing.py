@@ -19,6 +19,9 @@ from subtitle_localizer.translation.real import RealTranslationProvider
 class _GeminiPool:
     total_keys = 1
 
+    def get_status(self):
+        return {"total_keys": self.total_keys, "active_keys": self.total_keys}
+
 
 def _cues():
     return [SubtitleCueV1(cue_id="c1", start_pts=0.0, end_pts=1.0, source_text="你好")]
@@ -65,6 +68,27 @@ def test_translation_falls_back_to_local_when_gemini_fails():
             provider.translate_cues(_cues())
 
         gemini.assert_called_once()
+        local.assert_called_once()
+    finally:
+        set_global_pipeline_settings(original_settings)
+
+
+def test_translation_routes_directly_to_local_when_no_gemini_keys_are_active():
+    original_settings = get_global_pipeline_settings()
+    provider = RealTranslationProvider()
+    pool = _GeminiPool()
+    try:
+        set_global_pipeline_settings(GlobalPipelineSettings(
+            translation=TranslationSettings(provider="gemini", auto_fallback=False)
+        ))
+        with patch.dict(os.environ, {"TEST_WITH_GEMINI": "1"}, clear=False), patch(
+            "subtitle_localizer.translation.key_pool.get_global_gemini_pool", return_value=pool
+        ), patch.object(provider, "_translate_with_gemini", return_value=True) as gemini, patch.object(
+            provider, "_translate_with_local_qwen", return_value=True
+        ) as local:
+            pool.get_status = lambda: {"total_keys": 2, "active_keys": 0}
+            provider.translate_cues(_cues())
+        gemini.assert_not_called()
         local.assert_called_once()
     finally:
         set_global_pipeline_settings(original_settings)

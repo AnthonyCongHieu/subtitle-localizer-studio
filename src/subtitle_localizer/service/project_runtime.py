@@ -32,12 +32,19 @@ async def run_project_dubbing(repository: Any, project_id: str, output_root: Pat
     voice_male = options.get("voice_male") or getattr(settings.dubbing, "voice_male", "vi-VN-NamMinhNeural")
     voice_female = options.get("voice_female") or getattr(settings.dubbing, "voice_female", "vi-VN-HoaiMyNeural")
     prompt_style = options.get("prompt_style") or getattr(settings.dubbing, "gemini_prompt_style", "dramatic")
+    local_llm_endpoint = options.get("local_llm_endpoint") or getattr(settings.translation, "local_endpoint", "http://localhost:11434")
+    local_llm_model = options.get("local_llm_model") or getattr(settings.translation, "local_model", "qwen2.5:14b")
+    local_rewrite_enabled = bool(options.get("local_rewrite_enabled", getattr(settings.dubbing, "local_rewrite_enabled", False)))
     project_output = Path(output_root).resolve() / project_id
     project_output.mkdir(parents=True, exist_ok=True)
     output = project_output / f"voiceover_{project_id}.mp3"
     cues_dir = project_output / "cues"
     cues_dir.mkdir(parents=True, exist_ok=True)
-    repository.save_stage_run(project_id, StageRunV1(stage_name="dubbing", status="running", progress=0.0))
+    repository.save_stage_run(project_id, StageRunV1(
+        stage_name="dubbing", status="running", progress=0.0,
+        metrics={"label": f"Đang khởi tạo TTS (0/{len(cues)} câu)", "completed_cues": 0,
+                 "total_cues": len(cues), "percent": 0},
+    ))
     duration = 0.0
     try:
         from subtitle_localizer.media.probe import probe_media
@@ -52,6 +59,8 @@ async def run_project_dubbing(repository: Any, project_id: str, output_root: Pat
             mode=mode, voice_male=voice_male, voice_female=voice_female, provider=provider,
             prompt_style=prompt_style, export_cues_dir=cues_dir,
             auto_detect_speakers=bool(auto_detect_speakers),
+            local_llm_endpoint=local_llm_endpoint, local_llm_model=local_llm_model,
+            local_rewrite_enabled=local_rewrite_enabled,
         )
         if (not output.exists() or output.stat().st_size == 0) and generated:
             candidate = Path(generated)

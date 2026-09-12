@@ -70,6 +70,8 @@ interface LeftMediaSidebarProps {
   isScanning?: boolean;
   scanProgress?: number | null;
   statusMessage?: string | null;
+  isDubbing?: boolean;
+  onDubAll?: () => Promise<void>;
   width?: number;
 }
 
@@ -102,6 +104,8 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
   isScanning = false,
   scanProgress,
   statusMessage,
+  isDubbing: externalIsDubbing,
+  onDubAll: externalOnDubAll,
   width,
 }) => {
   const [activeTab, setActiveTab] = useState<LeftSidebarTab>('subtitles');
@@ -1559,12 +1563,12 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
             <div className="pt-2 border-t border-slate-800/80 space-y-2">
               <button
                 type="button"
-                onClick={handleDubAllVideo}
-                disabled={isDubbingAll || !activeProject || cues.length === 0}
+                onClick={externalOnDubAll || handleDubAllVideo}
+                disabled={(externalIsDubbing ?? isDubbingAll) || !activeProject || cues.length === 0}
                 title={cues.length === 0 ? "Cần quét hoặc nhập phụ đề trước khi lồng tiếng" : `Lồng Tiếng Toàn Bộ Video (${cues.length} câu)`}
                 className={`w-full py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold rounded-lg flex items-center justify-center gap-2 shadow-md transition active:scale-98 disabled:opacity-50 ${cues.length === 0 ? 'cursor-not-allowed' : 'cursor-pointer'}`}
               >
-                {isDubbingAll ? (
+                {(externalIsDubbing ?? isDubbingAll) ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950" />
                     <span>Đang Lồng Tiếng Toàn Bộ Video...</span>
@@ -1577,9 +1581,9 @@ export const LeftMediaSidebar: React.FC<LeftMediaSidebarProps> = ({
                 )}
               </button>
 
-              {dubAllMsg && (
+              {(dubAllMsg || (externalIsDubbing && statusMessage)) && (
                 <div className="p-2 bg-amber-950/60 border border-amber-800/80 rounded text-[11px] text-amber-300 text-center font-medium">
-                  {dubAllMsg}
+                  {dubAllMsg || statusMessage}
                 </div>
               )}
             </div>

@@ -585,7 +585,22 @@ def launch_studio(dev_mode: bool = False, open_browser: bool = True, port: int =
     else:
         # Chế độ tiêu chuẩn: 1 CMD duy nhất, phục vụ trực tiếp cả UI lẫn Backend API
         try:
-            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", log_config=log_config)
+            src_path = str(SRC_DIR)
+            current_pythonpath = os.environ.get("PYTHONPATH", "")
+            if src_path not in current_pythonpath.split(os.pathsep):
+                os.environ["PYTHONPATH"] = os.pathsep.join(
+                    part for part in (src_path, current_pythonpath) if part
+                )
+            uvicorn.run(
+                "subtitle_localizer.service.server:create_app",
+                factory=True,
+                reload=True,
+                reload_dirs=[str(SRC_DIR)],
+                host="0.0.0.0",
+                port=port,
+                log_level="info",
+                log_config=log_config,
+            )
         finally:
             _stop_local_worker()
             discovery.stop()
@@ -597,7 +612,8 @@ def main() -> None:
     parser.add_argument("--no-fix", action="store_true", help="Không tự động cài đặt hay sửa lỗi")
     parser.add_argument("--no-browser", action="store_true", help="Không tự động mở trình duyệt")
     parser.add_argument("--dev", action="store_true", help="Khởi động song song Vite dev server và Backend trong cùng 1 CMD")
-    parser.add_argument("--build-web", action="store_true", help="Buộc build lại giao diện Web UI (web/dist)")
+    parser.add_argument("--build-web", action="store_true", default=True, help="Buộc build lại giao diện Web UI (mặc định luôn bật)")
+    parser.add_argument("--no-build-web", dest="build_web", action="store_false", help="Bỏ qua bước build lại giao diện Web UI")
     parser.add_argument("--port", type=int, default=8899, help="Cổng chạy Backend API (mặc định 8899)")
     parser.add_argument("--no-local-worker", action="store_true", help="Chỉ chạy coordinator, không đăng ký worker trên máy host")
 
